@@ -1,0 +1,45 @@
+# Development configuration — copy to config-dev.yaml and fill in your values
+# Databases run in Docker, exposed to localhost
+
+# Main database (running in Docker on port 5432)
+database_url: "postgres://postgres:postgres@localhost:5432/reminisce_db"
+
+# Geotagging database (running in Docker on port 5435)
+geotagging_database_url: "postgres://postgres:postgres@localhost:5435/geotagging_db"
+
+# Secret key for JWT tokens — generate with: openssl rand -base64 32
+api_secret_key: "CHANGE_ME_run_openssl_rand_base64_32"
+
+# Local directories for uploaded files
+images_dir: "uploaded_images"
+videos_dir: "uploaded_videos"
+
+# P2P Configuration (Internal Engine)
+# Path to store node key and shards
+p2p_data_dir: "data/p2p"
+# Storage nodes (NetBird overlay IPs of your storage nodes)
+# Same-host example (all nodes on one machine, different ports):
+#   - "100.x.x.x:5050"
+#   - "100.x.x.x:5051"
+# Multi-host example (each node on separate machine):
+#   - "100.x.x.1:5050"
+#   - "100.x.x.2:5050"
+p2p_peers:
+  - "100.x.x.x:5050"
+  - "100.x.x.x:5051"
+  - "100.x.x.x:5052"
+  - "100.x.x.x:5053"
+  - "100.x.x.x:5054"
+
+# Geocoding configuration
+enable_local_geocoding: true
+enable_external_geocoding_fallback: true
+
+# AI services (consolidated into single service)
+embedding_service_url: "http://localhost:8081"
+face_service_url: "http://localhost:8081"
+
+# Observability (OpenTelemetry)
+# Points to Grafana Alloy (OTLP Receiver)
+otlp_endpoint: "http://localhost:4317"
+environment: "development"

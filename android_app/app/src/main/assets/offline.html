@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Offline - Reminisce Gallery</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            color: #fff;
+            padding: 20px;
+        }
+
+        .container {
+            text-align: center;
+            max-width: 500px;
+        }
+
+        .offline-icon {
+            font-size: 80px;
+            margin-bottom: 20px;
+            opacity: 0.9;
+        }
+
+        h1 {
+            font-size: 28px;
+            margin-bottom: 10px;
+            font-weight: 600;
+        }
+
+        p {
+            font-size: 16px;
+            margin-bottom: 30px;
+            opacity: 0.9;
+            line-height: 1.5;
+        }
+
+        .retry-button {
+            background: rgba(255, 255, 255, 0.2);
+            border: 2px solid rgba(255, 255, 255, 0.8);
+            color: white;
+            padding: 12px 30px;
+            font-size: 16px;
+            border-radius: 25px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-weight: 500;
+        }
+
+        .retry-button:hover {
+            background: rgba(255, 255, 255, 0.3);
+            transform: translateY(-2px);
+        }
+
+        .retry-button:active {
+            transform: translateY(0);
+        }
+
+        .status {
+            margin-top: 20px;
+            font-size: 14px;
+            opacity: 0.7;
+        }
+
+        .pulse {
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% {
+                opacity: 0.9;
+            }
+            50% {
+                opacity: 0.5;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="offline-icon pulse">📡</div>
+        <h1>You're Offline</h1>
+        <p>Unable to connect to the server. The gallery requires an active internet connection to load.</p>
+        <button class="retry-button" onclick="retryConnection()">Retry Connection</button>
+        <div class="status" id="status"></div>
+    </div>
+
+    <script>
+        function retryConnection() {
+            const statusEl = document.getElementById('status');
+            statusEl.textContent = 'Checking connection...';
+
+            // Check if Android bridge is available
+            if (typeof AndroidBridge !== 'undefined') {
+                // Use Android bridge to check network status
+                const isOnline = AndroidBridge.isNetworkAvailable();
+
+                if (isOnline) {
+                    statusEl.textContent = 'Connection restored! Reloading...';
+                    // Use Android bridge to reload the gallery
+                    AndroidBridge.reloadGallery();
+                } else {
+                    statusEl.textContent = 'Still offline. Please check your connection.';
+                }
+            } else {
+                // Fallback to regular reload for web browsers
+                statusEl.textContent = 'Retrying...';
+                setTimeout(() => {
+                    window.location.reload();
+                }, 500);
+            }
+        }
+
+        // Auto-retry when coming back online
+        window.addEventListener('online', () => {
+            document.getElementById('status').textContent = 'Connection detected! Reloading...';
+            setTimeout(() => {
+                retryConnection();
+            }, 1000);
+        });
+
+        window.addEventListener('offline', () => {
+            document.getElementById('status').textContent = 'Still offline...';
+        });
+
+        // Periodically check network status (every 10 seconds)
+        setInterval(() => {
+            if (typeof AndroidBridge !== 'undefined') {
+                const isOnline = AndroidBridge.isNetworkAvailable();
+                if (isOnline) {
+                    document.getElementById('status').textContent = 'Connection restored! Click retry to continue.';
+                }
+            }
+        }, 10000);
+    </script>
+</body>
+</html>

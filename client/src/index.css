@@ -1,0 +1,18 @@
+@import "tailwindcss";
+
+@layer utilities {
+  @keyframes slowZoomIn {
+    from { transform: scale(1.0); }
+    to { transform: scale(1.20); }
+  }
+  @keyframes slowZoomOut {
+    from { transform: scale(1.20); }
+    to { transform: scale(1.0); }
+  }
+  .animate-slow-zoom-in {
+    animation: slowZoomIn 15s linear forwards;
+  }
+  .animate-slow-zoom-out {
+    animation: slowZoomOut 15s linear forwards;
+  }
+}

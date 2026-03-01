@@ -1,0 +1,61 @@
+global:
+  resolve_timeout: 5m
+
+# The root route with all parameters, which are inherited by the child
+# routes if they are not overwritten.
+route:
+  receiver: 'default'
+  group_by: ['alertname', 'cluster', 'service']
+  group_wait: 10s
+  group_interval: 10s
+  repeat_interval: 12h
+
+  # Child routes
+  routes:
+    # Critical alerts - more frequent notifications
+    - match:
+        severity: critical
+      receiver: 'critical'
+      group_wait: 5s
+      repeat_interval: 5m
+
+    # Warning alerts - standard handling
+    - match:
+        severity: warning
+      receiver: 'default'
+
+receivers:
+  - name: 'default'
+    webhook_configs:
+      - url: 'http://localhost:5001/alert'
+        send_resolved: true
+    # Uncomment and configure for Slack notifications
+    # slack_configs:
+    #   - api_url: 'YOUR_SLACK_WEBHOOK_URL'
+    #     channel: '#alerts'
+    #     title: 'Reminisce Alert'
+    #     text: '{{ range .Alerts }}{{ .Annotations.summary }}\n{{ end }}'
+    #     send_resolved: true
+
+  - name: 'critical'
+    webhook_configs:
+      - url: 'http://localhost:5001/alert/critical'
+        send_resolved: true
+    # Uncomment for email notifications on critical alerts
+    # email_configs:
+    #   - to: 'ops@example.com'
+    #     from: 'alertmanager@reminisce.local'
+    #     smarthost: 'smtp.example.com:587'
+    #     auth_username: 'alertmanager'
+    #     auth_password: 'password'
+    #     headers:
+    #       Subject: '[CRITICAL] Reminisce Alert'
+
+# Inhibition rules allow to mute a set of alerts given that another alert is firing.
+# We use this to mute any warning-level notifications if the same alert is already critical.
+inhibit_rules:
+  - source_match:
+      severity: 'critical'
+    target_match:
+      severity: 'warning'
+    equal: ['alertname', 'instance']

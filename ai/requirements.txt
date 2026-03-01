@@ -1,0 +1,25 @@
+# Flask web framework
+flask>=3.0.0
+gunicorn
+
+# Image processing
+pillow>=10.2.0
+opencv-python-headless
+numpy
+
+# ML models - embeddings and descriptions
+transformers>=4.49.0
+sentencepiece
+protobuf
+
+# Qwen2.5-VL description model
+qwen-vl-utils>=0.0.8
+
+# accelerate required for device_map with quantization (future use)
+accelerate
+
+# Face detection
+insightface>=0.7.3
+
+# HTTP client (for healthcheck)
+requests>=2.31.0

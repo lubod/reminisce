@@ -1,0 +1,45 @@
+# Stage 1: Build all binaries in a single cached environment
+FROM rust:bookworm as builder
+WORKDIR /usr/src/app
+
+# 1. Copy workspace manifests
+COPY Cargo.lock Cargo.toml ./
+COPY np2p/Cargo.toml ./np2p/
+COPY np2p-mobile/Cargo.toml ./np2p-mobile/
+
+# 2. Create dummy source files to cache dependency compilation
+RUN mkdir -p np2p/src/bin && \
+    echo "fn main() {}" > np2p/src/bin/main.rs && \
+    echo "fn main() {}" > np2p/src/bin/e2e_client.rs && \
+    echo "pub fn dummy() {}" > np2p/src/lib.rs && \
+    mkdir -p np2p-mobile/src && \
+    echo "pub fn dummy() {}" > np2p-mobile/src/lib.rs
+
+# Build dependencies only
+RUN cargo build -p np2p --release
+
+# 3. Copy actual source code
+COPY np2p/src ./np2p/src
+COPY np2p-mobile/src ./np2p-mobile/src
+
+# Remove dummy artifacts to force re-compilation of our crate
+RUN rm -f target/release/deps/np2p* target/release/deps/libnp2p* target/release/np2pd* target/release/e2e_client*
+
+# 4. Build all binaries
+RUN cargo build --bin np2pd --bin e2e_client -p np2p --release
+
+# --- Runtime Stages ---
+
+# Storage Node (Daemon)
+FROM debian:bookworm-slim as storage
+RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /usr/src/app/target/release/np2pd /usr/local/bin/
+RUN mkdir -p /data
+EXPOSE 5050/udp
+CMD ["np2pd", "--listen", "0.0.0.0:5050", "--data-dir", "/data"]
+
+# E2E Client Simulator
+FROM debian:bookworm-slim as client
+RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /usr/src/app/target/release/e2e_client /usr/local/bin/
+CMD ["e2e_client"]

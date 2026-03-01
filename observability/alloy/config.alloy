@@ -1,0 +1,113 @@
+logging {
+  level  = "info"
+  format = "logfmt"
+}
+
+// =============================================================================
+// 1. METRICS COLLECTION (Replacing Node Exporter)
+// =============================================================================
+
+// Scrape local host metrics (CPU, Memory, Disk, Net)
+prometheus.exporter.unix "host" {
+  procfs_path = "/host/proc"
+  sysfs_path  = "/host/sys"
+  rootfs_path = "/host/root"
+}
+
+// Configure a scrape job to collect those metrics
+prometheus.scrape "host_metrics" {
+  targets    = prometheus.exporter.unix.host.targets
+  forward_to = [prometheus.remote_write.default.receiver]
+}
+
+// =============================================================================
+// 2. LOGS COLLECTION (Replacing Promtail)
+// =============================================================================
+
+// Discover Docker containers
+discovery.docker "linux" {
+  host = "unix:///var/run/docker.sock"
+}
+
+// Target logs from those containers
+loki.source.docker "default" {
+  host       = "unix:///var/run/docker.sock"
+  targets    = discovery.docker.linux.targets
+  forward_to = [loki.relabel.docker.receiver]
+}
+
+// Relabeling rules to make logs useful (extract container names)
+loki.relabel "docker" {
+  forward_to = [loki.write.default.receiver]
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container"
+  }
+  rule {
+    source_labels = ["__meta_docker_container_log_stream"]
+    target_label  = "stream"
+  }
+}
+
+// Send logs to Loki
+loki.write "default" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}
+
+// =============================================================================
+// 3. OTLP RECEIVER (Traces & Metrics from App)
+// =============================================================================
+
+otelcol.receiver.otlp "default" {
+  grpc {
+    endpoint = "0.0.0.0:4317"
+  }
+  http {
+    endpoint = "0.0.0.0:4318"
+  }
+
+  output {
+    metrics = [otelcol.processor.batch.default.input]
+    logs    = [otelcol.processor.batch.default.input]
+    traces  = [otelcol.processor.batch.default.input]
+  }
+}
+
+otelcol.processor.batch "default" {
+  output {
+    metrics = [otelcol.exporter.prometheus.default.input]
+    logs    = [otelcol.exporter.loki.default.input]
+    traces  = [otelcol.exporter.otlp.tempo.input]
+  }
+}
+
+// Forward Traces to Tempo
+otelcol.exporter.otlp "tempo" {
+  client {
+    endpoint = "tempo:4317"
+    tls {
+      insecure = true
+    }
+  }
+}
+
+// Forward Metrics to Prometheus
+otelcol.exporter.prometheus "default" {
+  forward_to = [prometheus.remote_write.default.receiver]
+}
+
+// Send all collected metrics (Host + OTLP) to Prometheus
+prometheus.remote_write "default" {
+  endpoint {
+    url = "http://prometheus:9090/api/v1/write"
+  }
+}
+
+// Forward OTLP Logs to Loki
+otelcol.exporter.loki "default" {
+  forward_to = [loki.write.default.receiver]
+}

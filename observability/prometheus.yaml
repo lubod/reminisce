@@ -1,0 +1,25 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # Self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Specialized Exporters (Alloy handles the rest)
+  - job_name: 'gpu-exporter'
+    static_configs:
+      - targets: ['gpu-exporter:9400']
+
+  - job_name: 'postgres'
+    static_configs:
+      - targets: ['postgres-exporter:9187']
+
+  # Main Application (Direct scrape backup if Alloy OTLP fails)
+  - job_name: 'reminisce'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['host.docker.internal:8080'] # Local Dev
+      - targets: ['reminisce:8080']           # Docker Prod

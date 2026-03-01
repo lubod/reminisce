@@ -1,0 +1,41 @@
+# Fullstack Docker configuration — copy to config-fullstack.yaml and fill in your values
+# All services run in Docker containers. Backend uses host network.
+# Databases and AI services are port-mapped to localhost.
+
+# Main database (Docker, port-mapped to host)
+database_url: "postgres://postgres:postgres@localhost:5432/reminisce_db"
+
+# Geotagging database (Docker, port-mapped to host on 5435)
+geotagging_database_url: "postgres://postgres:postgres@localhost:5435/geotagging_db"
+
+# Secret key for JWT tokens — generate with: openssl rand -base64 32
+# Must match the key configured in your Android/mobile clients
+api_secret_key: "CHANGE_ME_run_openssl_rand_base64_32"
+
+# Upload directories (mounted as Docker volumes)
+images_dir: "/app/uploaded_images"
+videos_dir: "/app/uploaded_videos"
+
+# P2P Configuration
+p2p_data_dir: "/app/data/p2p"
+
+# Storage nodes accessible via NetBird overlay IP
+# Replace with the overlay IPs of your storage node machines
+p2p_peers:
+  - "100.x.x.x:5050"
+  - "100.x.x.x:5051"
+  - "100.x.x.x:5052"
+  - "100.x.x.x:5053"
+  - "100.x.x.x:5054"
+
+# Geocoding
+enable_local_geocoding: true
+enable_external_geocoding_fallback: true
+
+# AI services (port-mapped to host)
+embedding_service_url: "http://localhost:8081"
+face_service_url: "http://localhost:8081"
+
+# Observability (OpenTelemetry - port-mapped to host)
+otlp_endpoint: "http://localhost:4317"
+environment: "production"

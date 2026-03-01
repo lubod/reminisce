@@ -1,0 +1,29 @@
+# Large data directories
+geodb_builder/
+geotagging-pgdata-export/
+uploaded_images/
+uploaded_videos/
+uploaded_images_test/
+uploaded_videos_test/
+backups/
+backups_dev/
+data/
+iroh_data/
+
+# Build artifacts
+target/
+**/target/
+dist/
+**/dist/
+
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Git
+.git/
+
+# Logs and temps
+*.log
+*.tmp
+.DS_Store

@@ -1,0 +1,236 @@
+#!/bin/bash
+set -e
+
+COMMAND=$1
+if [ -n "$1" ]; then
+    shift
+fi
+
+function show_help {
+    echo "Usage: ./dev <command> [args]"
+    echo ""
+    echo "Commands:"
+    echo "  start       Start the core development environment (DBs, AI, P2P Nodes, Nginx)"
+    echo "  start-obs   Start the observability stack (Prometheus, Grafana, Tempo, etc.)"
+    echo "  stop        Stop the development environment"
+    echo "  run         Build and run the Rust server (RUST_LOG=info)"
+    echo "  watch       Auto-rebuild and restart on source changes (requires cargo-watch)"
+    echo "  test        Run tests (passes arguments to cargo test)"
+    echo "  client      Start the frontend dev server (Vite HMR)"
+    echo "  build       Build release binary"
+    echo "  clean       Clean build artifacts (reclaim disk space)"
+    echo "  restore     Restore database from a backup file (Usage: ./dev restore <file>)"
+}
+
+check_service_health() {
+    local service=$1
+    if docker compose -p reminisce-dev -f docker-compose-dev.yml ps $service | grep -q "healthy"; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+function start_env {
+    echo "🚀 Starting development environment..."
+
+    # Start core services (DBs, AI services, P2P nodes, nginx)
+    echo "📦 Starting core services (databases, AI, P2P storage, nginx)..."
+    if ! docker compose -p reminisce-dev -f docker-compose-dev.yml up -d; then
+        echo "⚠️  Start failed. This is often due to conflicting container names from a previous run."
+        echo "🧹 Cleaning up potential zombie containers..."
+        # List of fixed container names from docker-compose-dev.yml
+        CONTAINERS="reminisce-dev-db reminisce-dev-geotagging reminisce-dev-ai p2p-dev-node-1 p2p-dev-node-2 reminisce-dev-nginx"
+        docker rm -f $CONTAINERS 2>/dev/null || true
+        
+        echo "🔄 Retrying start..."
+        docker compose -p reminisce-dev -f docker-compose-dev.yml up -d
+    fi
+
+    # Wait for services to initialize
+    echo "⏳ Waiting for services to be ready..."
+
+    # Wait for databases (critical)
+    echo "   Checking databases..."
+    MAX_RETRIES=30
+    count=0
+    while [ $count -lt $MAX_RETRIES ]; do
+        if check_service_health "postgres" && check_service_health "geotagging-db"; then
+            echo "   ✅ Databases are ready!"
+            break
+        fi
+        echo "   ... waiting for databases ($((count+1))/$MAX_RETRIES)"
+        sleep 2
+        count=$((count+1))
+    done
+
+    if [ $count -eq $MAX_RETRIES ]; then
+        echo "❌ Timeout waiting for databases. Logs:"
+        docker compose -p reminisce-dev -f docker-compose-dev.yml logs postgres geotagging-db
+        exit 1
+    fi
+
+    # Wait for AI services (optional but good to check)
+    echo "   Checking AI services (this might take a moment)..."
+    MAX_RETRIES_AI=5
+    count=0
+    while [ $count -lt $MAX_RETRIES_AI ]; do
+        if check_service_health "ai-server"; then
+            echo "   ✅ AI service reported healthy."
+            break
+        fi
+        echo "   ... waiting for AI service ($((count+1))/$MAX_RETRIES_AI)"
+        sleep 2
+        count=$((count+1))
+    done
+
+    # Create upload directories
+    mkdir -p uploaded_images uploaded_videos data/p2p/shards
+
+    echo "✅ Core services ready!"
+    echo ""
+    echo "Now run in separate terminals:"
+    echo "  Terminal 1: RUST_LOG=info cargo run --bin reminisce -- config-dev.yaml"
+    echo "  Terminal 2: cd client && npm run dev"
+    echo ""
+    echo "📝 Access points:"
+    echo "  - Client (via Vite): http://localhost:5173"
+    echo "  - Client (via nginx): https://localhost:28444"
+    echo "  - API: http://localhost:8080"
+    echo "  - Swagger: http://localhost:8080/swagger-ui/"
+    echo "  - P2P (QUIC): 0.0.0.0:5050 (UDP)"
+    echo ""
+    echo "🗄️  Database ports:"
+    echo "  - PostgreSQL: localhost:5432"
+    echo "  - Geotagging DB: localhost:5435"
+    echo ""
+    echo "📊 Observability:"
+    echo "  To start monitoring stack: ./dev start-obs"
+    echo "🛑 To stop: ./dev stop"
+}
+
+function start_obs {
+    echo "🚀 Starting Observability Stack..."
+    docker compose -p reminisce-dev -f docker-compose-observability.yml up -d
+    echo ""
+    echo "📊 Observability (OpenTelemetry + Prometheus + Alloy):"
+    echo "  - Grafana (UI): http://localhost:3000 (Explore Tempo for traces)"
+    echo "  - Prometheus: http://localhost:9090"
+    echo "  - Alloy Dashboard: http://localhost:12345"
+    echo "  - OTLP Receiver (Alloy): localhost:4317 (gRPC), localhost:4318 (HTTP)"
+}
+
+function stop_env {
+    echo "🛑 Stopping development environment..."
+    docker compose -p reminisce-dev -f docker-compose-dev.yml down
+    # Also stop observability if running
+    docker compose -p reminisce-dev -f docker-compose-observability.yml down 2>/dev/null || true
+    echo "✅ Environment stopped."
+}
+
+function run_tests {
+    echo "Running tests..."
+    
+    # Ensure databases are running
+    if ! docker compose -p reminisce-dev -f docker-compose-dev.yml ps --format json postgres | grep -q '"State":"running"'; then
+        echo "🔄 Databases are not running. Starting them..."
+        docker compose -p reminisce-dev -f docker-compose-dev.yml up -d postgres geotagging-db
+        
+        echo "⏳ Waiting for databases to initialize..."
+        # Wait loop
+        MAX_RETRIES=30
+        count=0
+        while [ $count -lt $MAX_RETRIES ]; do
+            if check_service_health "postgres" && check_service_health "geotagging-db"; then
+                echo "   ✅ Databases are ready!"
+                break
+            fi
+            sleep 1
+            count=$((count+1))
+        done
+        
+        if [ $count -eq $MAX_RETRIES ]; then
+            echo "⚠️  Timeout waiting for databases, but attempting to run tests anyway..."
+        fi
+    fi
+
+    # Export environment variables for tests
+    export PGHOST=localhost
+    export PGPORT=5432
+    export PGUSER=postgres
+    export PGPASSWORD=postgres
+
+    # Run tests
+    RUST_LOG=info cargo test "$@"
+    
+    TEST_EXIT_CODE=$?
+    
+    echo ""
+    if [ $TEST_EXIT_CODE -eq 0 ]; then
+        echo "✅ Tests completed successfully!"
+    else
+        echo "❌ Tests failed!"
+    fi
+    
+    return $TEST_EXIT_CODE
+}
+
+if [ -z "$COMMAND" ]; then
+    show_help
+    exit 1
+fi
+
+case "$COMMAND" in
+    start)
+        start_env
+        ;;
+    start-obs)
+        start_obs
+        ;;
+    stop)
+        stop_env
+        ;;
+    test)
+        run_tests "$@"
+        ;;
+    run)
+        echo "🚀 Building and running Reminisce server..."
+        RUST_LOG=info cargo run --bin reminisce -- config-dev.yaml "$@"
+        ;;
+    watch)
+        if ! command -v cargo-watch &>/dev/null; then
+            echo "❌ cargo-watch not found. Install it with: cargo install cargo-watch"
+            exit 1
+        fi
+        echo "👀 Watching for changes (auto-rebuild + restart)..."
+        RUST_LOG=info cargo watch -x 'run --bin reminisce -- config-dev.yaml' "$@"
+        ;;
+    client)
+        echo "🌐 Starting frontend dev server..."
+        cd client && npm run dev
+        ;;
+    build)
+        echo "📦 Building release binary..."
+        cargo build --release "$@"
+        echo "✅ Binary at: target/release/reminisce ($(du -h target/release/reminisce | cut -f1))"
+        ;;
+    clean)
+        echo "🧹 Cleaning build artifacts..."
+        BEFORE=$(du -sh target 2>/dev/null | cut -f1)
+        cargo clean
+        echo "✅ Freed ~$BEFORE of disk space"
+        ;;
+    restore)
+        if [ -z "$1" ]; then
+            echo "Usage: ./dev restore <backup_file>"
+            exit 1
+        fi
+        echo "Restoring from $1..."
+        RUST_LOG=info cargo run --bin reminisce -- restore config-dev.yaml "$1"
+        ;;
+    *)
+        echo "Unknown command: $COMMAND"
+        show_help
+        exit 1
+        ;;
+esac

@@ -1,0 +1,14 @@
+# Final runtime image
+# Just a standard PostGIS image with our pre-baked data
+FROM postgis/postgis:16-3.4-alpine
+
+# Copy the baked data from the builder context
+# The build script will place the data in 'pgdata' directory
+COPY --chown=postgres:postgres pgdata /var/lib/postgresql/data
+
+# Ensure permissions are correct
+RUN chmod 700 /var/lib/postgresql/data
+
+ENV POSTGRES_DB=geotagging_db
+ENV POSTGRES_USER=postgres
+ENV POSTGRES_PASSWORD=postgres

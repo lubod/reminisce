@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- Allow cleartext traffic for local development -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">localhost</domain>
+        <domain includeSubdomains="true">10.0.2.2</domain> <!-- Android emulator localhost -->
+        <domain includeSubdomains="true">127.0.0.1</domain>
+    </domain-config>
+
+    <!-- Debug configuration to allow self-signed certificates -->
+    <debug-overrides>
+        <trust-anchors>
+            <!-- Trust user-added CAs while debuggable only -->
+            <certificates src="system"/>
+            <certificates src="user"/>
+        </trust-anchors>
+    </debug-overrides>
+
+    <!-- Cleartext is permitted globally so that HTTP connections to NetBird peer
+         IPs (100.64.0.0/10 CGNAT range) work without port forwarding.
+         Note: android:usesCleartextTraffic in the manifest is ignored when
+         android:networkSecurityConfig is set, so this base-config entry is
+         required. Self-signed HTTPS on IP addresses is handled by AuthHelper's
+         TrustAllCerts path for any IPv4 server address. -->
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system"/>
+        </trust-anchors>
+    </base-config>
+</network-security-config>

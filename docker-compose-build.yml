@@ -1,0 +1,40 @@
+# Build compose - Use this to build all Docker images
+# Usage: docker compose -f docker-compose-build.yml build
+
+services:
+  postgres:
+    build:
+      context: .
+      dockerfile: Dockerfile.postgres
+    image: lubod/reminisce-postgres:latest
+    container_name: reminisce-postgres-build
+
+  reminisce:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: lubod/reminisce:latest
+    container_name: reminisce-build
+
+  client:
+    build:
+      context: ./client
+      dockerfile: Dockerfile
+    image: lubod/reminisce-client:latest
+    container_name: reminisce-client-build
+
+  ai-server:
+    build:
+      context: ./ai
+      dockerfile: Dockerfile
+    image: lubod/reminisce-ai-server:latest
+    container_name: reminisce-ai-server-build
+
+  p2p-node:
+    build:
+      context: .
+      dockerfile: Dockerfile.p2p
+      target: storage
+    image: lubod/reminisce-p2p:latest
+    container_name: reminisce-p2p-build
+  

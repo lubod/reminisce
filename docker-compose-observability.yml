@@ -1,0 +1,155 @@
+services:
+  # === OBSERVABILITY STACK (SIMPLIFIED) ===
+
+  # 1. THE COLLECTOR (Replaces Promtail & Node Exporter)
+  alloy:
+    image: grafana/alloy:latest
+    container_name: reminisce-alloy
+    volumes:
+      - ./observability/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /:/host/root:ro,rslave
+      - /sys:/host/sys:ro
+      - /proc:/host/proc:ro
+    command: [
+      "run",
+      "--server.http.listen-addr=0.0.0.0:12345",
+      "--storage.path=/var/lib/alloy/data",
+      "/etc/alloy/config.alloy"
+    ]
+    ports:
+      - "12345:12345" # Internal UI
+      - "4317:4317"   # OTLP gRPC (Traces)
+      - "4318:4318"   # OTLP HTTP (Traces)
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+
+  # 2. METRICS DB
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: reminisce-prometheus
+    volumes:
+      - ./observability/prometheus.yaml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.enable-remote-write-receiver' # Enable Alloy to push metrics to us
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+
+  # 3. LOGS DB
+  loki:
+    image: grafana/loki:latest
+    container_name: reminisce-loki
+    command: [ "-config.file=/etc/loki/local-config.yaml" ]
+    user: root
+    volumes:
+      - ./observability/loki.yaml:/etc/loki/local-config.yaml:ro
+      - loki_data:/loki
+    expose:
+      - "3100"
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+
+  # 4. TRACES DB
+  tempo:
+    image: grafana/tempo:latest
+    container_name: reminisce-tempo
+    command: [ "-config.file=/etc/tempo.yaml" ]
+    user: root
+    volumes:
+      - ./observability/tempo.yaml:/etc/tempo.yaml:ro
+      - tempo_data:/var/tempo
+    expose:
+      - "4317"
+      - "3200"
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 1G
+
+  # 5. VISUALIZATION UI
+  grafana:
+    image: grafana/grafana:latest
+    container_name: reminisce-grafana
+    volumes:
+      - ./observability/grafana-datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml:ro
+      - ./observability/grafana-dashboards.yaml:/etc/grafana/provisioning/dashboards/provider.yaml:ro
+      - ./observability/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GF_AUTH_DISABLE_LOGIN_FORM=true
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+    depends_on:
+      - tempo
+      - prometheus
+      - loki
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+
+  # === SPECIALIZED EXPORTERS (Keep these) ===
+
+  gpu-exporter:
+    image: nvidia/dcgm-exporter:latest
+    container_name: reminisce-gpu-exporter
+    environment:
+      - DCGM_EXPORTER_NO_HOSTNAME=1
+    ports:
+      - "9400:9400"
+    deploy:
+      resources:
+        limits:
+          cpus: '0.1'
+          memory: 128M
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:latest
+    container_name: reminisce-postgres-exporter
+    environment:
+      DATA_SOURCE_NAME: "postgresql://postgres:postgres@postgres:5432/reminisce_db?sslmode=disable"
+    expose:
+      - "9187"
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.2'
+          memory: 128M
+
+volumes:
+  tempo_data:
+  grafana_data:
+  prometheus_data:
+  loki_data:

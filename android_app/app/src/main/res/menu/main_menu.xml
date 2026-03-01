@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+    
+    <item
+        android:id="@+id/action_quick_backup"
+        android:title="@string/quick_backup"
+        android:icon="@drawable/ic_lightning"
+        app:showAsAction="always" />
+        
+    <item
+        android:id="@+id/action_backup_all"
+        android:title="@string/backup_all"
+        android:icon="@android:drawable/ic_menu_upload"
+        app:showAsAction="always" />
+    
+    <item
+        android:id="@+id/action_stop_backup"
+        android:title="@string/stop_backup"
+        android:icon="@android:drawable/ic_menu_close_clear_cancel"
+        app:showAsAction="never"
+        android:visible="true" />
+    
+    <item
+        android:id="@+id/action_refresh"
+        android:title="@string/refresh"
+        android:icon="@android:drawable/ic_menu_rotate"
+        app:showAsAction="ifRoom" />
+
+    <item
+        android:id="@+id/action_toggle_theme"
+        android:title="@string/toggle_dark_mode"
+        app:showAsAction="never" />
+    
+
+    <item
+        android:id="@+id/action_toggle_gallery"
+        android:title="@string/local_gallery"
+        app:showAsAction="never" />
+
+    <item
+        android:id="@+id/action_share_logs"
+        android:title="@string/share_logs"
+        app:showAsAction="never" />
+
+    <item
+        android:id="@+id/action_clear_hash_cache"
+        android:title="@string/clear_hash_cache"
+        app:showAsAction="never" />
+
+    <item
+        android:id="@+id/action_logout"
+        android:title="@string/logout"
+        app:showAsAction="never" />
+</menu>

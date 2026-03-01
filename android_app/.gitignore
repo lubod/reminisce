@@ -1,0 +1,96 @@
+# Gradle
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# Android Studio
+*.iml
+*.idea
+*.iws
+.settings/
+.cache
+.gradle/
+build/
+captures/
+.externalToolBuilders/
+.localHistory/
+.navigation/
+.profiler/
+.svn/
+.tmp/
+*.ap_
+*.rsc
+*.ap_
+.classpath
+.project
+
+# Android
+/bin/
+/gen/
+/local.properties
+/proguard/
+/apk/
+/usage/
+/coverage/
+/lint/
+/outputs/
+*.ap_
+*.apk
+*.aar
+*.dex
+
+# Android Studio Generated
+anonymous_usage_statistics/
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IntelliJ IDEA
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# User-specific configurations
+local.properties
+.env
+
+# Keystore files (NEVER commit these!)
+*.jks
+*.keystore
+keystore.properties
+
+# Build artifacts
+dist/
+target/
+out/
+
+# IDE and editor files
+.vscode/
+*.swp
+*.swo
+*~
+
+# Log files
+*.log
+!gradle.log
+
+# Mac
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Linux
+*~
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Icon?
+!Icon? # If you have a custom Icon file

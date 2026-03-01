@@ -1,0 +1,342 @@
+groups:
+  - name: reminisce_application
+    interval: 30s
+    rules:
+      # ============================================================================
+      # HTTP / API Alerts
+      # ============================================================================
+
+      - alert: HighErrorRate
+        expr: |
+          (
+            sum(rate(api_http_requests_total{status=~"5.."}[5m]))
+            /
+            sum(rate(api_http_requests_total[5m]))
+          ) > 0.05
+        for: 2m
+        labels:
+          severity: critical
+          component: api
+        annotations:
+          summary: "High HTTP error rate detected"
+          description: "Error rate is {{ $value | humanizePercentage }} (threshold: 5%)"
+
+      - alert: HighLatency
+        expr: |
+          histogram_quantile(0.95,
+            rate(api_http_requests_duration_seconds_bucket[5m])
+          ) > 1
+        for: 5m
+        labels:
+          severity: warning
+          component: api
+        annotations:
+          summary: "High API latency detected"
+          description: "95th percentile latency is {{ $value }}s (threshold: 1s)"
+
+      - alert: VeryHighLatency
+        expr: |
+          histogram_quantile(0.95,
+            rate(api_http_requests_duration_seconds_bucket[5m])
+          ) > 3
+        for: 2m
+        labels:
+          severity: critical
+          component: api
+        annotations:
+          summary: "Very high API latency detected"
+          description: "95th percentile latency is {{ $value }}s (threshold: 3s)"
+
+      # ============================================================================
+      # Database Alerts
+      # ============================================================================
+
+      - alert: DatabaseConnectionPoolNearLimit
+        expr: |
+          pg_stat_database_numbackends / pg_settings_max_connections > 0.8
+        for: 5m
+        labels:
+          severity: warning
+          component: database
+        annotations:
+          summary: "Database connection pool utilization high"
+          description: "Connection pool is {{ $value | humanizePercentage }} utilized (threshold: 80%)"
+
+      - alert: DatabaseConnectionPoolExhausted
+        expr: |
+          pg_stat_database_numbackends / pg_settings_max_connections > 0.95
+        for: 2m
+        labels:
+          severity: critical
+          component: database
+        annotations:
+          summary: "Database connection pool nearly exhausted"
+          description: "Connection pool is {{ $value | humanizePercentage }} utilized (threshold: 95%)"
+
+      - alert: HighSlowQueryRate
+        expr: rate(slow_queries_total[5m]) > 5
+        for: 5m
+        labels:
+          severity: warning
+          component: database
+        annotations:
+          summary: "High rate of slow database queries"
+          description: "{{ $value }} slow queries per second (threshold: 5/s)"
+
+      - alert: DatabaseQueryLatencyHigh
+        expr: |
+          histogram_quantile(0.95,
+            rate(db_query_duration_seconds_bucket[5m])
+          ) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+          component: database
+        annotations:
+          summary: "High database query latency"
+          description: "95th percentile query duration is {{ $value }}s (threshold: 0.5s)"
+
+      - alert: DatabaseDown
+        expr: up{job="postgres"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          component: database
+        annotations:
+          summary: "PostgreSQL database is down"
+          description: "PostgreSQL exporter has been down for more than 1 minute"
+
+      - alert: AppDbPoolExhausted
+        expr: db_pool_utilization_percent > 95
+        for: 1m
+        labels:
+          severity: critical
+          component: application
+        annotations:
+          summary: "Application DB Connection Pool Exhausted"
+          description: "Application is using {{ $value }}% of its max connection pool size."
+
+      - alert: NodeLowDiskSpace
+        expr: |
+          100 - (
+            node_filesystem_avail_bytes{mountpoint="/host/root"}
+            /
+            node_filesystem_size_bytes{mountpoint="/host/root"}
+            * 100
+          ) > 85
+        for: 5m
+        labels:
+          severity: warning
+          component: system
+        annotations:
+          summary: "Node Low Disk Space"
+          description: "Node disk usage is above 85%."
+
+      - alert: NodeCriticalDiskSpace
+        expr: |
+          100 - (
+            node_filesystem_avail_bytes{mountpoint="/host/root"}
+            /
+            node_filesystem_size_bytes{mountpoint="/host/root"}
+            * 100
+          ) > 95
+        for: 1m
+        labels:
+          severity: critical
+          component: system
+        annotations:
+          summary: "Node Critical Disk Space"
+          description: "Node disk usage is above 95%."
+
+      - alert: NodeHighCPU
+        expr: |
+          100 - (avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 90
+        for: 5m
+        labels:
+          severity: warning
+          component: system
+        annotations:
+          summary: "Node High CPU Usage"
+          description: "Node CPU usage is above 90%."
+
+      - alert: NodeHighMemory
+        expr: |
+          (
+            1 - (
+              node_memory_MemAvailable_bytes
+              /
+              node_memory_MemTotal_bytes
+            )
+          ) * 100 > 90
+        for: 5m
+        labels:
+          severity: warning
+          component: system
+        annotations:
+          summary: "Node High Memory Usage"
+          description: "Node memory usage is above 90%."
+
+      - alert: GPUHighUtilization
+        expr: DCGM_FI_DEV_GPU_UTIL > 90
+        for: 5m
+        labels:
+          severity: warning
+          component: gpu
+        annotations:
+          summary: "High GPU Utilization"
+          description: "GPU utilization is {{ $value }}%."
+
+      - alert: GPUHighMemory
+        expr: |
+          (DCGM_FI_DEV_FB_USED / DCGM_FI_DEV_FB_TOTAL) * 100 > 90
+        for: 5m
+        labels:
+          severity: warning
+          component: gpu
+        annotations:
+          summary: "High GPU Memory Usage"
+          description: "GPU memory usage is above 90%."
+
+      # ============================================================================
+      # Authentication / Security Alerts
+      # ============================================================================
+
+      - alert: HighLoginFailureRate
+        expr: rate(user_login_failures_total[5m]) > 10
+        for: 2m
+        labels:
+          severity: warning
+          component: security
+        annotations:
+          summary: "High login failure rate detected"
+          description: "{{ $value }} failed login attempts per second (threshold: 10/s). Possible brute force attack."
+
+      - alert: NoSuccessfulLogins
+        expr: |
+          rate(user_logins_total[1h]) == 0
+          and
+          rate(user_login_failures_total[1h]) > 0
+        for: 15m
+        labels:
+          severity: warning
+          component: security
+        annotations:
+          summary: "No successful logins while failures occur"
+          description: "Login failures are happening but no successful logins in the last hour"
+
+      # ============================================================================
+      # Service Health Alerts
+      # ============================================================================
+
+      - alert: ServiceDown
+        expr: up{job="reminisce"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: service
+        annotations:
+          summary: "Reminisce service is down"
+          description: "Reminisce application has been unreachable for more than 2 minutes"
+
+      - alert: HealthCheckFailing
+        expr: probe_success{job="blackbox"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: service
+        annotations:
+          summary: "Health check endpoint is failing"
+          description: "Health check probe has been failing for more than 2 minutes"
+
+      # ============================================================================
+      # Resource Usage Alerts
+      # ============================================================================
+
+      - alert: HighMemoryUsage
+        expr: |
+          (
+            process_resident_memory_bytes{job="reminisce"}
+            /
+            (3 * 1024 * 1024 * 1024)
+          ) > 0.9
+        for: 5m
+        labels:
+          severity: warning
+          component: resources
+        annotations:
+          summary: "High memory usage detected"
+          description: "Memory usage is {{ $value | humanizePercentage }} of 3GB limit"
+
+      - alert: HighCPUUsage
+        expr: |
+          rate(process_cpu_seconds_total{job="reminisce"}[5m]) > 0.8
+        for: 10m
+        labels:
+          severity: warning
+          component: resources
+        annotations:
+          summary: "High CPU usage detected"
+          description: "CPU usage is {{ $value | humanizePercentage }} (threshold: 80%)"
+
+      # ============================================================================
+      # Business Metrics Alerts
+      # ============================================================================
+
+      - alert: NoUserRegistrations
+        expr: |
+          rate(user_registrations_total[24h]) == 0
+        for: 24h
+        labels:
+          severity: info
+          component: business
+        annotations:
+          summary: "No user registrations in 24 hours"
+          description: "There have been no new user registrations in the last 24 hours"
+
+      - alert: NoMemoriesCreated
+        expr: |
+          rate(memories_created_total[24h]) == 0
+        for: 24h
+        labels:
+          severity: info
+          component: business
+        annotations:
+          summary: "No memories created in 24 hours"
+          description: "No new memories have been created in the last 24 hours"
+
+  # ============================================================================
+  # Observability Stack Health
+  # ============================================================================
+
+  - name: observability_infrastructure
+    interval: 60s
+    rules:
+      - alert: PrometheusDown
+        expr: up{job="prometheus"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: monitoring
+        annotations:
+          summary: "Prometheus is down"
+          description: "Prometheus monitoring is unavailable"
+
+      - alert: PrometheusTSDBCompactionsFailing
+        expr: rate(prometheus_tsdb_compactions_failed_total[1h]) > 0
+        for: 5m
+        labels:
+          severity: warning
+          component: monitoring
+        annotations:
+          summary: "Prometheus TSDB compactions are failing"
+          description: "Prometheus database compaction errors detected"
+
+      - alert: PrometheusTargetDown
+        expr: up == 0
+        for: 5m
+        labels:
+          severity: warning
+          component: monitoring
+        annotations:
+          summary: "Prometheus target is down"
+          description: "Target {{ $labels.job }} ({{ $labels.instance }}) is down"

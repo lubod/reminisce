@@ -1,0 +1,98 @@
+# Production setup
+# Usage: docker compose up -d
+# For development, use: docker compose -f docker-compose-dev.yml up -d
+
+services:
+  postgres:
+    image: lubod/reminisce-postgres:latest
+    container_name: reminisce-postgres
+    environment:
+      POSTGRES_DB: reminisce_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  geotagging-db:
+    image: lubod/geodb:latest
+    container_name: reminisce-geotagging
+    environment:
+      POSTGRES_DB: geotagging_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - geotagging_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  ai-server:
+    image: lubod/reminisce-ai-server:latest
+    container_name: reminisce-ai-server
+    expose:
+      - "8081"
+    volumes:
+      - ai_model_cache:/root/.cache/huggingface
+      - face_model_cache:/root/.insightface
+    devices:
+      - /dev/dri:/dev/dri
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8081/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+
+  reminisce:
+    image: lubod/reminisce:latest
+    container_name: reminisce
+    expose:
+      - "8080"
+    ports:
+      - "5050:5050/udp" # P2P QUIC Ingestion & Sharding
+    volumes:
+      - ./uploaded_images:/app/uploaded_images
+      - ./uploaded_videos:/app/uploaded_videos
+      - ./data/p2p:/app/data/p2p # Persistent Node ID and local shards
+      - ./config.yaml:/app/config.yaml:ro
+    environment:
+      - RUST_LOG=info
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
+      - APP_VERSION=0.1.0
+      - ENVIRONMENT=production
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ai-server:
+        condition: service_healthy
+
+  client:
+    image: lubod/reminisce-client:latest
+    container_name: reminisce-client
+    ports:
+      - "28080:80"
+      - "28443:443"
+    volumes:
+      - client_ssl:/etc/nginx/ssl
+    restart: unless-stopped
+    depends_on:
+      - reminisce
+
+volumes:
+  postgres_data:
+  geotagging_data:
+  ai_model_cache:
+  face_model_cache:
+  client_ssl:

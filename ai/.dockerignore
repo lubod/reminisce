@@ -1,0 +1,44 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info
+dist
+.venv
+venv
+
+# Docker
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Documentation (will be copied explicitly)
+# *.md
+
+# Test images
+*.jpg
+*.jpeg
+*.png
+*.gif
+
+# Build artifacts (but keep the bin directory)
+llama.cpp/.git
+llama.cpp/build
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
