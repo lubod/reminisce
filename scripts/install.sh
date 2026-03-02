@@ -310,6 +310,8 @@ CREATE TABLE IF NOT EXISTS images (
     deleted_at TIMESTAMPTZ, -- Timestamp for soft deletion
     p2p_synced_at TIMESTAMPTZ, -- Timestamp when this media file was last synced to P2P network. NULL means needs sync.
     p2p_shard_hash VARCHAR(255), -- Root hash or manifest hash of the object in P2P network (Blake3).
+    p2p_encryption_key BYTEA, -- 32-byte encryption key used for sharding (needed for re-sharding during rebalance)
+    p2p_encrypted_size INTEGER, -- Size of the encrypted blob before erasure coding (needed for reconstruction)
     PRIMARY KEY (deviceid, hash)
 );
 
@@ -340,8 +342,8 @@ CREATE INDEX IF NOT EXISTS idx_images_has_thumbnail ON images(has_thumbnail) WHE
 -- This enables queries like: WHERE to_tsvector('english', description) @@ plainto_tsquery('english', 'sunset beach')
 CREATE INDEX IF NOT EXISTS idx_images_description_fts ON images
 USING GIN (to_tsvector('english', COALESCE(description, '') || ' ' || COALESCE(name, '')));
--- Index on description for existence checks
-CREATE INDEX IF NOT EXISTS idx_images_description_exists ON images(description) WHERE description IS NOT NULL AND description != '';
+-- Partial index for existence checks (indexes id, not the text value, to avoid btree row size limits)
+CREATE INDEX IF NOT EXISTS idx_images_description_exists ON images(hash) WHERE description IS NOT NULL AND description != '';
 -- Index to find images that haven't had face detection run yet
 CREATE INDEX IF NOT EXISTS idx_images_face_detection_pending ON images(face_detection_completed_at) WHERE face_detection_completed_at IS NULL;
 -- Index for finding unsynced images efficiently (P2P media replication)
@@ -389,6 +391,8 @@ CREATE TABLE IF NOT EXISTS videos (
     deleted_at TIMESTAMPTZ, -- Timestamp for soft deletion
     p2p_synced_at TIMESTAMPTZ, -- Timestamp when this media file was last synced to P2P network. NULL means needs sync.
     p2p_shard_hash VARCHAR(255), -- Root hash or manifest hash of the object in P2P network (Blake3).
+    p2p_encryption_key BYTEA, -- 32-byte encryption key used for sharding (needed for re-sharding during rebalance)
+    p2p_encrypted_size INTEGER, -- Size of the encrypted blob before erasure coding (needed for reconstruction)
     PRIMARY KEY (deviceid, hash)
 );
 

@@ -276,10 +276,15 @@ export const Dashboard = observer(() => {
                                             </h3>
                                             <div className="flex-1 space-y-3 overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-gray-700">
                                                 {discoveredPeers.length > 0 ? discoveredPeers.map((peer) => (
-                                                    <div key={peer.peer_id} className="bg-gray-800/80 border border-gray-700/50 p-4 rounded-xl flex items-center justify-between group hover:border-blue-500/50 transition-colors">
+                                                    <div key={peer.peer_id} className={`border p-4 rounded-xl flex items-center justify-between group transition-colors ${peer.is_active ? 'bg-gray-800/80 border-gray-700/50 hover:border-blue-500/50' : 'bg-gray-900/40 border-gray-700/30 opacity-60'}`}>
                                                         <div className="overflow-hidden">
-                                                            <div className="text-[9px] text-gray-500 uppercase font-black">Storage Node</div>
+                                                            <div className="text-[9px] text-gray-500 uppercase font-black">{peer.is_active ? 'Storage Node' : 'Offline Node'}</div>
                                                             <code className="text-xs text-gray-300 font-mono block truncate">{peer.peer_id.substring(0, 16)}...</code>
+                                                            {peer.shard_count > 0 && (
+                                                                <div className={`text-[9px] font-bold mt-1 ${peer.is_active ? 'text-indigo-400' : 'text-yellow-600'}`}>
+                                                                    {peer.shard_count} shards{!peer.is_active && ' (pending rebalance)'}
+                                                                </div>
+                                                            )}
                                                         </div>
                                                         <div className="flex flex-col items-end">
                                                             <span className={`w-2.5 h-2.5 rounded-full mb-1 shadow-lg ${peer.is_active ? 'bg-green-400 animate-pulse shadow-green-500/20' : 'bg-red-500 shadow-red-500/20'}`}></span>
@@ -431,15 +436,27 @@ export const Dashboard = observer(() => {
                                             <div className="text-[10px] text-yellow-500 font-black uppercase mt-1">Missing</div>
                                         </div>
                                     </div>
-                                    <div className="space-y-3 max-h-[300px] overflow-y-auto pr-2 scrollbar-thin">
-                                        {statsStore.verificationResult.files.map((file, idx) => (
-                                            <div key={idx} className="p-4 rounded-xl border bg-gray-900/50 border-gray-700/50 flex justify-between items-center group">
-                                                <code className="text-[10px] text-gray-500 font-mono group-hover:text-blue-400 transition-colors">{file.root_hash.substring(0, 32)}...</code>
-                                                <div className={`text-[10px] font-black px-3 py-1 rounded-full border ${file.status === 'ok' ? 'text-emerald-400 border-emerald-500/20 bg-emerald-500/5' : 'text-red-400 border-red-500/20 bg-red-500/5'}`}>
-                                                    {file.status.toUpperCase()}
+                                    <div className="space-y-2 max-h-[300px] overflow-y-auto pr-2 scrollbar-thin">
+                                        {statsStore.verificationResult.files.map((file, idx) => {
+                                            const statusColor = file.status === 'ok'
+                                                ? 'text-emerald-400 border-emerald-500/20 bg-emerald-500/5'
+                                                : file.status === 'degraded'
+                                                ? 'text-yellow-400 border-yellow-500/20 bg-yellow-500/5'
+                                                : file.status === 'failed'
+                                                ? 'text-red-400 border-red-500/20 bg-red-500/5'
+                                                : 'text-gray-500 border-gray-500/20 bg-gray-500/5';
+                                            return (
+                                                <div key={idx} className="p-3 rounded-xl border bg-gray-900/50 border-gray-700/50 flex items-center justify-between gap-3 group">
+                                                    <code className="text-[10px] text-gray-500 font-mono group-hover:text-blue-400 transition-colors truncate">{file.root_hash.substring(0, 28)}...</code>
+                                                    <div className="flex items-center gap-2 shrink-0">
+                                                        <span className="text-[9px] text-gray-600 font-mono">{file.shards_available}/{file.shards_total}</span>
+                                                        <div className={`text-[10px] font-black px-2 py-0.5 rounded-full border ${statusColor}`}>
+                                                            {file.status.toUpperCase()}
+                                                        </div>
+                                                    </div>
                                                 </div>
-                                            </div>
-                                        ))}
+                                            );
+                                        })}
                                     </div>
                                 </div>
                             ) : (

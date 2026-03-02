@@ -100,8 +100,8 @@ CREATE INDEX IF NOT EXISTS idx_images_has_thumbnail ON images(has_thumbnail) WHE
 -- This enables queries like: WHERE to_tsvector('english', description) @@ plainto_tsquery('english', 'sunset beach')
 CREATE INDEX IF NOT EXISTS idx_images_description_fts ON images
 USING GIN (to_tsvector('english', COALESCE(description, '') || ' ' || COALESCE(name, '')));
--- Index on description for existence checks
-CREATE INDEX IF NOT EXISTS idx_images_description_exists ON images(description) WHERE description IS NOT NULL AND description != '';
+-- Partial index for existence checks (indexes hash, not the text value, to avoid btree row size limits)
+CREATE INDEX IF NOT EXISTS idx_images_description_exists ON images(hash) WHERE description IS NOT NULL AND description != '';
 -- Index to find images that haven't had face detection run yet
 CREATE INDEX IF NOT EXISTS idx_images_face_detection_pending ON images(face_detection_completed_at) WHERE face_detection_completed_at IS NULL;
 -- Index for finding unsynced images efficiently (P2P media replication)

@@ -344,10 +344,17 @@ CREATE TABLE IF NOT EXISTS images (
     embedding vector(1152), -- SigLIP image embedding vector (1152-dimensional) for semantic search
     embedding_generated_at TIMESTAMPTZ, -- Timestamp when embedding was generated
     face_detection_completed_at TIMESTAMPTZ, -- Timestamp when face detection was completed (even if 0 faces found)
+    deleted_at TIMESTAMPTZ, -- Timestamp for soft deletion
+    p2p_synced_at TIMESTAMPTZ, -- Timestamp when this media file was last synced to P2P network. NULL means needs sync.
+    p2p_shard_hash VARCHAR(255), -- Root hash or manifest hash of the object in P2P network (Blake3).
+    p2p_encryption_key BYTEA, -- 32-byte encryption key used for sharding (needed for re-sharding during rebalance)
+    p2p_encrypted_size INTEGER, -- Size of the encrypted blob before erasure coding (needed for reconstruction)
     PRIMARY KEY (deviceid, hash)
 );
 
 CREATE INDEX IF NOT EXISTS idx_deviceid_type_created_at ON images(deviceid, type, created_at DESC);
+-- Index for soft delete filtering
+CREATE INDEX IF NOT EXISTS idx_images_deleted_at ON images(deleted_at) WHERE deleted_at IS NULL;
 -- Index for verification status
 CREATE INDEX IF NOT EXISTS idx_images_verification_status ON images(verification_status);
 -- Spatial index for location-based queries (e.g., find images near a location)
@@ -372,10 +379,14 @@ CREATE INDEX IF NOT EXISTS idx_images_has_thumbnail ON images(has_thumbnail) WHE
 -- This enables queries like: WHERE to_tsvector('english', description) @@ plainto_tsquery('english', 'sunset beach')
 CREATE INDEX IF NOT EXISTS idx_images_description_fts ON images
 USING GIN (to_tsvector('english', COALESCE(description, '') || ' ' || COALESCE(name, '')));
--- Index on description for existence checks
-CREATE INDEX IF NOT EXISTS idx_images_description_exists ON images(description) WHERE description IS NOT NULL AND description != '';
+-- Partial index for existence checks (indexes id, not the text value, to avoid btree row size limits)
+CREATE INDEX IF NOT EXISTS idx_images_description_exists ON images(hash) WHERE description IS NOT NULL AND description != '';
 -- Index to find images that haven't had face detection run yet
 CREATE INDEX IF NOT EXISTS idx_images_face_detection_pending ON images(face_detection_completed_at) WHERE face_detection_completed_at IS NULL;
+-- Index for finding unsynced images efficiently (P2P media replication)
+CREATE INDEX IF NOT EXISTS idx_images_need_sync ON images(created_at) WHERE p2p_synced_at IS NULL;
+-- Index for looking up P2P synced status
+CREATE INDEX IF NOT EXISTS idx_images_p2p_synced ON images(p2p_synced_at);
 
 -- Starred images table for per-user image starring (cross-device)
 CREATE TABLE IF NOT EXISTS starred_images (
@@ -414,10 +425,17 @@ CREATE TABLE IF NOT EXISTS videos (
     last_verified_at TIMESTAMPTZ,
     verification_status INTEGER NOT NULL DEFAULT 0, -- 0: not verified/pending, 1: OK/verified, -1: NOK/failed
     description TEXT, -- AI-generated description of the video
+    deleted_at TIMESTAMPTZ, -- Timestamp for soft deletion
+    p2p_synced_at TIMESTAMPTZ, -- Timestamp when this media file was last synced to P2P network. NULL means needs sync.
+    p2p_shard_hash VARCHAR(255), -- Root hash or manifest hash of the object in P2P network (Blake3).
+    p2p_encryption_key BYTEA, -- 32-byte encryption key used for sharding (needed for re-sharding during rebalance)
+    p2p_encrypted_size INTEGER, -- Size of the encrypted blob before erasure coding (needed for reconstruction)
     PRIMARY KEY (deviceid, hash)
 );
 
 CREATE INDEX IF NOT EXISTS idx_video_deviceid_type_created_at ON videos(deviceid, type, created_at DESC);
+-- Index for soft delete filtering
+CREATE INDEX IF NOT EXISTS idx_videos_deleted_at ON videos(deleted_at) WHERE deleted_at IS NULL;
 -- Index for verification status
 CREATE INDEX IF NOT EXISTS idx_videos_verification_status ON videos(verification_status);
 -- Index for user_id queries
@@ -426,6 +444,10 @@ CREATE INDEX IF NOT EXISTS idx_videos_user_id ON videos(user_id);
 CREATE INDEX IF NOT EXISTS idx_videos_hash ON videos(hash);
 -- Partial index for thumbnail queries (only index rows with thumbnails)
 CREATE INDEX IF NOT EXISTS idx_videos_has_thumbnail ON videos(has_thumbnail) WHERE has_thumbnail = true;
+-- Index for finding unsynced videos efficiently (P2P media replication)
+CREATE INDEX IF NOT EXISTS idx_videos_need_sync ON videos(created_at) WHERE p2p_synced_at IS NULL;
+-- Index for looking up P2P synced status
+CREATE INDEX IF NOT EXISTS idx_videos_p2p_synced ON videos(p2p_synced_at);
 
 -- Persons table (face clusters representing individuals)
 -- MOVED BEFORE FACES TO RESOLVE CIRCULAR DEPENDENCY

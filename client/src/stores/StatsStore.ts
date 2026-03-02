@@ -97,6 +97,7 @@ export interface DiscoveredPeer {
     peer_id: string;
     last_seen: string;
     is_active: boolean;
+    shard_count: number;
 }
 
 export interface DiscoveredPeersResponse {

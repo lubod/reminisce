@@ -186,6 +186,8 @@ pub use crate::services::import_dir::import_directory;
             crate::services::p2p_status::DiscoveredPeer,
             crate::services::p2p_status::InviteStatusResponse,
             crate::services::p2p_status::MembershipInfo,
+            crate::services::p2p_status::VerificationResult,
+            crate::services::p2p_status::FileVerifyResult,
             crate::services::stats::StatsResponse,
             crate::services::pool_stats::PoolStatsResponse,
             crate::services::pool_stats::PoolMetrics,
