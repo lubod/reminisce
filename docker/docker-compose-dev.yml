@@ -1,6 +1,6 @@
 # Fully dockerized development & test setup
-# Build images first: docker compose -f docker-compose-build.yml build
-# Then run: docker compose -f docker-compose-dev.yml up -d
+# Run from repo root: docker compose --project-directory . -f docker/docker-compose-dev.yml up -d
+# Or simply: ./dev start
 #
 # Access points:
 #   Web UI:   https://localhost:28444  (or http://localhost:28081)
@@ -40,7 +40,7 @@ services:
       - "5432:5432"
     volumes:
       - postgres_dev_data:/var/lib/postgresql/data
-      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
@@ -59,7 +59,7 @@ services:
       - "5435:5432"
     volumes:
       - geotagging_dev_data:/var/lib/postgresql/data
-      - ./geodb-entrypoint.sh:/usr/local/bin/custom-entrypoint.sh:ro
+      - ./geodb_builder/geodb-entrypoint.sh:/usr/local/bin/custom-entrypoint.sh:ro
     restart: unless-stopped
     entrypoint: ["/bin/bash", "/usr/local/bin/custom-entrypoint.sh"]
     command: >
@@ -179,8 +179,8 @@ services:
       - "28081:80"
       - "28444:443"
     volumes:
-      - ./nginx-fullstack.conf:/etc/nginx/conf.d/default.conf:ro
-      - ./generate-ssl-certs-fullstack.sh:/docker-entrypoint.d/00-generate-certs.sh:ro
+      - ./nginx/nginx-fullstack.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx/generate-ssl-certs-fullstack.sh:/docker-entrypoint.d/00-generate-certs.sh:ro
       - nginx_dev_ssl:/etc/nginx/ssl
     environment:
       - EXTRA_SAN_IPS=IP:${NETBIRD_OVERLAY_IP:-100.64.0.1}

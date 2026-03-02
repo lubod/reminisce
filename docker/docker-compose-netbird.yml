@@ -1,5 +1,5 @@
 # NetBird Mesh VPN deployment for Reminisce
-# Usage: docker compose -f docker-compose-netbird.yml up -d
+# Run from repo root: docker compose --project-directory . -f docker/docker-compose-netbird.yml up -d
 #
 # Required .env variables:
 #   NETBIRD_SETUP_KEY  - Setup key from: ./netbird/manage.sh create-key <name>

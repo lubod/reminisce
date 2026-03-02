@@ -1,11 +1,12 @@
-# Build compose - Use this to build all Docker images
-# Usage: docker compose -f docker-compose-build.yml build
+# Build all Docker images
+# Run from repo root: docker compose --project-directory . -f docker/docker-compose-build.yml build
+# Or push:           docker compose --project-directory . -f docker/docker-compose-build.yml push
 
 services:
   postgres:
     build:
       context: .
-      dockerfile: Dockerfile.postgres
+      dockerfile: docker/Dockerfile.postgres
     image: lubod/reminisce-postgres:latest
     container_name: reminisce-postgres-build
 
@@ -33,8 +34,7 @@ services:
   p2p-node:
     build:
       context: .
-      dockerfile: Dockerfile.p2p
+      dockerfile: docker/Dockerfile.p2p
       target: storage
     image: lubod/reminisce-p2p:latest
     container_name: reminisce-p2p-build
-  
