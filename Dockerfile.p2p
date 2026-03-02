@@ -5,22 +5,18 @@ WORKDIR /usr/src/app
 # 1. Copy workspace manifests
 COPY Cargo.lock Cargo.toml ./
 COPY np2p/Cargo.toml ./np2p/
-COPY np2p-mobile/Cargo.toml ./np2p-mobile/
 
 # 2. Create dummy source files to cache dependency compilation
 RUN mkdir -p np2p/src/bin && \
     echo "fn main() {}" > np2p/src/bin/main.rs && \
     echo "fn main() {}" > np2p/src/bin/e2e_client.rs && \
-    echo "pub fn dummy() {}" > np2p/src/lib.rs && \
-    mkdir -p np2p-mobile/src && \
-    echo "pub fn dummy() {}" > np2p-mobile/src/lib.rs
+    echo "pub fn dummy() {}" > np2p/src/lib.rs
 
 # Build dependencies only
 RUN cargo build -p np2p --release
 
 # 3. Copy actual source code
 COPY np2p/src ./np2p/src
-COPY np2p-mobile/src ./np2p-mobile/src
 
 # Remove dummy artifacts to force re-compilation of our crate
 RUN rm -f target/release/deps/np2p* target/release/deps/libnp2p* target/release/np2pd* target/release/e2e_client*

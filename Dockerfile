@@ -9,16 +9,14 @@ WORKDIR /usr/src/reminisce
 # 1. Copy workspace manifests only
 COPY Cargo.toml Cargo.lock ./
 COPY np2p/Cargo.toml ./np2p/
-COPY np2p-mobile/Cargo.toml ./np2p-mobile/
 
 # 2. Create dummy source files to cache dependency compilation
-RUN mkdir -p src np2p/src/bin np2p-mobile/src && \
+RUN mkdir -p src np2p/src/bin && \
     echo "fn main() {}" > src/main.rs && \
     echo "pub fn dummy() {}" > src/lib.rs && \
     echo "fn main() {}" > np2p/src/bin/main.rs && \
     echo "fn main() {}" > np2p/src/bin/e2e_client.rs && \
-    echo "pub fn dummy() {}" > np2p/src/lib.rs && \
-    echo "pub fn dummy() {}" > np2p-mobile/src/lib.rs
+    echo "pub fn dummy() {}" > np2p/src/lib.rs
 
 # Build dependencies only (this layer is cached until Cargo.toml/lock changes)
 RUN cargo build --release
@@ -26,7 +24,6 @@ RUN cargo build --release
 # 3. Copy actual source code
 COPY src ./src
 COPY np2p/src ./np2p/src
-COPY np2p-mobile/src ./np2p-mobile/src
 
 # Remove dummy artifacts to force re-compilation of our crates
 RUN rm -f target/release/deps/reminisce* target/release/deps/libreminisce* target/release/reminisce \
