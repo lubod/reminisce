@@ -36,18 +36,3 @@ COPY entrypoint.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
 ENTRYPOINT ["entrypoint.sh"]
-ENV POSTGRES_USER=postgres
-ENV POSTGRES_PASSWORD=postgres
-ENV POSTGRES_DB=geotagging_db
-
-WORKDIR /app
-
-# Copy processing scripts
-COPY process_osm.lua /app/
-COPY optimize.sql /app/
-
-# Entrypoint script to handle the build process
-COPY entrypoint.sh /usr/local/bin/
-RUN chmod +x /usr/local/bin/entrypoint.sh
-
-ENTRYPOINT ["entrypoint.sh"]

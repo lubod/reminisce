@@ -3,7 +3,9 @@ hash2name.txt
 uploaded_images*
 uploaded_videos*
 organized_images
-.env*
+.env
+.env.local
+.env.*.local
 config.yaml
 config_test.yaml
 config-dev.yaml

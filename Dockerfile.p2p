@@ -32,10 +32,12 @@ RUN cargo build --bin np2pd --bin e2e_client -p np2p --release
 
 # Storage Node (Daemon)
 FROM debian:bookworm-slim as storage
-RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y ca-certificates procps && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /usr/src/app/target/release/np2pd /usr/local/bin/
 RUN mkdir -p /data
 EXPOSE 5050/udp
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD pgrep np2pd || exit 1
 CMD ["np2pd", "--listen", "0.0.0.0:5050", "--data-dir", "/data"]
 
 # E2E Client Simulator
