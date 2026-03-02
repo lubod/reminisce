@@ -61,4 +61,4 @@ ENV ROCBLAS_USE_HIPBLASLT=1
 ENV TRITON_CACHE_DIR=/tmp/triton_cache
 
 # Run the service with gunicorn and the hipblas fix injected via LD_PRELOAD
-CMD ["sh", "-c", "LD_PRELOAD=/app/libhipblas_fix.so gunicorn --bind 0.0.0.0:8081 --workers 1 --timeout 300 --threads 4 ai_service:app"]
+CMD ["sh", "-c", "LD_PRELOAD=/app/libhipblas_fix.so gunicorn --bind 0.0.0.0:8081 --workers 1 --timeout 300 --threads 1 ai_service:app"]

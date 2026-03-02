@@ -391,7 +391,7 @@ def describe_image_fast():
                 "role": "user",
                 "content": [
                     {"type": "image"},
-                    {"type": "text", "text": "Describe this image in detail."},
+                    {"type": "text", "text": "Describe this image in 3-4 sentences."},
                 ],
             }
         ]
@@ -404,9 +404,11 @@ def describe_image_fast():
         with torch.no_grad():
             generated_ids = smolvlm_model.generate(
                 **inputs,
-                max_new_tokens=200,
+                max_new_tokens=600,
                 do_sample=False,
                 use_cache=True,
+                repetition_penalty=1.3,
+                no_repeat_ngram_size=4,
             )
 
         # Trim input tokens from output
