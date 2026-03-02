@@ -9,13 +9,13 @@ import android.view.View
 import android.widget.ProgressBar
 import androidx.appcompat.app.AppCompatActivity
 import org.openreminisce.app.util.AuthHelper
+import org.openreminisce.app.util.MediaSessionHolder
 import org.openreminisce.app.util.PreferenceHelper
 import org.openreminisce.app.util.SecureStorageHelper
 import kotlin.math.abs
 import android.widget.ImageButton
 import android.widget.TextView
 import android.widget.LinearLayout
-import org.openreminisce.app.model.ImageInfo
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.Request
@@ -57,10 +57,10 @@ class ImagePreviewActivity : AppCompatActivity() {
     private lateinit var infoOverlay: LinearLayout
 
     private var imageHashes: ArrayList<String> = arrayListOf()
+    private var imageInfos: List<org.openreminisce.app.model.ImageInfo> = emptyList()
     private var currentPosition: Int = 0
     private var isVideo: Boolean = false
-    private var isLocalMedia: Boolean = false // Track if viewing local media
-    private var imageInfos: ArrayList<ImageInfo> = arrayListOf() // Store image info for display
+    private var isLocalMedia: Boolean = false
     private var currentFileName: String? = null // Store filename from Content-Disposition header
     private var isLocationExpanded: Boolean = false // Track if location text is expanded
     private var fullLocationText: String? = null // Store full location text
@@ -81,27 +81,17 @@ class ImagePreviewActivity : AppCompatActivity() {
         imagePlaceText = findViewById(R.id.imagePlaceText)
         infoOverlay = findViewById(R.id.infoOverlay)
 
-        // Get the image hash and list from intent
-        // Support both old and new intent extra names for compatibility
+        // Get the image hash and position from intent (small primitives only)
         val imageHash = intent.getStringExtra("imageHash") ?: intent.getStringExtra("IMAGE_HASH")
-        imageHashes = intent.getStringArrayListExtra("imageHashes")
-            ?: intent.getStringArrayListExtra("ALL_HASHES")
-            ?: arrayListOf()
-        currentPosition = intent.getIntExtra("position", 0) ?: intent.getIntExtra("POSITION", 0)
+        // Large lists live in MediaSessionHolder to avoid Binder 1 MB limit
+        imageHashes = ArrayList(MediaSessionHolder.hashes)
+        imageInfos = MediaSessionHolder.imageInfos
+        currentPosition = intent.getIntExtra("position", intent.getIntExtra("POSITION", 0))
         isVideo = intent.getBooleanExtra("isVideo", false)
 
         // Handle both isLocalMedia and IS_REMOTE flags (IS_REMOTE is opposite of isLocalMedia)
         val isRemote = intent.getBooleanExtra("IS_REMOTE", false)
         isLocalMedia = intent.getBooleanExtra("isLocalMedia", false) && !isRemote
-
-        // Try to get the image info list from intent
-        imageInfos = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-            @Suppress("UNCHECKED_CAST")
-            intent.getSerializableExtra("imageInfos", ArrayList::class.java) as? ArrayList<ImageInfo> ?: arrayListOf()
-        } else {
-            @Suppress("DEPRECATION", "UNCHECKED_CAST")
-            intent.getSerializableExtra("imageInfos") as? ArrayList<ImageInfo> ?: arrayListOf()
-        }
 
         if (imageHash == null) {
             finish()
@@ -286,28 +276,22 @@ class ImagePreviewActivity : AppCompatActivity() {
 
     @UnstableApi
     private fun showNextMedia() {
-        if (imageHashes.isEmpty()) return
+        if (currentPosition >= imageHashes.size - 1) return
 
         currentPosition++
-        if (currentPosition >= imageInfos.size - 1) {
-            return
-        }
-
         loadImage(imageHashes[currentPosition])
-        updateImageInfo()
+        if (!isLocalMedia) updateImageInfo()
+        updateNavigationButtons()
     }
 
     @UnstableApi
     private fun showPreviousMedia() {
-        if (imageHashes.isEmpty()) return
+        if (currentPosition <= 0) return
 
         currentPosition--
-        if (currentPosition <= 0) {
-            return
-        }
-
         loadImage(imageHashes[currentPosition])
-        updateImageInfo()
+        if (!isLocalMedia) updateImageInfo()
+        updateNavigationButtons()
     }
 
     private fun updateNavigationButtons() {
@@ -530,13 +514,46 @@ class ImagePreviewActivity : AppCompatActivity() {
 
             // Update navigation button states
             updateNavigationButtons()
-            // Update image info display
-            updateImageInfo()
+            // Update image info display from MediaStore
+            updateLocalMediaInfo(mediaUri)
 
         } catch (e: Exception) {
             Log.e("ImagePreview", "Error loading local media", e)
             loadingSpinner.visibility = View.GONE
         }
+    }
+
+    private fun updateLocalMediaInfo(uriString: String) {
+        Thread {
+            try {
+                val uri = Uri.parse(uriString)
+                val projection = arrayOf(
+                    android.provider.MediaStore.MediaColumns.DISPLAY_NAME,
+                    android.provider.MediaStore.MediaColumns.DATE_TAKEN,
+                )
+                contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
+                    if (cursor.moveToFirst()) {
+                        val nameIdx = cursor.getColumnIndex(android.provider.MediaStore.MediaColumns.DISPLAY_NAME)
+                        val dateIdx = cursor.getColumnIndex(android.provider.MediaStore.MediaColumns.DATE_TAKEN)
+                        val name = if (nameIdx >= 0) cursor.getString(nameIdx) else null
+                        val dateTaken = if (dateIdx >= 0) cursor.getLong(dateIdx) else 0L
+                        runOnUiThread {
+                            imageNameText.text = name ?: uriString.substringAfterLast('/')
+                            if (dateTaken > 0) {
+                                val sdf = java.text.SimpleDateFormat("d MMM yyyy, H:mm:ss", java.util.Locale.getDefault())
+                                imageDateText.text = "Created: ${sdf.format(java.util.Date(dateTaken))}"
+                            } else {
+                                imageDateText.text = "Date unknown"
+                            }
+                            imagePlaceText.visibility = View.GONE
+                            infoOverlay.visibility = View.VISIBLE
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to query local media info", e)
+            }
+        }.start()
     }
 
     private fun fetchVideoFilename(mediaUrl: String, token: String, deviceId: String) {

@@ -23,6 +23,7 @@ import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import org.openreminisce.app.ImagePreviewActivity
 import org.openreminisce.app.LocalMediaAdapter
 import org.openreminisce.app.R
+import org.openreminisce.app.util.MediaSessionHolder
 import org.openreminisce.app.repository.LocalMediaRepository
 import org.openreminisce.app.util.SnackbarHelper
 import kotlinx.coroutines.Dispatchers
@@ -111,10 +112,15 @@ class LocalMediaFragment : Fragment() {
 
     private fun setupLocalMediaRecyclerView() {
         localMediaAdapter = LocalMediaAdapter { imageInfo ->
-            // Handle media click - open preview activity
-            val intent = Intent(requireContext(), ImagePreviewActivity::class.java)
-            intent.putExtra("imageHash", imageInfo.id)
-            intent.putExtra("isLocalMedia", true)
+            val allInfos = localMediaAdapter.getImageInfos()
+            val position = allInfos.indexOfFirst { it.id == imageInfo.id }.coerceAtLeast(0)
+            // Store large list in memory — Intent Binder has a ~1 MB limit
+            MediaSessionHolder.hashes = allInfos.map { it.id }
+            val intent = Intent(requireContext(), ImagePreviewActivity::class.java).apply {
+                putExtra("imageHash", imageInfo.id)
+                putExtra("isLocalMedia", true)
+                putExtra("position", position)
+            }
             startActivity(intent)
         }
 

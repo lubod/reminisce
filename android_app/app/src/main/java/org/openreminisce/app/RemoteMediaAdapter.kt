@@ -12,6 +12,8 @@ import com.bumptech.glide.Glide
 import com.bumptech.glide.load.engine.DiskCacheStrategy
 import org.openreminisce.app.model.ThumbnailInfo
 import org.openreminisce.app.util.PreferenceHelper
+import org.openreminisce.app.model.ImageInfo
+import org.openreminisce.app.util.MediaSessionHolder
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -37,15 +39,22 @@ class RemoteMediaAdapter(
         groupByDate()
     }
 
+    private val utcParser = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US).apply {
+        timeZone = TimeZone.getTimeZone("UTC")
+    }
+
+    fun parseDate(isoDate: String): Date = try {
+        utcParser.parse(isoDate.substring(0, 19)) ?: Date()
+    } catch (e: Exception) {
+        Date()
+    }
+
     private fun groupByDate() {
         items.clear()
 
         val grouped = allThumbnails.groupBy { thumbnailInfo ->
             try {
-                // Parse ISO 8601 date format: "2024-01-15T10:30:00Z"
-                val date = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US)
-                    .parse(thumbnailInfo.created_at.substring(0, 19))
-                dateFormat.format(date ?: Date())
+                dateFormat.format(parseDate(thumbnailInfo.created_at))
             } catch (e: Exception) {
                 "Unknown Date"
             }
@@ -150,17 +159,21 @@ class RemoteMediaAdapter(
 
             // Click to open full preview
             itemView.setOnClickListener {
+                // Store large lists in memory — Intent Binder has a ~1 MB limit
+                MediaSessionHolder.hashes = allThumbnails.map { it.hash }
+                MediaSessionHolder.imageInfos = allThumbnails.map { t ->
+                    ImageInfo(
+                        id = t.hash,
+                        date = parseDate(t.created_at),
+                        place = t.place,
+                        mediaType = t.mediaType
+                    )
+                }
                 val intent = Intent(context, ImagePreviewActivity::class.java).apply {
                     putExtra("IMAGE_HASH", thumbnailInfo.hash)
                     putExtra("POSITION", position)
-                    putExtra("TOTAL_COUNT", allThumbnails.size)
                     putExtra("IS_REMOTE", true)
                     putExtra("isVideo", isVideo)
-                    // Pass all hashes for swipe navigation
-                    putStringArrayListExtra(
-                        "ALL_HASHES",
-                        ArrayList(allThumbnails.map { it.hash })
-                    )
                 }
                 context.startActivity(intent)
             }

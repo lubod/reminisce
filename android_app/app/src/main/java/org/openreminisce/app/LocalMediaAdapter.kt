@@ -50,6 +50,9 @@ class LocalMediaAdapter(
         notifyItemRangeRemoved(0, size)
     }
 
+    fun getImageInfos(): List<ImageInfo> =
+        items.filterIsInstance<MediaItem.Image>().map { it.imageInfo }
+
     override fun getItemViewType(position: Int): Int {
         return when (items[position]) {
             is MediaItem.DateHeader -> TYPE_HEADER
