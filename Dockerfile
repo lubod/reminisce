@@ -1,5 +1,5 @@
 # Stage 1: Build with dependency caching
-FROM rust:slim-trixie AS builder
+FROM rust:slim-bookworm AS builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y libssl-dev pkg-config && rm -rf /var/lib/apt/lists/*
@@ -36,7 +36,7 @@ RUN rm -f target/release/deps/reminisce* target/release/deps/libreminisce* targe
 RUN cargo build --release
 
 # Stage 2: Runtime
-FROM debian:trixie-slim
+FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y \
     ca-certificates \
