@@ -5,9 +5,10 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 OUTPUT_FILE="$SCRIPT_DIR/install.sh"
-DOCKER_COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yml"
-INIT_SQL_FILE="$SCRIPT_DIR/init.sql"
+DOCKER_COMPOSE_FILE="$REPO_ROOT/docker-compose.yml"
+INIT_SQL_FILE="$REPO_ROOT/db/init.sql"
 
 # Check if source files exist
 if [ ! -f "$DOCKER_COMPOSE_FILE" ]; then
@@ -16,7 +17,7 @@ if [ ! -f "$DOCKER_COMPOSE_FILE" ]; then
 fi
 
 if [ ! -f "$INIT_SQL_FILE" ]; then
-    echo "ERROR: init.sql not found at $INIT_SQL_FILE"
+    echo "ERROR: db/init.sql not found at $INIT_SQL_FILE"
     exit 1
 fi
 
