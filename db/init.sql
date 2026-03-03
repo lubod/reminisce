@@ -58,7 +58,7 @@ CREATE TABLE IF NOT EXISTS images (
     exif TEXT,
     has_thumbnail BOOLEAN DEFAULT FALSE,
     last_verified_at TIMESTAMPTZ,
-    verification_status INTEGER NOT NULL DEFAULT 0 CHECK (verification_status IN (-1, 0, 1)), -- 0: not verified/pending, 1: OK/verified, -1: NOK/failed
+    verification_status INTEGER NOT NULL DEFAULT 0 CONSTRAINT chk_images_verification_status CHECK (verification_status IN (-1, 0, 1)), -- 0: not verified/pending, 1: OK/verified, -1: NOK/failed
     location GEOGRAPHY(POINT, 4326), -- WGS84 coordinate system for GPS data
     place TEXT,
     description TEXT, -- AI-generated description of the image
@@ -148,7 +148,7 @@ CREATE TABLE IF NOT EXISTS videos (
     metadata TEXT,
     has_thumbnail BOOLEAN DEFAULT FALSE,
     last_verified_at TIMESTAMPTZ,
-    verification_status INTEGER NOT NULL DEFAULT 0 CHECK (verification_status IN (-1, 0, 1)), -- 0: not verified/pending, 1: OK/verified, -1: NOK/failed
+    verification_status INTEGER NOT NULL DEFAULT 0 CONSTRAINT chk_videos_verification_status CHECK (verification_status IN (-1, 0, 1)), -- 0: not verified/pending, 1: OK/verified, -1: NOK/failed
     description TEXT, -- AI-generated description of the video
     deleted_at TIMESTAMPTZ, -- Timestamp for soft deletion
     p2p_synced_at TIMESTAMPTZ, -- Timestamp when this media file was last synced to P2P network. NULL means needs sync.
@@ -228,7 +228,7 @@ CREATE TABLE IF NOT EXISTS faces (
     embedding vector(512) NOT NULL,
 
     -- Face quality metrics
-    confidence REAL NOT NULL CHECK (confidence >= 0.0 AND confidence <= 1.0),  -- Detection confidence (0.0-1.0)
+    confidence REAL NOT NULL CONSTRAINT chk_faces_confidence CHECK (confidence >= 0.0 AND confidence <= 1.0),  -- Detection confidence (0.0-1.0)
 
     -- Person clustering
     person_id BIGINT REFERENCES persons(id) ON DELETE SET NULL,
