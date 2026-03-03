@@ -58,7 +58,7 @@ CREATE TABLE IF NOT EXISTS images (
     exif TEXT,
     has_thumbnail BOOLEAN DEFAULT FALSE,
     last_verified_at TIMESTAMPTZ,
-    verification_status INTEGER NOT NULL DEFAULT 0, -- 0: not verified/pending, 1: OK/verified, -1: NOK/failed
+    verification_status INTEGER NOT NULL DEFAULT 0 CHECK (verification_status IN (-1, 0, 1)), -- 0: not verified/pending, 1: OK/verified, -1: NOK/failed
     location GEOGRAPHY(POINT, 4326), -- WGS84 coordinate system for GPS data
     place TEXT,
     description TEXT, -- AI-generated description of the image
@@ -108,6 +108,8 @@ CREATE INDEX IF NOT EXISTS idx_images_face_detection_pending ON images(face_dete
 CREATE INDEX IF NOT EXISTS idx_images_need_sync ON images(created_at) WHERE p2p_synced_at IS NULL;
 -- Index for looking up P2P synced status
 CREATE INDEX IF NOT EXISTS idx_images_p2p_synced ON images(p2p_synced_at);
+-- Composite index for main gallery query: WHERE user_id = $N AND deleted_at IS NULL ORDER BY created_at DESC
+CREATE INDEX IF NOT EXISTS idx_images_user_created ON images(user_id, created_at DESC) WHERE deleted_at IS NULL;
 
 -- Starred images table for per-user image starring (cross-device)
 CREATE TABLE IF NOT EXISTS starred_images (
@@ -118,7 +120,8 @@ CREATE TABLE IF NOT EXISTS starred_images (
 );
 
 CREATE INDEX IF NOT EXISTS idx_starred_images_user_id ON starred_images(user_id);
-CREATE INDEX IF NOT EXISTS idx_starred_images_hash ON starred_images(hash);
+-- Composite covers the gallery LEFT JOIN: ON t.hash = s.hash AND s.user_id = $N
+CREATE INDEX IF NOT EXISTS idx_starred_images_hash_user ON starred_images(hash, user_id);
 CREATE INDEX IF NOT EXISTS idx_starred_images_starred_at ON starred_images(starred_at DESC);
 
 CREATE TABLE IF NOT EXISTS starred_videos (
@@ -129,7 +132,8 @@ CREATE TABLE IF NOT EXISTS starred_videos (
 );
 
 CREATE INDEX IF NOT EXISTS idx_starred_videos_user_id ON starred_videos(user_id);
-CREATE INDEX IF NOT EXISTS idx_starred_videos_hash ON starred_videos(hash);
+-- Composite covers the gallery LEFT JOIN: ON t.hash = s.hash AND s.user_id = $N
+CREATE INDEX IF NOT EXISTS idx_starred_videos_hash_user ON starred_videos(hash, user_id);
 CREATE INDEX IF NOT EXISTS idx_starred_videos_starred_at ON starred_videos(starred_at DESC);
 
 CREATE TABLE IF NOT EXISTS videos (
@@ -144,7 +148,7 @@ CREATE TABLE IF NOT EXISTS videos (
     metadata TEXT,
     has_thumbnail BOOLEAN DEFAULT FALSE,
     last_verified_at TIMESTAMPTZ,
-    verification_status INTEGER NOT NULL DEFAULT 0, -- 0: not verified/pending, 1: OK/verified, -1: NOK/failed
+    verification_status INTEGER NOT NULL DEFAULT 0 CHECK (verification_status IN (-1, 0, 1)), -- 0: not verified/pending, 1: OK/verified, -1: NOK/failed
     description TEXT, -- AI-generated description of the video
     deleted_at TIMESTAMPTZ, -- Timestamp for soft deletion
     p2p_synced_at TIMESTAMPTZ, -- Timestamp when this media file was last synced to P2P network. NULL means needs sync.
@@ -169,6 +173,8 @@ CREATE INDEX IF NOT EXISTS idx_videos_has_thumbnail ON videos(has_thumbnail) WHE
 CREATE INDEX IF NOT EXISTS idx_videos_need_sync ON videos(created_at) WHERE p2p_synced_at IS NULL;
 -- Index for looking up P2P synced status
 CREATE INDEX IF NOT EXISTS idx_videos_p2p_synced ON videos(p2p_synced_at);
+-- Composite index for main gallery query: WHERE user_id = $N AND deleted_at IS NULL ORDER BY created_at DESC
+CREATE INDEX IF NOT EXISTS idx_videos_user_created ON videos(user_id, created_at DESC) WHERE deleted_at IS NULL;
 
 -- Persons table (face clusters representing individuals)
 -- MOVED BEFORE FACES TO RESOLVE CIRCULAR DEPENDENCY
@@ -222,7 +228,7 @@ CREATE TABLE IF NOT EXISTS faces (
     embedding vector(512) NOT NULL,
 
     -- Face quality metrics
-    confidence REAL NOT NULL,  -- Detection confidence (0.0-1.0)
+    confidence REAL NOT NULL CHECK (confidence >= 0.0 AND confidence <= 1.0),  -- Detection confidence (0.0-1.0)
 
     -- Person clustering
     person_id BIGINT REFERENCES persons(id) ON DELETE SET NULL,
@@ -238,8 +244,8 @@ CREATE TABLE IF NOT EXISTS faces (
 CREATE INDEX IF NOT EXISTS idx_faces_image ON faces(image_deviceid, image_hash);
 CREATE INDEX IF NOT EXISTS idx_faces_user_id ON faces(user_id);
 CREATE INDEX IF NOT EXISTS idx_faces_person_id ON faces(person_id);
--- Compound index for finding unclustered faces by user
-CREATE INDEX IF NOT EXISTS idx_faces_user_unclustered ON faces(user_id) WHERE person_id IS NULL;
+-- Compound index for face clustering: WHERE user_id = $1 AND person_id IS NULL ORDER BY detected_at
+CREATE INDEX IF NOT EXISTS idx_faces_user_unclustered ON faces(user_id, detected_at) WHERE person_id IS NULL;
 CREATE INDEX IF NOT EXISTS idx_faces_detected_at ON faces(detected_at DESC);
 
 -- HNSW index for face similarity search (same config as CLIP: m=16, ef_construction=64)
@@ -313,6 +319,8 @@ CREATE TABLE IF NOT EXISTS image_labels (
 
 CREATE INDEX IF NOT EXISTS idx_image_labels_label_id ON image_labels(label_id);
 CREATE INDEX IF NOT EXISTS idx_image_labels_image ON image_labels(image_deviceid, image_hash);
+-- Composite for gallery label filter JOIN: ON t.hash = l.image_hash AND l.label_id = $N
+CREATE INDEX IF NOT EXISTS idx_image_labels_hash_label ON image_labels(image_hash, label_id);
 
 -- Many-to-many relationship between videos and labels
 CREATE TABLE IF NOT EXISTS video_labels (
@@ -325,6 +333,8 @@ CREATE TABLE IF NOT EXISTS video_labels (
 
 CREATE INDEX IF NOT EXISTS idx_video_labels_label_id ON video_labels(label_id);
 CREATE INDEX IF NOT EXISTS idx_video_labels_video ON video_labels(video_deviceid, video_hash);
+-- Composite for gallery label filter JOIN: ON t.hash = l.video_hash AND l.label_id = $N
+CREATE INDEX IF NOT EXISTS idx_video_labels_hash_label ON video_labels(video_hash, label_id);
 
 -- P2P Storage Nodes table
 CREATE TABLE IF NOT EXISTS p2p_nodes (
