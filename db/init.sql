@@ -122,7 +122,6 @@ CREATE TABLE IF NOT EXISTS starred_images (
 CREATE INDEX IF NOT EXISTS idx_starred_images_user_id ON starred_images(user_id);
 -- Composite covers the gallery LEFT JOIN: ON t.hash = s.hash AND s.user_id = $N
 CREATE INDEX IF NOT EXISTS idx_starred_images_hash_user ON starred_images(hash, user_id);
-CREATE INDEX IF NOT EXISTS idx_starred_images_starred_at ON starred_images(starred_at DESC);
 
 CREATE TABLE IF NOT EXISTS starred_videos (
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -134,7 +133,6 @@ CREATE TABLE IF NOT EXISTS starred_videos (
 CREATE INDEX IF NOT EXISTS idx_starred_videos_user_id ON starred_videos(user_id);
 -- Composite covers the gallery LEFT JOIN: ON t.hash = s.hash AND s.user_id = $N
 CREATE INDEX IF NOT EXISTS idx_starred_videos_hash_user ON starred_videos(hash, user_id);
-CREATE INDEX IF NOT EXISTS idx_starred_videos_starred_at ON starred_videos(starred_at DESC);
 
 CREATE TABLE IF NOT EXISTS videos (
     deviceid VARCHAR(255) NOT NULL,
@@ -340,9 +338,7 @@ CREATE INDEX IF NOT EXISTS idx_video_labels_hash_label ON video_labels(video_has
 CREATE TABLE IF NOT EXISTS p2p_nodes (
     node_id VARCHAR(64) PRIMARY KEY, -- Ed25519 public key in hex
     public_addr VARCHAR(255),
-    local_addrs TEXT, -- Comma-separated list of local IPs
     last_seen TIMESTAMPTZ DEFAULT NOW(),
-    available_space BIGINT DEFAULT 0, -- in bytes
     is_active BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
