@@ -1,6 +1,7 @@
 use actix_web::{ get, HttpResponse, Responder, web };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
+use crate::db::MainDbPool;
 
 #[utoipa::path(
     get,
@@ -32,10 +33,10 @@ pub struct HealthCheckResponse {
 )]
 #[get("/health")]
 pub async fn health_check(
-    main_pool: web::Data<deadpool_postgres::Pool>,
+    main_pool: web::Data<MainDbPool>,
 ) -> impl Responder {
     // Check database connectivity
-    match main_pool.get().await {
+    match main_pool.0.get().await {
         Ok(client) => {
             match client.query_one("SELECT 1", &[]).await {
                 Ok(_) => HttpResponse::Ok().json(HealthCheckResponse {
