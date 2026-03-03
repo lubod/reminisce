@@ -93,8 +93,8 @@ impl TestDatabase {
         let client = self.pool.get().await?;
 
         // Read schema from init.sql to keep test and production schemas in sync
-        let sql = std::fs::read_to_string("init.sql")
-            .map_err(|e| format!("Failed to read init.sql: {}", e))?;
+        let sql = std::fs::read_to_string("db/init.sql")
+            .map_err(|e| format!("Failed to read db/init.sql: {}", e))?;
 
         client.batch_execute(&sql).await?;
         Ok(())

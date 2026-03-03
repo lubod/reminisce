@@ -11,10 +11,11 @@ mod common;
 async fn test_health_check_healthy() {
     common::init_log();
     let (pool, _test_db) = setup_test_database_with_instance().await;
+    let main_pool = common::utils::wrap_main_pool(pool.clone());
 
     let app = test::init_service(
         App::new()
-            .app_data(web::Data::new(pool.clone()))
+            .app_data(web::Data::new(main_pool))
             .service(health_check)
     ).await;
 
@@ -37,10 +38,11 @@ async fn test_health_check_healthy() {
 async fn test_health_check_response_structure() {
     common::init_log();
     let (pool, _test_db) = setup_test_database_with_instance().await;
+    let main_pool = common::utils::wrap_main_pool(pool.clone());
 
     let app = test::init_service(
         App::new()
-            .app_data(web::Data::new(pool.clone()))
+            .app_data(web::Data::new(main_pool))
             .service(health_check)
     ).await;
 
