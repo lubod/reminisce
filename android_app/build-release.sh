@@ -20,13 +20,6 @@ BLUE='\033[0;34m'
 RED='\033[0;31m'
 NC='\033[0m' # No Color
 
-# Check if keystore exists
-KEYSTORE_FILE="$HOME/reminisce-release-key.jks"
-if [ ! -f "$KEYSTORE_FILE" ]; then
-    echo -e "${RED}Error: Keystore file not found at $KEYSTORE_FILE${NC}"
-    exit 1
-fi
-
 # Check if keystore.properties exists
 if [ ! -f "keystore.properties" ]; then
     echo -e "${RED}Error: keystore.properties file not found${NC}"
@@ -34,6 +27,16 @@ if [ ! -f "keystore.properties" ]; then
 fi
 
 # Read properties
+KEYSTORE_FILE=$(grep "storeFile=" keystore.properties | cut -d'=' -f2)
+# Expand ~ to $HOME if present
+KEYSTORE_FILE="${KEYSTORE_FILE/#\~/$HOME}"
+
+# Check if keystore exists
+if [ ! -f "$KEYSTORE_FILE" ]; then
+    echo -e "${RED}Error: Keystore file not found at $KEYSTORE_FILE${NC}"
+    exit 1
+fi
+
 KEYSTORE_ALIAS=$(grep "keyAlias=" keystore.properties | cut -d'=' -f2)
 KEYSTORE_PASSWORD=$(grep "storePassword=" keystore.properties | cut -d'=' -f2)
 KEY_PASSWORD=$(grep "keyPassword=" keystore.properties | cut -d'=' -f2)
