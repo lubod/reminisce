@@ -323,8 +323,9 @@ pub async fn upload_image_metadata(
     let query = "INSERT INTO images (deviceid, hash, type, created_at, name, ext, exif, has_thumbnail, last_verified_at, verification_status, location, place, added_at) 
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, ST_SetSRID(ST_MakePoint($11, $12), 4326), $13, NOW())
                  ON CONFLICT (deviceid, hash) DO UPDATE SET 
-                 type = EXCLUDED.type, name = EXCLUDED.name, ext = EXCLUDED.ext, exif = EXCLUDED.exif, 
-                 has_thumbnail = EXCLUDED.has_thumbnail, last_verified_at = EXCLUDED.last_verified_at, 
+                 type = EXCLUDED.type, name = EXCLUDED.name, ext = EXCLUDED.ext,
+                 exif = COALESCE(EXCLUDED.exif, images.exif),
+                 has_thumbnail = EXCLUDED.has_thumbnail, last_verified_at = EXCLUDED.last_verified_at,
                  verification_status = EXCLUDED.verification_status, location = EXCLUDED.location, place = EXCLUDED.place";
 
     let lat = metadata.latitude.unwrap_or(0.0);

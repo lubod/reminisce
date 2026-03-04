@@ -176,30 +176,67 @@ export const MediaLightbox = observer(() => {
         try {
             const exif = JSON.parse(exifJson);
             const formatted: { [key: string]: unknown } = {};
-             // Camera info
-            if (exif.Make) formatted['Camera Make'] = exif.Make;
-            if (exif.Model) formatted['Camera Model'] = exif.Model;
-            if (exif.LensModel) formatted['Lens'] = exif.LensModel;
+
+            // Strip surrounding double-quotes that kamadak-exif adds to ASCII string display values
+            // e.g. stored '"HONOR"' (string with embedded quote chars) → 'HONOR'
+            const strip = (v: unknown): string =>
+                typeof v === 'string' ? v.replace(/^"|"$/g, '').trim() : String(v);
+
+            // Extract leading number from strings like "6.67 mm", "27 mm", "3072 pixels"
+            const leadNum = (v: unknown): number | null => {
+                const n = parseFloat(String(v));
+                return isNaN(n) ? null : n;
+            };
+
+            // Camera info
+            if (exif.Make) formatted['Camera Make'] = strip(exif.Make);
+            if (exif.Model) formatted['Camera Model'] = strip(exif.Model);
+            if (exif.LensModel) formatted['Lens'] = strip(exif.LensModel);
 
             // Capture settings
             if (exif.ExposureTime) {
-                const exp = parseFloat(exif.ExposureTime);
-                formatted['Shutter Speed'] = exp >= 1 ? `${exp}s` : `1/${Math.round(1/exp)}s`;
+                if (typeof exif.ExposureTime === 'number') {
+                    // Numeric value (e.g. 0.001587)
+                    formatted['Shutter Speed'] = exif.ExposureTime >= 1
+                        ? `${exif.ExposureTime}s`
+                        : `1/${Math.round(1 / exif.ExposureTime)}s`;
+                } else {
+                    // Pre-formatted string like "1/630 s" — strip trailing " s"
+                    formatted['Shutter Speed'] = String(exif.ExposureTime).replace(/ s$/, '');
+                }
             }
-            if (exif.FNumber) formatted['Aperture'] = `f/${exif.FNumber}`;
-            if (exif.ISO || exif.ISOSpeedRatings) formatted['ISO'] = exif.ISO || exif.ISOSpeedRatings;
-            if (exif.FocalLength) formatted['Focal Length'] = `${exif.FocalLength}mm`;
-            if (exif.FocalLengthIn35mmFilm) formatted['Focal Length (35mm equiv.)'] = `${exif.FocalLengthIn35mmFilm}mm`;
+            if (exif.FNumber) {
+                // May already include "f/" prefix (e.g. "f/1.9") or be a bare number
+                const fn_ = String(exif.FNumber);
+                formatted['Aperture'] = fn_.startsWith('f/') ? fn_ : `f/${fn_}`;
+            }
+            // ISO: check all key names used by different EXIF sources / versions
+            const isoVal = exif.ISO ?? exif.ISOSpeedRatings ?? exif.ISOSpeed ?? exif.PhotographicSensitivity;
+            if (isoVal != null) formatted['ISO'] = isoVal;
 
-            // Image info
-            if (exif.ImageWidth && exif.ImageHeight) {
-                formatted['Resolution'] = `${exif.ImageWidth} × ${exif.ImageHeight}`;
+            if (exif.FocalLength) {
+                const n = leadNum(exif.FocalLength);
+                formatted['Focal Length'] = n != null ? `${n}mm` : String(exif.FocalLength);
             }
+            if (exif.FocalLengthIn35mmFilm) {
+                const n = leadNum(exif.FocalLengthIn35mmFilm);
+                formatted['Focal Length (35mm equiv.)'] = n != null ? `${n}mm` : String(exif.FocalLengthIn35mmFilm);
+            }
+
+            // Image info — prefer PixelXDimension/PixelYDimension; fall back to
+            // ImageWidth / ImageLength (EXIF standard name for height) or ImageHeight
+            const imgW = leadNum(exif.PixelXDimension ?? exif.ImageWidth);
+            const imgH = leadNum(exif.PixelYDimension ?? exif.ImageHeight ?? exif.ImageLength);
+            if (imgW && imgH) formatted['Resolution'] = `${imgW} × ${imgH}`;
+
             if (exif.Orientation) {
                 const orientations: { [key: number]: string } = {
                     1: 'Normal', 3: 'Rotated 180°', 6: 'Rotated 90° CW', 8: 'Rotated 90° CCW'
                 };
-                formatted['Orientation'] = orientations[exif.Orientation] || `${exif.Orientation}`;
+                const ori = typeof exif.Orientation === 'number'
+                    ? exif.Orientation
+                    : parseInt(exif.Orientation, 10);
+                formatted['Orientation'] = orientations[ori] || String(exif.Orientation);
             }
 
             // Date/time
@@ -213,16 +250,30 @@ export const MediaLightbox = observer(() => {
 
             // Other
             if (exif.Flash) formatted['Flash'] = exif.Flash;
-            if (exif.WhiteBalance) formatted['White Balance'] = exif.WhiteBalance === 0 ? 'Auto' : 'Manual';
-            if (exif.ExposureMode) {
-                const modes: { [key: number]: string } = { 0: 'Auto', 1: 'Manual', 2: 'Auto bracket' };
-                formatted['Exposure Mode'] = modes[exif.ExposureMode] || `${exif.ExposureMode}`;
+            if (exif.WhiteBalance != null) {
+                if (typeof exif.WhiteBalance === 'number') {
+                    formatted['White Balance'] = exif.WhiteBalance === 0 ? 'Auto' : 'Manual';
+                } else {
+                    formatted['White Balance'] = strip(exif.WhiteBalance);
+                }
             }
-            if (exif.MeteringMode) {
+            if (exif.ExposureMode != null) {
+                const modes: { [key: number]: string } = { 0: 'Auto', 1: 'Manual', 2: 'Auto bracket' };
+                if (typeof exif.ExposureMode === 'number') {
+                    formatted['Exposure Mode'] = modes[exif.ExposureMode] ?? String(exif.ExposureMode);
+                } else {
+                    formatted['Exposure Mode'] = strip(exif.ExposureMode);
+                }
+            }
+            if (exif.MeteringMode != null) {
                 const modes: { [key: number]: string } = {
                     1: 'Average', 2: 'Center-weighted', 3: 'Spot', 5: 'Pattern', 6: 'Partial'
                 };
-                formatted['Metering Mode'] = modes[exif.MeteringMode] || `${exif.MeteringMode}`;
+                if (typeof exif.MeteringMode === 'number') {
+                    formatted['Metering Mode'] = modes[exif.MeteringMode] ?? String(exif.MeteringMode);
+                } else {
+                    formatted['Metering Mode'] = strip(exif.MeteringMode);
+                }
             }
 
             return { formatted, raw: exif };

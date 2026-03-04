@@ -1,6 +1,7 @@
 use std::path::{Path};
 use std::fs;
 use std::io;
+use std::io::BufReader;
 
 /// Move a file, falling back to copy+delete if rename fails due to cross-device link (EXDEV).
 /// This happens in Docker when /tmp and the storage volume are on different mount points.
@@ -19,7 +20,9 @@ fn rename_or_copy(from: &Path, to: &Path) -> io::Result<()> {
 use chrono::{Utc};
 use crate::config::Config;
 use crate::db::{MainDbPool, GeotaggingDbPool};
+use crate::utils;
 use serde::{Serialize, Deserialize};
+use serde_json;
 use uuid::Uuid;
 use actix_web::web::Data;
 
@@ -34,6 +37,44 @@ pub struct IngestResult {
     pub thumbnail_generated: bool,
 }
 
+/// Extract EXIF metadata from an image file.
+/// Returns a JSON object mapping tag names to their display-value strings.
+/// ASCII-type fields have their surrounding double-quotes stripped
+/// (kamadak_exif wraps ASCII values in quotes in display_value()).
+fn extract_exif_from_image(path: &Path) -> Option<serde_json::Value> {
+    // Only attempt for JPEG/TIFF-based formats that kamadak_exif supports
+    let ext = path.extension()?.to_str()?.to_lowercase();
+    if !matches!(ext.as_str(), "jpg" | "jpeg" | "tiff" | "tif" | "heic" | "heif") {
+        return None;
+    }
+
+    let file = fs::File::open(path).ok()?;
+    let mut reader = BufReader::new(file);
+    let exif = kamadak_exif::Reader::new()
+        .read_from_container(&mut reader)
+        .ok()?;
+
+    let mut map = serde_json::Map::new();
+    for field in exif.fields() {
+        // Skip thumbnail IFD (In(1)) to avoid overwriting primary image fields
+        if field.ifd_num == kamadak_exif::In(1) {
+            continue;
+        }
+        let tag_name = field.tag.to_string();
+        // Ascii fields: display_value() wraps content in double quotes — strip them
+        // so we store "HONOR" not '"HONOR"' in the JSON
+        let value_str = match &field.value {
+            kamadak_exif::Value::Ascii(_) => {
+                field.display_value().to_string().trim_matches('"').to_string()
+            }
+            _ => field.display_value().to_string(),
+        };
+        map.insert(tag_name, serde_json::Value::String(value_str));
+    }
+
+    if map.is_empty() { None } else { Some(serde_json::Value::Object(map)) }
+}
+
 pub async fn process_image_file(
     temp_path: &Path,
     name: &str,
@@ -41,13 +82,13 @@ pub async fn process_image_file(
     device_id: &str,
     user_id: &Uuid,
     pool: &Data<MainDbPool>,
-    _geotagging_pool: &Data<GeotaggingDbPool>,
+    geotagging_pool: &Data<GeotaggingDbPool>,
     config: &Config,
     move_file: bool
 ) -> Result<IngestResult, Box<dyn std::error::Error + Send + Sync>> {
     let ext = Path::new(name).extension().and_then(|s| s.to_str()).unwrap_or("jpg");
     let filename = format!("{}.{}", hash, ext);
-    
+
     // 1. Target Path
     let images_dir = config.get_images_dir();
     let sub_dir = &hash[0..2];
@@ -67,13 +108,61 @@ pub async fn process_image_file(
     // 3. Database
     let client = pool.0.get().await?;
     let created_at = Utc::now();
-    
+
     client.execute(
         "INSERT INTO images (deviceid, hash, user_id, name, ext, created_at, added_at)
          VALUES ($1, $2, $3, $4, $5, $6, NOW())
          ON CONFLICT (deviceid, hash) DO UPDATE SET deleted_at = NULL",
         &[&device_id, &hash, user_id, &name, &ext, &created_at]
     ).await?;
+
+    // 4. Extract EXIF from the image file and update the DB
+    if let Some(exif_json) = extract_exif_from_image(&target_path) {
+        let exif_str = exif_json.to_string();
+
+        // Store EXIF only if not already set (client metadata upload takes priority)
+        let _ = client.execute(
+            "UPDATE images SET exif = $1 WHERE deviceid = $2 AND hash = $3 AND exif IS NULL",
+            &[&exif_str, &device_id, &hash],
+        ).await;
+
+        // Update created_at from EXIF DateTimeOriginal if available.
+        // Only update if created_at is very recent (within 1 min), meaning it was just set
+        // to NOW() by this INSERT and not a real date from a prior upload_image_metadata call.
+        if let Some(dt_str) = exif_json.get("DateTimeOriginal").and_then(|v| v.as_str()) {
+            if let Ok(ndt) = chrono::NaiveDateTime::parse_from_str(dt_str, "%Y-%m-%d %H:%M:%S") {
+                let exif_dt = ndt.and_utc();
+                let _ = client.execute(
+                    "UPDATE images SET created_at = $1 \
+                     WHERE deviceid = $2 AND hash = $3 \
+                     AND created_at > NOW() - INTERVAL '1 minute'",
+                    &[&exif_dt, &device_id, &hash],
+                ).await;
+            }
+        }
+
+        // Extract GPS and update location + place (only if not already set)
+        if let Some((lat, lon)) = utils::extract_gps_coordinates(&exif_json) {
+            let updated = client.execute(
+                "UPDATE images SET location = ST_SetSRID(ST_MakePoint($1, $2), 4326) \
+                 WHERE deviceid = $3 AND hash = $4 AND location IS NULL",
+                &[&lon, &lat, &device_id, &hash],
+            ).await.unwrap_or(0);
+
+            if updated > 0 {
+                if let Some(place) = utils::reverse_geocode(
+                    lat, lon, geotagging_pool,
+                    config.enable_local_geocoding,
+                    config.enable_external_geocoding_fallback,
+                ).await {
+                    let _ = client.execute(
+                        "UPDATE images SET place = $1 WHERE deviceid = $2 AND hash = $3 AND place IS NULL",
+                        &[&place, &device_id, &hash],
+                    ).await;
+                }
+            }
+        }
+    }
 
     Ok(IngestResult {
         hash: hash.to_string(),
