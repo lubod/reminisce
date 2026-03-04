@@ -289,6 +289,28 @@ class MediaHelper {
         }
 
         /**
+         * Gets DATE_TAKEN (capture date) from MediaStore — populated from EXIF by Android.
+         * Returns epoch milliseconds, or null if not available.
+         * More accurate than DATE_MODIFIED for camera photos and videos.
+         */
+        fun getDateTakenFromUri(context: Context, uri: Uri): Long? {
+            try {
+                context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                    if (cursor.moveToFirst()) {
+                        val takenIndex = cursor.getColumnIndex(MediaStore.MediaColumns.DATE_TAKEN)
+                        if (takenIndex >= 0) {
+                            val value = cursor.getLong(takenIndex)
+                            if (value > 0) return value
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error getting date taken from URI: $uri", e)
+            }
+            return null
+        }
+
+        /**
          * Loads location data from EXIF for images on Android 10+.
          * Requires ACCESS_MEDIA_LOCATION permission.
          */

@@ -70,6 +70,12 @@ CREATE TABLE IF NOT EXISTS images (
     p2p_shard_hash VARCHAR(255), -- Root hash or manifest hash of the object in P2P network (Blake3).
     p2p_encryption_key BYTEA, -- 32-byte encryption key used for sharding (needed for re-sharding during rebalance)
     p2p_encrypted_size INTEGER, -- Size of the encrypted blob before erasure coding (needed for reconstruction)
+    aesthetic_score REAL, -- AI-computed aesthetic quality score (0–10)
+    sharpness_score REAL, -- Laplacian variance sharpness score
+    width INTEGER, -- Image width in pixels
+    height INTEGER, -- Image height in pixels
+    file_size_bytes INTEGER, -- File size in bytes
+    quality_score_generated_at TIMESTAMPTZ, -- Timestamp when quality scores were computed
     PRIMARY KEY (deviceid, hash)
 );
 
@@ -110,6 +116,16 @@ CREATE INDEX IF NOT EXISTS idx_images_need_sync ON images(created_at) WHERE p2p_
 CREATE INDEX IF NOT EXISTS idx_images_p2p_synced ON images(p2p_synced_at);
 -- Composite index for main gallery query: WHERE user_id = $N AND deleted_at IS NULL ORDER BY created_at DESC
 CREATE INDEX IF NOT EXISTS idx_images_user_created ON images(user_id, created_at DESC) WHERE deleted_at IS NULL;
+-- Index to find images that haven't had quality scoring run yet
+CREATE INDEX IF NOT EXISTS idx_images_quality_pending ON images(quality_score_generated_at) WHERE quality_score_generated_at IS NULL;
+
+-- Idempotent migrations for existing databases
+ALTER TABLE images ADD COLUMN IF NOT EXISTS aesthetic_score REAL;
+ALTER TABLE images ADD COLUMN IF NOT EXISTS sharpness_score REAL;
+ALTER TABLE images ADD COLUMN IF NOT EXISTS width INTEGER;
+ALTER TABLE images ADD COLUMN IF NOT EXISTS height INTEGER;
+ALTER TABLE images ADD COLUMN IF NOT EXISTS file_size_bytes INTEGER;
+ALTER TABLE images ADD COLUMN IF NOT EXISTS quality_score_generated_at TIMESTAMPTZ;
 
 -- Starred images table for per-user image starring (cross-device)
 CREATE TABLE IF NOT EXISTS starred_images (

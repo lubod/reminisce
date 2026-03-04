@@ -1,4 +1,5 @@
 use actix_web::{post, web, HttpResponse, HttpRequest, Error};
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tokio::fs;
@@ -109,7 +110,7 @@ pub async fn import_directory(
     let chunks = files_to_process.chunks(100);
 
     for chunk in chunks {
-        let mut chunk_hashes = Vec::new();
+        let mut chunk_hashes: Vec<(PathBuf, String, String, bool, Option<chrono::DateTime<Utc>>)> = Vec::new();
 
         for path in chunk {
             let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
@@ -141,7 +142,12 @@ pub async fn import_directory(
             }
             let hash = hasher.finalize().to_hex().to_string();
             let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
-            chunk_hashes.push((path.clone(), hash, name, is_image));
+            // File mtime as a date fallback (used when no EXIF and no parseable filename)
+            let file_mtime: Option<chrono::DateTime<Utc>> = std::fs::metadata(&path)
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .map(chrono::DateTime::from);
+            chunk_hashes.push((path.clone(), hash, name, is_image, file_mtime));
         }
 
         if chunk_hashes.is_empty() {
@@ -151,8 +157,8 @@ pub async fn import_directory(
         // Batch check existing hashes for this device
         let client = utils::get_db_client(&pool.0).await?;
 
-        let image_hashes: Vec<String> = chunk_hashes.iter().filter(|(_, _, _, is_img)| *is_img).map(|(_, h, _, _)| h.clone()).collect();
-        let video_hashes: Vec<String> = chunk_hashes.iter().filter(|(_, _, _, is_img)| !*is_img).map(|(_, h, _, _)| h.clone()).collect();
+        let image_hashes: Vec<String> = chunk_hashes.iter().filter(|(_, _, _, is_img, _)| *is_img).map(|(_, h, _, _, _)| h.clone()).collect();
+        let video_hashes: Vec<String> = chunk_hashes.iter().filter(|(_, _, _, is_img, _)| !*is_img).map(|(_, h, _, _, _)| h.clone()).collect();
 
         let mut existing_image_hashes = std::collections::HashSet::new();
         if !image_hashes.is_empty() {
@@ -182,9 +188,9 @@ pub async fn import_directory(
             for row in rows { existing_video_hashes.insert(row.get::<_, String>(0)); }
         }
 
-        for (path, hash, name, is_image) in chunk_hashes {
+        for (path, hash, name, is_image, file_mtime) in chunk_hashes {
             let already_exists = if is_image { existing_image_hashes.contains(&hash) } else { existing_video_hashes.contains(&hash) };
-            
+
             if already_exists {
                 imported += 1;
                 continue;
@@ -195,12 +201,12 @@ pub async fn import_directory(
             let res = if is_image {
                  ingest::process_image_file(
                      &path, &name, &hash, &body.device_id, &user_uuid,
-                     &pool, &geotagging_pool, &config, false
+                     &pool, &geotagging_pool, &config, false, file_mtime,
                  ).await
             } else {
                  ingest::process_video_file(
                      &path, &name, &hash, &body.device_id, &user_uuid,
-                     &pool, &config, false
+                     &pool, &config, false, file_mtime,
                  ).await
             };
 

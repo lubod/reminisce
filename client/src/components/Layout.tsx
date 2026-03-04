@@ -2,10 +2,10 @@ import { useState } from "react";
 import { observer } from "mobx-react-lite";
 import { useStore } from "../stores/RootStore";
 import { Outlet, Link, useNavigate, useLocation } from "react-router-dom";
-import { LogOut, Activity, Menu, X, RefreshCw, MonitorPlay, Users, Folder } from "lucide-react";
+import { LogOut, Activity, Menu, X, RefreshCw, MonitorPlay, Users, Folder, Copy, Trash2 } from "lucide-react";
 
 export const Layout = observer(() => {
-    const { authStore, statsStore, mediaStore, uiStore, personStore } = useStore();
+    const { authStore, statsStore, mediaStore, uiStore, personStore, duplicatesStore, trashStore } = useStore();
     const navigate = useNavigate();
     const location = useLocation();
     const [isMobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -21,6 +21,8 @@ export const Layout = observer(() => {
         if (location.pathname.startsWith('/media')) return { title: 'Media', icon: <Folder className="w-5 h-5" /> };
         if (location.pathname.startsWith('/people')) return { title: 'People', icon: <Users className="w-5 h-5" /> };
         if (location.pathname.startsWith('/present')) return { title: 'Presentation Mode', icon: <MonitorPlay className="w-5 h-5" /> };
+        if (location.pathname.startsWith('/duplicates')) return { title: 'Duplicates', icon: <Copy className="w-5 h-5" /> };
+        if (location.pathname.startsWith('/trash')) return { title: 'Trash', icon: <Trash2 className="w-5 h-5" /> };
         return { title: 'Reminisce', icon: null };
     };
 
@@ -32,6 +34,10 @@ export const Layout = observer(() => {
             mediaStore.fetchAllMedia();
         } else if (location.pathname.startsWith('/people')) {
             personStore.fetchPersons();
+        } else if (location.pathname.startsWith('/duplicates')) {
+            duplicatesStore.fetchDuplicates();
+        } else if (location.pathname.startsWith('/trash')) {
+            trashStore.fetchTrash();
         }
     };
 
@@ -40,6 +46,8 @@ export const Layout = observer(() => {
         if (location.pathname === '/') return statsStore.isLoading;
         if (location.pathname.startsWith('/media')) return mediaStore.isLoadingMoreAllMedia || mediaStore.isSearching;
         if (location.pathname.startsWith('/people')) return personStore.isLoading;
+        if (location.pathname.startsWith('/duplicates')) return duplicatesStore.isLoading;
+        if (location.pathname.startsWith('/trash')) return trashStore.isLoading;
         return false;
     };
 
@@ -104,6 +112,12 @@ export const Layout = observer(() => {
                                     <Link to="/present" className={getLinkClass('/present')}>
                                         Present
                                     </Link>
+                                    <Link to="/duplicates" className={getLinkClass('/duplicates')}>
+                                        Duplicates
+                                    </Link>
+                                    <Link to="/trash" className={getLinkClass('/trash')}>
+                                        Trash
+                                    </Link>
                                 </div>
                             </div>
                             <div className="flex items-center">
@@ -155,6 +169,20 @@ export const Layout = observer(() => {
                                     className={getMobileLinkClass('/present')}
                                 >
                                     Present
+                                </Link>
+                                <Link
+                                    to="/duplicates"
+                                    onClick={() => setMobileMenuOpen(false)}
+                                    className={getMobileLinkClass('/duplicates')}
+                                >
+                                    Duplicates
+                                </Link>
+                                <Link
+                                    to="/trash"
+                                    onClick={() => setMobileMenuOpen(false)}
+                                    className={getMobileLinkClass('/trash')}
+                                >
+                                    Trash
                                 </Link>
                                 <button
                                     onClick={() => {

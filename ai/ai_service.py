@@ -302,6 +302,62 @@ def embed_text():
         return jsonify({'error': str(e)}), 500
 
 
+# ==================== QUALITY SCORING ENDPOINT ====================
+
+QUALITY_TEXTS = [
+    "a high quality, beautiful, sharp, well-exposed photograph",
+    "a low quality, blurry, dark, bad photograph",
+]
+
+@app.route('/quality', methods=['POST'])
+def quality_score():
+    """Compute quality signals for an image: aesthetic score, sharpness, resolution."""
+    if siglip_model is None:
+        return jsonify({'error': 'Embedding model not loaded'}), 503
+
+    try:
+        data = request.json
+        if not data or 'image' not in data:
+            return jsonify({'error': 'Missing image field'}), 400
+
+        try:
+            img = decode_image_to_pil(data['image'])
+        except Exception:
+            return jsonify({'error': 'Invalid image data'}), 400
+
+        w, h = img.size
+        if w < 3 or h < 3:
+            return jsonify({'error': 'Image too small'}), 400
+
+        # Sharpness: Laplacian variance on grayscale
+        gray = np.array(img.convert('L'))
+        sharpness = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+
+        # Aesthetic: zero-shot SigLIP text comparison
+        inputs = siglip_processor(text=QUALITY_TEXTS, images=img, return_tensors="pt", padding="max_length")
+        inputs = {k: v.to(device) for k, v in inputs.items()}
+        model_dtype = next(siglip_model.parameters()).dtype
+        inputs = {k: v.to(model_dtype) if v.is_floating_point() else v for k, v in inputs.items()}
+
+        with torch.no_grad():
+            outputs = siglip_model(**inputs)
+
+        probs = outputs.logits_per_image.softmax(dim=-1)[0]
+        aesthetic_score = float(probs[0].item()) * 10.0  # 0–10
+
+        logger.info(f"Quality score: aesthetic={aesthetic_score:.2f}, sharpness={sharpness:.1f}, size={w}x{h}")
+        return jsonify({
+            "aesthetic_score": aesthetic_score,
+            "sharpness_score": sharpness,
+            "width": w,
+            "height": h,
+        })
+
+    except Exception as e:
+        logger.error(f"Error in quality_score: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
 # ==================== DESCRIPTION ENDPOINTS ====================
 
 @app.route('/describe/qwen', methods=['POST'])

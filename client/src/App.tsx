@@ -6,6 +6,8 @@ import { Dashboard } from "./components/Dashboard";
 import { MediaBrowser } from "./components/MediaBrowser";
 import { PresentationMode } from "./components/PresentationMode";
 import { People } from "./components/People";
+import { DuplicatesBrowser } from "./components/DuplicatesBrowser";
+import { TrashBrowser } from "./components/TrashBrowser";
 import { useStore } from "./stores/RootStore";
 import { observer } from "mobx-react-lite";
 
@@ -35,6 +37,8 @@ const App = observer(() => {
           <Route path="people" element={<People />} />
           <Route path="people/:personId" element={<People />} />
           <Route path="present" element={<PresentationMode />} />
+          <Route path="duplicates" element={<DuplicatesBrowser />} />
+          <Route path="trash" element={<TrashBrowser />} />
         </Route>
       </Routes>
     </Router>

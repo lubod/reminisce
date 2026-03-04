@@ -138,6 +138,10 @@ export const DirectoryImportModal = observer(({ onClose }: { onClose: () => void
         const formData = new FormData();
         formData.append('hash', hash);
         formData.append('name', file.name);
+        // Send file.lastModified as created_at fallback (used when server finds no EXIF or filename date)
+        if (file.lastModified) {
+            formData.append('created_at', new Date(file.lastModified).toISOString());
+        }
         formData.append(isVideo ? 'video' : 'image', file);
 
         await axios.post(isVideo ? '/upload/video' : '/upload/image', formData);

@@ -118,6 +118,7 @@ pub async fn upload_image(
     let mut image_temp_file_path = None;
     let mut calculated_image_hash_opt = None;
     let mut device_id_opt = None;
+    let mut client_created_at_opt: Option<chrono::DateTime<Utc>> = None;
     let user_uuid = Uuid::parse_str(&claims.user_id).map_err(|_| actix_web::error::ErrorUnauthorized("Invalid user ID"))?;
 
     while let Ok(Some(mut field)) = payload.try_next().await {
@@ -145,6 +146,16 @@ pub async fn upload_image(
                     bytes.extend_from_slice(&chunk);
                 }
                 device_id_opt = Some(String::from_utf8_lossy(&bytes).into_owned());
+            }
+            "created_at" => {
+                let mut bytes = Vec::new();
+                while let Ok(Some(chunk)) = field.try_next().await {
+                    bytes.extend_from_slice(&chunk);
+                }
+                let s = String::from_utf8_lossy(&bytes);
+                client_created_at_opt = chrono::DateTime::parse_from_rfc3339(s.trim())
+                    .ok()
+                    .map(|dt| dt.with_timezone(&Utc));
             }
             "image" => {
                 let temp_dir = std::path::Path::new(config.get_images_dir()).join(".tmp");
@@ -184,7 +195,8 @@ pub async fn upload_image(
         &pool,
         &geotagging_pool,
         &config,
-        true
+        true,
+        client_created_at_opt,
     ).await;
 
     match res {
@@ -260,7 +272,8 @@ pub async fn batch_upload_image(
             &pool,
             &geotagging_pool,
             &config,
-            true
+            true,
+            None, // batch upload has no per-file client date
         ).await;
 
         match res {
@@ -301,8 +314,16 @@ pub async fn batch_upload_image(
 pub async fn upload_image_metadata(
     metadata: web::Json<UploadImageMetadataRequest>,
     pool: web::Data<MainDbPool>,
-    _claims: Claims,
+    claims: Claims,
 ) -> HttpResponse {
+    let user_uuid = match Uuid::parse_str(&claims.user_id) {
+        Ok(u) => u,
+        Err(_) => return HttpResponse::Unauthorized().json(UploadImageMetadataResponse {
+            status: "error".to_string(),
+            message: "Invalid user ID".to_string(),
+        }),
+    };
+
     let client = match pool.0.get().await {
         Ok(c) => c,
         Err(_) => return HttpResponse::InternalServerError().json(UploadImageMetadataResponse {
@@ -314,27 +335,30 @@ pub async fn upload_image_metadata(
     let created_at = metadata.created_at.as_ref()
         .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
         .map(|dt| dt.with_timezone(&Utc))
+        .or_else(|| utils::parse_date_from_image_name(&metadata.name))
         .unwrap_or_else(Utc::now);
 
     let last_verified_at = metadata.last_verified_at.as_ref()
         .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
         .map(|dt| dt.with_timezone(&Utc));
 
-    let query = "INSERT INTO images (deviceid, hash, type, created_at, name, ext, exif, has_thumbnail, last_verified_at, verification_status, location, place, added_at) 
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, ST_SetSRID(ST_MakePoint($11, $12), 4326), $13, NOW())
-                 ON CONFLICT (deviceid, hash) DO UPDATE SET 
+    let query = "INSERT INTO images (deviceid, hash, user_id, type, created_at, name, ext, exif, has_thumbnail, last_verified_at, verification_status, location, place, added_at)
+                 VALUES ($1, $2, $14, $3, $4, $5, $6, $7, $8, $9, $10, ST_SetSRID(ST_MakePoint($11, $12), 4326), $13, NOW())
+                 ON CONFLICT (deviceid, hash) DO UPDATE SET
+                 user_id = EXCLUDED.user_id,
                  type = EXCLUDED.type, name = EXCLUDED.name, ext = EXCLUDED.ext,
                  exif = COALESCE(EXCLUDED.exif, images.exif),
                  has_thumbnail = EXCLUDED.has_thumbnail, last_verified_at = EXCLUDED.last_verified_at,
-                 verification_status = EXCLUDED.verification_status, location = EXCLUDED.location, place = EXCLUDED.place";
+                 verification_status = EXCLUDED.verification_status, location = EXCLUDED.location, place = EXCLUDED.place,
+                 added_at = NOW()";
 
     let lat = metadata.latitude.unwrap_or(0.0);
     let lon = metadata.longitude.unwrap_or(0.0);
 
     match client.execute(query, &[
-        &metadata.deviceid, &metadata.hash, &metadata.type_name, &created_at, &metadata.name, &metadata.ext, 
-        &metadata.exif, &metadata.has_thumbnail.unwrap_or(false), &last_verified_at, 
-        &metadata.verification_status.unwrap_or(0), &lon, &lat, &metadata.place
+        &metadata.deviceid, &metadata.hash, &metadata.type_name, &created_at, &metadata.name, &metadata.ext,
+        &metadata.exif, &metadata.has_thumbnail.unwrap_or(false), &last_verified_at,
+        &metadata.verification_status.unwrap_or(0), &lon, &lat, &metadata.place, &user_uuid
     ]).await {
         Ok(_) => HttpResponse::Ok().json(UploadImageMetadataResponse {
             status: "success".to_string(),
@@ -368,8 +392,16 @@ pub async fn upload_image_metadata(
 pub async fn upload_video_metadata(
     metadata: web::Json<UploadVideoMetadataRequest>,
     pool: web::Data<MainDbPool>,
-    _claims: Claims,
+    claims: Claims,
 ) -> HttpResponse {
+    let user_uuid = match Uuid::parse_str(&claims.user_id) {
+        Ok(u) => u,
+        Err(_) => return HttpResponse::Unauthorized().json(UploadVideoMetadataResponse {
+            status: "error".to_string(),
+            message: "Invalid user ID".to_string(),
+        }),
+    };
+
     let client = match pool.0.get().await {
         Ok(c) => c,
         Err(_) => return HttpResponse::InternalServerError().json(UploadVideoMetadataResponse {
@@ -381,23 +413,26 @@ pub async fn upload_video_metadata(
     let created_at = metadata.created_at.as_ref()
         .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
         .map(|dt| dt.with_timezone(&Utc))
+        .or_else(|| utils::parse_date_from_video_name(&metadata.name))
         .unwrap_or_else(Utc::now);
 
     let last_verified_at = metadata.last_verified_at.as_ref()
         .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
         .map(|dt| dt.with_timezone(&Utc));
 
-    let query = "INSERT INTO videos (deviceid, hash, type, created_at, name, ext, metadata, has_thumbnail, last_verified_at, verification_status, added_at) 
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
-                 ON CONFLICT (deviceid, hash) DO UPDATE SET 
-                 type = EXCLUDED.type, name = EXCLUDED.name, ext = EXCLUDED.ext, metadata = EXCLUDED.metadata, 
-                 has_thumbnail = EXCLUDED.has_thumbnail, last_verified_at = EXCLUDED.last_verified_at, 
-                 verification_status = EXCLUDED.verification_status";
+    let query = "INSERT INTO videos (deviceid, hash, user_id, type, created_at, name, ext, metadata, has_thumbnail, last_verified_at, verification_status, added_at)
+                 VALUES ($1, $2, $11, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
+                 ON CONFLICT (deviceid, hash) DO UPDATE SET
+                 user_id = EXCLUDED.user_id,
+                 type = EXCLUDED.type, name = EXCLUDED.name, ext = EXCLUDED.ext, metadata = EXCLUDED.metadata,
+                 has_thumbnail = EXCLUDED.has_thumbnail, last_verified_at = EXCLUDED.last_verified_at,
+                 verification_status = EXCLUDED.verification_status,
+                 added_at = NOW()";
 
     match client.execute(query, &[
-        &metadata.deviceid, &metadata.hash, &metadata.type_name, &created_at, &metadata.name, &metadata.ext, 
-        &metadata.metadata, &metadata.has_thumbnail.unwrap_or(false), &last_verified_at, 
-        &metadata.verification_status.unwrap_or(0)
+        &metadata.deviceid, &metadata.hash, &metadata.type_name, &created_at, &metadata.name, &metadata.ext,
+        &metadata.metadata, &metadata.has_thumbnail.unwrap_or(false), &last_verified_at,
+        &metadata.verification_status.unwrap_or(0), &user_uuid
     ]).await {
         Ok(_) => HttpResponse::Ok().json(UploadVideoMetadataResponse {
             status: "success".to_string(),
@@ -583,6 +618,7 @@ pub async fn upload_video(
     let mut video_temp_file_path = None;
     let mut calculated_video_hash_opt = None;
     let mut device_id_opt = None;
+    let mut client_created_at_opt: Option<chrono::DateTime<Utc>> = None;
     let user_uuid = Uuid::parse_str(&claims.user_id).map_err(|_| actix_web::error::ErrorUnauthorized("Invalid user ID"))?;
 
     while let Ok(Some(mut field)) = payload.try_next().await {
@@ -610,6 +646,16 @@ pub async fn upload_video(
                     bytes.extend_from_slice(&chunk);
                 }
                 device_id_opt = Some(String::from_utf8_lossy(&bytes).into_owned());
+            }
+            "created_at" => {
+                let mut bytes = Vec::new();
+                while let Ok(Some(chunk)) = field.try_next().await {
+                    bytes.extend_from_slice(&chunk);
+                }
+                let s = String::from_utf8_lossy(&bytes);
+                client_created_at_opt = chrono::DateTime::parse_from_rfc3339(s.trim())
+                    .ok()
+                    .map(|dt| dt.with_timezone(&Utc));
             }
             "video" => {
                 let temp_dir = std::path::Path::new(config.get_videos_dir()).join(".tmp");
@@ -648,7 +694,8 @@ pub async fn upload_video(
         &user_uuid,
         &pool,
         &config,
-        true
+        true,
+        client_created_at_opt,
     ).await;
 
     match res {

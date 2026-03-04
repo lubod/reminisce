@@ -370,19 +370,23 @@ pub async fn remove_image_label(
     config: web::Data<Config>,
     path: web::Path<(String, i32)>,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let _claims = match utils::authenticate_request(&req, "remove_image_label", config.get_api_key()) {
+    let claims = match utils::authenticate_request(&req, "remove_image_label", config.get_api_key()) {
         Ok(claims) => claims,
         Err(response) => return Ok(response),
     };
 
+    let user_uuid = utils::parse_user_uuid(&claims.user_id)?;
     let (hash, label_id) = path.into_inner();
 
     let client = utils::get_db_client(&pool.0).await?;
 
     client
         .execute(
-            "DELETE FROM image_labels WHERE image_hash = $1 AND label_id = $2",
-            &[&hash, &label_id],
+            "DELETE FROM image_labels il
+             USING images i
+             WHERE il.image_hash = $1 AND il.label_id = $2
+               AND il.image_hash = i.hash AND i.user_id = $3 AND i.deleted_at IS NULL",
+            &[&hash, &label_id, &user_uuid],
         )
         .await
         .map_err(|e| {
@@ -527,19 +531,23 @@ pub async fn remove_video_label(
     config: web::Data<Config>,
     path: web::Path<(String, i32)>,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let _claims = match utils::authenticate_request(&req, "remove_video_label", config.get_api_key()) {
+    let claims = match utils::authenticate_request(&req, "remove_video_label", config.get_api_key()) {
         Ok(claims) => claims,
         Err(response) => return Ok(response),
     };
 
+    let user_uuid = utils::parse_user_uuid(&claims.user_id)?;
     let (hash, label_id) = path.into_inner();
 
     let client = utils::get_db_client(&pool.0).await?;
 
     client
         .execute(
-            "DELETE FROM video_labels WHERE video_hash = $1 AND label_id = $2",
-            &[&hash, &label_id],
+            "DELETE FROM video_labels vl
+             USING videos v
+             WHERE vl.video_hash = $1 AND vl.label_id = $2
+               AND vl.video_hash = v.hash AND v.user_id = $3 AND v.deleted_at IS NULL",
+            &[&hash, &label_id, &user_uuid],
         )
         .await
         .map_err(|e| {

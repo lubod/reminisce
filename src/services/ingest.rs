@@ -84,7 +84,8 @@ pub async fn process_image_file(
     pool: &Data<MainDbPool>,
     geotagging_pool: &Data<GeotaggingDbPool>,
     config: &Config,
-    move_file: bool
+    move_file: bool,
+    client_created_at: Option<chrono::DateTime<Utc>>,
 ) -> Result<IngestResult, Box<dyn std::error::Error + Send + Sync>> {
     let ext = Path::new(name).extension().and_then(|s| s.to_str()).unwrap_or("jpg");
     let filename = format!("{}.{}", hash, ext);
@@ -117,6 +118,8 @@ pub async fn process_image_file(
     ).await?;
 
     // 4. Extract EXIF from the image file and update the DB
+    let mut exif_date: Option<chrono::DateTime<Utc>> = None;
+    let mut exif_json_opt: Option<serde_json::Value> = None;
     if let Some(exif_json) = extract_exif_from_image(&target_path) {
         let exif_str = exif_json.to_string();
 
@@ -126,23 +129,31 @@ pub async fn process_image_file(
             &[&exif_str, &device_id, &hash],
         ).await;
 
-        // Update created_at from EXIF DateTimeOriginal if available.
-        // Only update if created_at is very recent (within 1 min), meaning it was just set
-        // to NOW() by this INSERT and not a real date from a prior upload_image_metadata call.
         if let Some(dt_str) = exif_json.get("DateTimeOriginal").and_then(|v| v.as_str()) {
             if let Ok(ndt) = chrono::NaiveDateTime::parse_from_str(dt_str, "%Y-%m-%d %H:%M:%S") {
-                let exif_dt = ndt.and_utc();
-                let _ = client.execute(
-                    "UPDATE images SET created_at = $1 \
-                     WHERE deviceid = $2 AND hash = $3 \
-                     AND created_at > NOW() - INTERVAL '1 minute'",
-                    &[&exif_dt, &device_id, &hash],
-                ).await;
+                exif_date = Some(ndt.and_utc());
             }
         }
+        exif_json_opt = Some(exif_json);
+    }
 
-        // Extract GPS and update location + place (only if not already set)
-        if let Some((lat, lon)) = utils::extract_gps_coordinates(&exif_json) {
+    // 5. Pick best date: EXIF > filename > client (apply only if created_at is still upload time)
+    let best_date = exif_date
+        .or_else(|| utils::parse_date_from_image_name(name))
+        .or(client_created_at);
+
+    if let Some(dt) = best_date {
+        let _ = client.execute(
+            "UPDATE images SET created_at = $1 \
+             WHERE deviceid = $2 AND hash = $3 \
+             AND created_at > NOW() - INTERVAL '1 minute'",
+            &[&dt, &device_id, &hash],
+        ).await;
+    }
+
+    // 6. Extract GPS and update location + place (only if not already set)
+    if let Some(ref exif_json) = exif_json_opt {
+        if let Some((lat, lon)) = utils::extract_gps_coordinates(exif_json) {
             let updated = client.execute(
                 "UPDATE images SET location = ST_SetSRID(ST_MakePoint($1, $2), 4326) \
                  WHERE deviceid = $3 AND hash = $4 AND location IS NULL",
@@ -183,7 +194,8 @@ pub async fn process_video_file(
     user_id: &Uuid,
     pool: &Data<MainDbPool>,
     config: &Config,
-    move_file: bool
+    move_file: bool,
+    client_created_at: Option<chrono::DateTime<Utc>>,
 ) -> Result<IngestResult, Box<dyn std::error::Error + Send + Sync>> {
     let ext = Path::new(name).extension().and_then(|s| s.to_str()).unwrap_or("mp4");
     let filename = format!("{}.{}", hash, ext);
@@ -209,6 +221,19 @@ pub async fn process_video_file(
          ON CONFLICT (deviceid, hash) DO UPDATE SET deleted_at = NULL",
         &[&device_id, &hash, user_id, &name, &ext]
     ).await?;
+
+    // Best date: filename > client (apply only if created_at is still upload time)
+    let best_date = utils::parse_date_from_video_name(name)
+        .or(client_created_at);
+
+    if let Some(dt) = best_date {
+        let _ = client.execute(
+            "UPDATE videos SET created_at = $1 \
+             WHERE deviceid = $2 AND hash = $3 \
+             AND created_at > NOW() - INTERVAL '1 minute'",
+            &[&dt, &device_id, &hash],
+        ).await;
+    }
 
     Ok(IngestResult {
         hash: hash.to_string(),

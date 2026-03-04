@@ -173,6 +173,9 @@ services:
   # Uses the pre-built client image (React app + nginx)
   # Overrides nginx config to proxy API to host network backend
   nginx:
+    build:
+      context: ./client
+      dockerfile: Dockerfile
     image: lubod/reminisce-client:latest
     container_name: reminisce-dev-nginx
     ports:

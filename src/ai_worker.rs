@@ -10,7 +10,7 @@ use crate::metrics::{
     TOTAL_IMAGES, IMAGES_WITH_EMBEDDING, IMAGES_WITH_DESCRIPTION, IMAGES_FACE_PROCESSED,
 };
 use actix_web::web;
-use log::{error, info};
+use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
 use once_cell::sync::Lazy;
 use std::path::PathBuf;
@@ -149,7 +149,7 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
             let deviceid: String = row.get(3);
             let file_type: String = row.get(4);
             let created_at: DateTime<Utc> = row.get(5);
-            all_tasks_to_process.insert(hash.clone(), (hash, ext, name, deviceid, file_type, None, false, true, false, created_at));
+            all_tasks_to_process.insert(hash.clone(), (hash, ext, name, deviceid, file_type, None, false, true, false, false, created_at));
         }
     }
 
@@ -183,7 +183,7 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
                     e.5 = Some(user_id);
                     e.8 = true;
                 })
-                .or_insert((hash, ext, name, deviceid, file_type, Some(user_id), false, false, true, created_at));
+                .or_insert((hash, ext, name, deviceid, file_type, Some(user_id), false, false, true, false, created_at));
         }
     }
 
@@ -211,7 +211,37 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
             
             all_tasks_to_process.entry(hash.clone())
                 .and_modify(|e| e.6 = true)
-                .or_insert((hash, ext, name, deviceid, file_type, None, true, false, false, created_at));
+                .or_insert((hash, ext, name, deviceid, file_type, None, true, false, false, false, created_at));
+        }
+    }
+
+    // 4. LOWEST PRIORITY: Quality scoring
+    // Only for images that already have embeddings; skip if system is busy with higher-priority tasks
+    if all_tasks_to_process.len() < total_batch_limit {
+        let room_left = total_batch_limit - all_tasks_to_process.len();
+        let quality_rows = client
+            .query(
+                "SELECT hash, ext, name, deviceid, 'image' as file_type, created_at FROM images
+                 WHERE verification_status = 1
+                   AND embedding IS NOT NULL
+                   AND quality_score_generated_at IS NULL
+                 LIMIT $1",
+                &[&(room_left as i64)],
+            )
+            .await
+            .map_err(|e| format!("Failed to query for quality tasks: {}", e))?;
+
+        for row in quality_rows {
+            let hash: String = row.get(0);
+            let ext: String = row.get(1);
+            let name: String = row.get(2);
+            let deviceid: String = row.get(3);
+            let file_type: String = row.get(4);
+            let created_at: DateTime<Utc> = row.get(5);
+
+            all_tasks_to_process.entry(hash.clone())
+                .and_modify(|e| e.9 = true)
+                .or_insert((hash, ext, name, deviceid, file_type, None, false, false, false, true, created_at));
         }
     }
 
@@ -223,8 +253,9 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
     let total_files = tasks_to_process.len();
 
     // Concurrency limit for the parallel stream
-    let concurrent_limit = (description_concurrency + embedding_concurrency + face_concurrency) * 2;
-    
+    let quality_concurrency = description_concurrency; // Same as description: lowest priority
+    let concurrent_limit = (description_concurrency + embedding_concurrency + face_concurrency + quality_concurrency) * 2;
+
     info!("AI cycle: Processing {} files [CPU Load: {:.1}, GPU Load: {}%]",
           total_files, load_average, gpu_load);
 
@@ -232,13 +263,14 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
     let description_semaphore = Arc::new(Semaphore::new(description_concurrency));
     let embedding_semaphore = Arc::new(Semaphore::new(embedding_concurrency));
     let face_semaphore = Arc::new(Semaphore::new(face_concurrency));
+    let quality_semaphore = Arc::new(Semaphore::new(quality_concurrency));
 
     // Track users that had faces detected for batch clustering at the end
     let users_with_new_faces = Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::new()));
     let users_with_new_faces_clone = users_with_new_faces.clone();
 
     stream::iter(tasks_to_process)
-        .for_each_concurrent(concurrent_limit, move |(hash, ext, _name, deviceid, file_type, user_id, process_description, process_embedding, process_faces, created_at)| {
+        .for_each_concurrent(concurrent_limit, move |(hash, ext, _name, deviceid, file_type, user_id, process_description, process_embedding, process_faces, process_quality, created_at)| {
             let file_dir = if file_type == "image" { config.get_images_dir().to_string() } else { config.get_videos_dir().to_string() };
             let sub_dir_path = super::utils::get_subdirectory_path(&file_dir, &hash);
             let file_path = sub_dir_path.join(format!("{}.{}", hash, ext));
@@ -248,6 +280,7 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
             let desc_sem_clone = description_semaphore.clone();
             let emb_sem_clone = embedding_semaphore.clone();
             let face_sem_clone = face_semaphore.clone();
+            let quality_sem_clone = quality_semaphore.clone();
             let users_set_clone = users_with_new_faces_clone.clone();
 
             async move {
@@ -367,6 +400,46 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
                             }
                         }
                         // _face_permit automatically dropped here
+                    }
+                }
+
+                if file_type == "image" && process_quality {
+                    let _quality_permit = quality_sem_clone.acquire().await.unwrap();
+                    info!("Starting quality scoring for image: {}", hash);
+                    let file_size = std::fs::metadata(&file_path)
+                        .map(|m| m.len() as i32)
+                        .unwrap_or(0);
+                    match tokio::fs::read(&file_path).await {
+                        Ok(image_data) => {
+                            match resize_image_for_ai(image_data, 384).await {
+                                Ok(resized) => {
+                                    match crate::services::quality::get_quality_score(&resized, &config_clone).await {
+                                        Ok(q) => {
+                                            let _ = client.execute(
+                                                "UPDATE images SET aesthetic_score=$1, sharpness_score=$2, width=$3, height=$4, \
+                                                 file_size_bytes=$5, quality_score_generated_at=NOW() \
+                                                 WHERE hash=$6 AND deviceid=$7",
+                                                &[&q.aesthetic_score, &q.sharpness_score, &q.width, &q.height,
+                                                  &file_size, &hash, &deviceid],
+                                            ).await;
+                                            info!("Quality scored image {} (aesthetic={:.1}, sharpness={:.0})", hash, q.aesthetic_score, q.sharpness_score);
+                                        }
+                                        Err(e) if e.contains("400") => {
+                                            // Permanent failure — mark done to avoid retry
+                                            let _ = client.execute(
+                                                "UPDATE images SET quality_score_generated_at=NOW() WHERE hash=$1 AND deviceid=$2",
+                                                &[&hash, &deviceid],
+                                            ).await;
+                                        }
+                                        Err(e) => {
+                                            warn!("Quality score failed for {}: {}", hash, e);
+                                        }
+                                    }
+                                }
+                                Err(e) => warn!("Failed to resize image for quality scoring {}: {}", hash, e),
+                            }
+                        }
+                        Err(e) => warn!("Failed to read image for quality scoring {}: {}", hash, e),
                     }
                 }
 

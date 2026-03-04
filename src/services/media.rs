@@ -605,6 +605,169 @@ pub async fn get_random_image(
     }
 }
 
+#[derive(Serialize, ToSchema)]
+pub struct TrashItem {
+    pub hash: String,
+    pub name: String,
+    pub created_at: String,
+    pub ext: String,
+    #[serde(rename = "type")]
+    pub media_kind: String,
+    pub deviceid: Option<String>,
+    pub deleted_at: String,
+    pub media_type: String,
+}
+
+#[utoipa::path(
+    get,
+    path = "/trash",
+    responses(
+        (status = 200, description = "List of deleted media"),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Forbidden (Admin only)"),
+        (status = 500, description = "Internal server error")
+    )
+)]
+#[get("/trash")]
+pub async fn get_trash(
+    req: HttpRequest,
+    pool: web::Data<MainDbPool>,
+    config: web::Data<Config>,
+) -> Result<HttpResponse, actix_web::Error> {
+    let claims = match utils::authenticate_request(&req, "get_trash", config.get_api_key()) {
+        Ok(claims) => claims,
+        Err(response) => return Ok(response),
+    };
+
+    if claims.role != "admin" {
+        return Ok(HttpResponse::Forbidden().json(serde_json::json!({"status": "error", "message": "Only admins can view trash."})));
+    }
+
+    let client = utils::get_db_client(&pool.0).await?;
+
+    let rows = client
+        .query(
+            "SELECT hash, name, created_at, ext, COALESCE(type, ''), deviceid, deleted_at, 'image' as media_type \
+             FROM images WHERE deleted_at IS NOT NULL \
+             UNION ALL \
+             SELECT hash, name, created_at, ext, COALESCE(type, ''), deviceid, deleted_at, 'video' as media_type \
+             FROM videos WHERE deleted_at IS NOT NULL \
+             ORDER BY deleted_at DESC \
+             LIMIT 200",
+            &[]
+        ).await
+        .map_err(|e| {
+            error!("Failed to query trash: {}", e);
+            actix_web::error::ErrorInternalServerError("Database error")
+        })?;
+
+    let items: Vec<TrashItem> = rows.iter().map(|row| TrashItem {
+        hash: row.get(0),
+        name: row.get(1),
+        created_at: row.get::<_, chrono::DateTime<chrono::Utc>>(2).to_rfc3339(),
+        ext: row.get(3),
+        media_kind: row.get(4),
+        deviceid: row.get(5),
+        deleted_at: row.get::<_, chrono::DateTime<chrono::Utc>>(6).to_rfc3339(),
+        media_type: row.get(7),
+    }).collect();
+
+    info!("Returning {} trash items", items.len());
+    Ok(HttpResponse::Ok().json(items))
+}
+
+/// Shared implementation for soft-restoring images or videos (admin only).
+async fn soft_restore_media(
+    pool: &deadpool_postgres::Pool,
+    table: &str,
+    hash: &str,
+) -> Result<HttpResponse, actix_web::Error> {
+    let client = utils::get_db_client(pool).await?;
+
+    let result = client
+        .execute(
+            &format!("UPDATE {} SET deleted_at = NULL WHERE hash = $1 AND deleted_at IS NOT NULL", table),
+            &[&hash]
+        ).await
+        .map_err(|e| {
+            error!("Failed to restore {}: {}", table, e);
+            actix_web::error::ErrorInternalServerError("Database error")
+        })?;
+
+    if result == 0 {
+        let media_type = table.trim_end_matches('s');
+        return Ok(HttpResponse::NotFound().json(serde_json::json!({
+            "status": "error",
+            "message": format!("{} not found or not deleted.", media_type.chars().next().unwrap().to_uppercase().to_string() + &media_type[1..])
+        })));
+    }
+
+    info!("{} restored: {}", table, hash);
+    Ok(HttpResponse::Ok().json(serde_json::json!({"status": "success", "hash": hash})))
+}
+
+#[utoipa::path(
+    post,
+    path = "/image/{image_hash}/restore",
+    responses(
+        (status = 200, description = "Image restored"),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Forbidden (Admin only)"),
+        (status = 404, description = "Image not found or not deleted"),
+        (status = 500, description = "Internal server error")
+    )
+)]
+#[post("/image/{image_hash}/restore")]
+pub async fn restore_image(
+    req: HttpRequest,
+    path: web::Path<String>,
+    pool: web::Data<MainDbPool>,
+    config: web::Data<Config>,
+) -> Result<HttpResponse, actix_web::Error> {
+    let claims = match utils::authenticate_request(&req, "restore_image", config.get_api_key()) {
+        Ok(claims) => claims,
+        Err(response) => return Ok(response),
+    };
+
+    if claims.role != "admin" {
+        return Ok(HttpResponse::Forbidden().json(serde_json::json!({"status": "error", "message": "Only admins can restore media."})));
+    }
+
+    let hash = path.into_inner();
+    soft_restore_media(&pool.0, "images", &hash).await
+}
+
+#[utoipa::path(
+    post,
+    path = "/video/{video_hash}/restore",
+    responses(
+        (status = 200, description = "Video restored"),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Forbidden (Admin only)"),
+        (status = 404, description = "Video not found or not deleted"),
+        (status = 500, description = "Internal server error")
+    )
+)]
+#[post("/video/{video_hash}/restore")]
+pub async fn restore_video(
+    req: HttpRequest,
+    path: web::Path<String>,
+    pool: web::Data<MainDbPool>,
+    config: web::Data<Config>,
+) -> Result<HttpResponse, actix_web::Error> {
+    let claims = match utils::authenticate_request(&req, "restore_video", config.get_api_key()) {
+        Ok(claims) => claims,
+        Err(response) => return Ok(response),
+    };
+
+    if claims.role != "admin" {
+        return Ok(HttpResponse::Forbidden().json(serde_json::json!({"status": "error", "message": "Only admins can restore media."})));
+    }
+
+    let hash = path.into_inner();
+    soft_restore_media(&pool.0, "videos", &hash).await
+}
+
 /// Shared implementation for soft-deleting images or videos (admin only).
 async fn soft_delete_media(
     pool: &deadpool_postgres::Pool,

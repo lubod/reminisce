@@ -13,6 +13,10 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.File
 import androidx.core.net.toUri
 import java.util.concurrent.atomic.AtomicLong
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
 
 data class BackupStats(
     val successfullyBackedUp: Int,
@@ -660,6 +664,8 @@ class BackupWorker(context: Context, params: WorkerParameters) : Worker(context,
 
             Log.d(TAG, "Uploading file ${index + 1}/${filesReadyForUpload.size}: $fileName")
 
+            val dateTakenMs = MediaHelper.getDateTakenFromUri(applicationContext, fileUri)
+                ?: MediaHelper.getLastModifiedFromUri(applicationContext, fileUri)?.let { it * 1000L }
             val uploadSuccess = uploadFileWithProgress(
                 uri = fileUri,
                 fileName = fileName,
@@ -675,7 +681,8 @@ class BackupWorker(context: Context, params: WorkerParameters) : Worker(context,
                 backedUpCount = successfullyBackedUp,
                 skippedCount = skippedExisting,
                 failedCount = failedCount,
-                fileSize = fileSize
+                fileSize = fileSize,
+                dateTakenMs = dateTakenMs,
             )
 
             if (uploadSuccess) {
@@ -726,7 +733,8 @@ class BackupWorker(context: Context, params: WorkerParameters) : Worker(context,
                 val hash: String,
                 val fullPath: String,
                 val modifiedDate: Long,
-                val fileSize: Long
+                val fileSize: Long,
+                val dateTakenMs: Long?,  // DATE_TAKEN from MediaStore (ms), null if unavailable
             )
             val chunkWithHashes = mutableListOf<ChunkFile>()
 
@@ -805,7 +813,9 @@ class BackupWorker(context: Context, params: WorkerParameters) : Worker(context,
                     continue
                 }
 
-                chunkWithHashes.add(ChunkFile(mediaInfo, hash, fullPath, fileModifiedDate, fileSize))
+                val dateTakenMs = MediaHelper.getDateTakenFromUri(applicationContext, fileUri)
+                    ?: (fileModifiedDate * 1000L)  // DATE_MODIFIED in seconds → ms fallback
+                chunkWithHashes.add(ChunkFile(mediaInfo, hash, fullPath, fileModifiedDate, fileSize, dateTakenMs))
             }
 
             // Step 2: Batch check with metadata - server handles deduplication
@@ -887,7 +897,8 @@ class BackupWorker(context: Context, params: WorkerParameters) : Worker(context,
                     backedUpCount = successfullyBackedUp,
                     skippedCount = skippedExisting,
                     failedCount = failedCount,
-                    fileSize = chunkFile.fileSize
+                    fileSize = chunkFile.fileSize,
+                    dateTakenMs = chunkFile.dateTakenMs,
                 )
 
                 if (uploadSuccess) {
@@ -1101,7 +1112,8 @@ class BackupWorker(context: Context, params: WorkerParameters) : Worker(context,
         skippedCount: Int,
         failedCount: Int,
         fileSize: Long? = null,
-        isRetry: Boolean = false
+        isRetry: Boolean = false,
+        dateTakenMs: Long? = null,
     ): Boolean {
         // Check if work was cancelled before starting upload
         if (isStopped) {
@@ -1119,6 +1131,13 @@ class BackupWorker(context: Context, params: WorkerParameters) : Worker(context,
             .addFormDataPart("hash", fileHash)
             .addFormDataPart("name", fullPath)
             .addFormDataPart("device_id", deviceId)
+
+        // Send capture date (DATE_TAKEN from MediaStore) so server can use it when EXIF is absent
+        if (dateTakenMs != null && dateTakenMs > 0) {
+            val sdf = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US)
+            sdf.timeZone = TimeZone.getTimeZone("UTC")
+            requestBodyBuilder.addFormDataPart("created_at", sdf.format(Date(dateTakenMs)))
+        }
 
         // Add the main file using URI
         requestBodyBuilder.addFormDataPart(

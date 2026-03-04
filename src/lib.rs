@@ -44,6 +44,8 @@ pub mod services {
     pub mod import_dir;
     pub mod p2p_status;
     pub mod proxy_manager;
+    pub mod duplicates;
+    pub mod quality;
 }
 
 use crate::config::Config;
@@ -79,7 +81,7 @@ pub use crate::services::health::{ping, health_check, HealthCheckResponse};
 pub use crate::services::existence_check::{check_image_exists, check_video_exists};
 pub use crate::services::upload::{upload_image, upload_video, upload_image_metadata, upload_video_metadata, batch_upload_image, check_images_exist_batch, check_videos_exist_batch, batch_check_images, batch_check_videos};
 pub use crate::services::thumbnail::{list_image_thumbnails, list_video_thumbnails, list_all_media_thumbnails, get_thumbnail, get_face_thumbnail};
-pub use crate::services::media::{get_image, get_video, get_image_metadata, toggle_image_star, toggle_video_star, delete_image, delete_video, get_device_ids, get_random_image};
+pub use crate::services::media::{get_image, get_video, get_image_metadata, toggle_image_star, toggle_video_star, delete_image, delete_video, get_device_ids, get_random_image, restore_image, restore_video, get_trash};
 pub use crate::services::embedding::search_images;
 pub use crate::services::stats::get_stats;
 pub use crate::services::pool_stats::get_pool_stats;
@@ -118,6 +120,9 @@ pub use crate::services::import_dir::import_directory;
         crate::services::media::toggle_video_star,
         crate::services::media::delete_image,
         crate::services::media::delete_video,
+        crate::services::media::restore_image,
+        crate::services::media::restore_video,
+        crate::services::media::get_trash,
         crate::services::media::get_device_ids,
         crate::services::media::get_random_image,
         crate::services::embedding::search_images,
@@ -147,7 +152,8 @@ pub use crate::services::import_dir::import_directory;
         crate::services::p2p_status::list_backup_timestamps,
         crate::services::p2p_status::get_p2p_connection_info,
         crate::services::p2p_status::get_discovered_peers,
-        crate::services::p2p_status::get_invite_status
+        crate::services::p2p_status::get_invite_status,
+        crate::services::duplicates::get_duplicates
     ),
     components(
         schemas(
@@ -171,6 +177,7 @@ pub use crate::services::import_dir::import_directory;
             crate::services::media::StarResponse,
             crate::services::media::DeviceIdsResponse,
             crate::services::media::RandomImageResponse,
+            crate::services::media::TrashItem,
             crate::services::embedding::SearchResult,
             crate::services::auth::RegisterRequest,
             crate::services::auth::UserLoginRequest,
@@ -211,7 +218,10 @@ pub use crate::services::import_dir::import_directory;
             crate::services::label::MediaLabelsResponse,
             crate::services::import_dir::ImportDirectoryRequest,
             crate::services::import_dir::ImportDirectoryResponse,
-            Claims
+            Claims,
+            crate::services::duplicates::DuplicateImage,
+            crate::services::duplicates::DuplicateGroup,
+            crate::services::duplicates::DuplicatesResponse
         )
     ),
     tags((name = "reminisce", description = "Reminisce: Self-hosted photo and video memory vault."))
@@ -488,6 +498,9 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
                     .service(toggle_video_star)
                     .service(delete_image)
                     .service(delete_video)
+                    .service(restore_image)
+                    .service(restore_video)
+                    .service(get_trash)
                     .service(search_images)
                     .service(get_stats)
                     .service(get_pool_stats)
@@ -520,6 +533,7 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
                     .service(services::p2p_status::get_p2p_connection_info)
                     .service(services::p2p_status::get_discovered_peers)
                     .service(services::p2p_status::get_invite_status)
+                    .service(services::duplicates::get_duplicates)
             )
     })
     .bind(format!("0.0.0.0:{}", config.port))?

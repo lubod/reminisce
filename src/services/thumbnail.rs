@@ -34,7 +34,7 @@ pub async fn get_face_thumbnail(
     pool: web::Data<MainDbPool>,
     config: web::Data<Config>
 ) -> Result<HttpResponse, actix_web::Error> {
-    let _claims = match
+    let claims = match
         utils::authenticate_request(
             &req,
             "get_face_thumbnail",
@@ -48,6 +48,7 @@ pub async fn get_face_thumbnail(
     };
 
     let face_id = path.into_inner();
+    let user_uuid = utils::parse_user_uuid(&claims.user_id)?;
     
     // Define cache path
     let faces_dir = std::path::Path::new(config.get_images_dir()).join("faces");
@@ -80,11 +81,11 @@ pub async fn get_face_thumbnail(
     // Query face details and check if parent image is not deleted
     let row = client
         .query_opt(
-            "SELECT f.image_hash, f.image_deviceid, f.bbox_x, f.bbox_y, f.bbox_width, f.bbox_height 
+            "SELECT f.image_hash, f.image_deviceid, f.bbox_x, f.bbox_y, f.bbox_width, f.bbox_height
              FROM faces f
              JOIN images i ON f.image_hash = i.hash AND f.image_deviceid = i.deviceid
-             WHERE f.id = $1 AND i.deleted_at IS NULL",
-            &[&face_id]
+             WHERE f.id = $1 AND i.deleted_at IS NULL AND (i.user_id = $2 OR $3 = 'admin')",
+            &[&face_id, &user_uuid, &claims.role]
         )
         .await
         .map_err(|e| {
