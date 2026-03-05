@@ -1,235 +1,204 @@
 #!/bin/bash
-set -e
 
-COMMAND=$1
-if [ -n "$1" ]; then
-    shift
+# --- STRICT MODE ---
+set -euo pipefail
+
+# --- COLORS ---
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# --- CONFIG ---
+PROJECT_NAME="reminisce-dev"
+COMPOSE_FILE="docker/docker-compose-dev.yml"
+OBS_FILE="docker/docker-compose-observability.yml"
+DEV_CONFIG="config-dev.yaml"
+FULL_CONFIG="config-fullstack.yaml"
+
+# List of all possible container names to avoid naming conflicts
+ALL_CONTAINERS="reminisce-dev-db reminisce-dev-geotagging reminisce-dev-ai netbird-client reminisce-dev-server reminisce-dev-nginx p2p-dev-node-1 p2p-dev-node-2 p2p-dev-node-3 p2p-dev-node-4 p2p-dev-node-5"
+
+# --- HELPERS ---
+info() { echo -e "${BLUE}INFO:${NC} $1"; }
+success() { echo -e "${GREEN}SUCCESS:${NC} $1"; }
+warn() { echo -e "${YELLOW}WARN:${NC} $1"; }
+error() { echo -e "${RED}ERROR:${NC} $1"; exit 1; }
+
+check_tool() {
+    if ! command -v "$1" &>/dev/null; then
+        error "Required tool '$1' is not installed."
+    fi
+}
+
+# --- LOAD ENVIRONMENT ---
+if [ -f .env ]; then
+    export $(grep -v '^#' .env | xargs)
 fi
 
+# --- COMMANDS ---
 function show_help {
+    echo -e "${GREEN}Reminisce Development Helper${NC}"
     echo "Usage: ./dev <command> [args]"
     echo ""
-    echo "Commands:"
-    echo "  start       Start the core development environment (DBs, AI, P2P Nodes, Nginx)"
-    echo "  start-obs   Start the observability stack (Prometheus, Grafana, Tempo, etc.)"
-    echo "  stop        Stop the development environment"
-    echo "  run         Build and run the Rust server (RUST_LOG=info)"
-    echo "  watch       Auto-rebuild and restart on source changes (requires cargo-watch)"
-    echo "  test        Run tests (passes arguments to cargo test)"
-    echo "  client      Start the frontend dev server (Vite HMR)"
-    echo "  build       Build release binary"
-    echo "  clean       Clean build artifacts (reclaim disk space)"
-    echo "  restore     Restore database from a backup file (Usage: ./dev restore <file>)"
+    echo "Infrastructure (Hybrid):"
+    echo "  up, start              Start infra containers (DBs, AI, Nginx)"
+    echo "  down, stop             Stop ALL containers and projects"
+    echo "  recreate [svc...]      Force recreate infra containers"
+    echo "  ps                     Show status of all containers"
+    echo "  logs [svc...]          Follow logs"
+    echo ""
+    echo "Local App (Hybrid):"
+    echo "  run                    Run Rust server locally"
+    echo "  watch                  Auto-reload Rust server locally"
+    echo "  client                 Start Vite dev server locally"
+    echo "  test [args...]         Run tests locally"
+    echo ""
+    echo "Full Stack (Dockerized):"
+    echo "  fullstack              Start everything in Docker"
+    echo "  fullstack-recreate     Force recreate everything in Docker"
+    echo ""
+    echo "Docker & CI cache:"
+    echo "  docker-build [imgs...] Build all or specific images"
+    echo "  docker-rebuild [imgs...] Rebuild from scratch (no-cache)"
+    echo "  docker-push [imgs...]  Push images to registry"
+    echo ""
+    echo "Maintenance:"
+    echo "  clean                  Clean local build artifacts"
+    echo "  clean-docker           Force remove all project containers & volumes"
+    echo "  restore <file>         Restore database from backup"
+    echo "  shell <svc>            Get shell into a container"
 }
 
 check_service_health() {
-    local service=$1
-    if docker compose --project-directory . -p reminisce-dev -f docker/docker-compose-dev.yml ps $service | grep -q "healthy"; then
-        return 0
-    else
-        return 1
-    fi
+    local service_container=$1
+    local status=$(docker inspect --format='{{.State.Health.Status}}' "$service_container" 2>/dev/null || echo "unhealthy")
+    if [ "$status" == "healthy" ]; then return 0; else return 1; fi
 }
 
-function start_env {
-    echo "🚀 Starting development environment..."
-
-    # Start core services (DBs, AI services, P2P nodes, nginx)
-    echo "📦 Starting core services (databases, AI, P2P storage, nginx)..."
-    if ! docker compose --project-directory . -p reminisce-dev -f docker/docker-compose-dev.yml up -d; then
-        echo "⚠️  Start failed. This is often due to conflicting container names from a previous run."
-        echo "🧹 Cleaning up potential zombie containers..."
-        # List of fixed container names from docker-compose-dev.yml
-        CONTAINERS="reminisce-dev-db reminisce-dev-geotagging reminisce-dev-ai p2p-dev-node-1 p2p-dev-node-2 reminisce-dev-nginx"
-        docker rm -f $CONTAINERS 2>/dev/null || true
-        
-        echo "🔄 Retrying start..."
-        docker compose --project-directory . -p reminisce-dev -f docker/docker-compose-dev.yml up -d
-    fi
-
-    # Wait for services to initialize
-    echo "⏳ Waiting for services to be ready..."
-
-    # Wait for databases (critical)
-    echo "   Checking databases..."
-    MAX_RETRIES=30
-    count=0
-    while [ $count -lt $MAX_RETRIES ]; do
-        if check_service_health "postgres" && check_service_health "geotagging-db"; then
-            echo "   ✅ Databases are ready!"
+function start_infra {
+    info "Starting infrastructure..."
+    docker compose --project-directory . -p "$PROJECT_NAME" -f "$COMPOSE_FILE" up -d --remove-orphans \
+        postgres geotagging-db ai-server nginx storage-node-1 storage-node-2
+    
+    info "Waiting for databases to be healthy..."
+    local count=0
+    while [ $count -lt 30 ]; do
+        if check_service_health "reminisce-dev-db" && check_service_health "reminisce-dev-geotagging"; then
+            success "Infrastructure is ready!"
             break
         fi
-        echo "   ... waiting for databases ($((count+1))/$MAX_RETRIES)"
+        echo -n "."
         sleep 2
         count=$((count+1))
     done
-
-    if [ $count -eq $MAX_RETRIES ]; then
-        echo "❌ Timeout waiting for databases. Logs:"
-        docker compose --project-directory . -p reminisce-dev -f docker/docker-compose-dev.yml logs postgres geotagging-db
-        exit 1
-    fi
-
-    # Wait for AI services (optional but good to check)
-    echo "   Checking AI services (this might take a moment)..."
-    MAX_RETRIES_AI=5
-    count=0
-    while [ $count -lt $MAX_RETRIES_AI ]; do
-        if check_service_health "ai-server"; then
-            echo "   ✅ AI service reported healthy."
-            break
-        fi
-        echo "   ... waiting for AI service ($((count+1))/$MAX_RETRIES_AI)"
-        sleep 2
-        count=$((count+1))
-    done
-
-    # Create upload directories
+    
     mkdir -p uploaded_images uploaded_videos data/p2p/shards
-
-    echo "✅ Core services ready!"
-    echo ""
-    echo "Now run in separate terminals:"
-    echo "  Terminal 1: RUST_LOG=info cargo run --bin reminisce -- config-dev.yaml"
-    echo "  Terminal 2: cd client && npm run dev"
-    echo ""
-    echo "📝 Access points:"
-    echo "  - Client (via Vite): http://localhost:5173"
-    echo "  - Client (via nginx): https://localhost:28444"
-    echo "  - API: http://localhost:8080"
-    echo "  - Swagger: http://localhost:8080/swagger-ui/"
-    echo "  - P2P (QUIC): 0.0.0.0:5050 (UDP)"
-    echo ""
-    echo "🗄️  Database ports:"
-    echo "  - PostgreSQL: localhost:5432"
-    echo "  - Geotagging DB: localhost:5435"
-    echo ""
-    echo "📊 Observability:"
-    echo "  To start monitoring stack: ./dev start-obs"
-    echo "🛑 To stop: ./dev stop"
 }
 
-function start_obs {
-    echo "🚀 Starting Observability Stack..."
-    docker compose --project-directory . -p reminisce-dev -f docker/docker-compose-observability.yml up -d
-    echo ""
-    echo "📊 Observability (OpenTelemetry + Prometheus + Alloy):"
-    echo "  - Grafana (UI): http://localhost:3000 (Explore Tempo for traces)"
-    echo "  - Prometheus: http://localhost:9090"
-    echo "  - Alloy Dashboard: http://localhost:12345"
-    echo "  - OTLP Receiver (Alloy): localhost:4317 (gRPC), localhost:4318 (HTTP)"
-}
-
-function stop_env {
-    echo "🛑 Stopping development environment..."
-    docker compose --project-directory . -p reminisce-dev -f docker/docker-compose-dev.yml down
-    # Also stop observability if running
-    docker compose --project-directory . -p reminisce-dev -f docker/docker-compose-observability.yml down 2>/dev/null || true
-    echo "✅ Environment stopped."
-}
-
-function run_tests {
-    echo "Running tests..."
-    
-    # Ensure databases are running
-    if ! docker compose --project-directory . -p reminisce-dev -f docker/docker-compose-dev.yml ps --format json postgres | grep -q '"State":"running"'; then
-        echo "🔄 Databases are not running. Starting them..."
-        docker compose --project-directory . -p reminisce-dev -f docker/docker-compose-dev.yml up -d postgres geotagging-db
-        
-        echo "⏳ Waiting for databases to initialize..."
-        # Wait loop
-        MAX_RETRIES=30
-        count=0
-        while [ $count -lt $MAX_RETRIES ]; do
-            if check_service_health "postgres" && check_service_health "geotagging-db"; then
-                echo "   ✅ Databases are ready!"
-                break
-            fi
-            sleep 1
-            count=$((count+1))
-        done
-        
-        if [ $count -eq $MAX_RETRIES ]; then
-            echo "⚠️  Timeout waiting for databases, but attempting to run tests anyway..."
-        fi
-    fi
-
-    # Export environment variables for tests
-    export PGHOST=localhost
-    export PGPORT=5432
-    export PGUSER=postgres
-    export PGPASSWORD=postgres
-
-    # Run tests
-    RUST_LOG=info cargo test "$@"
-    
-    TEST_EXIT_CODE=$?
-    
-    echo ""
-    if [ $TEST_EXIT_CODE -eq 0 ]; then
-        echo "✅ Tests completed successfully!"
-    else
-        echo "❌ Tests failed!"
-    fi
-    
-    return $TEST_EXIT_CODE
-}
-
-if [ -z "$COMMAND" ]; then
-    show_help
-    exit 1
-fi
+# --- MAIN LOGIC ---
+COMMAND=${1:-""}
+[ -n "$COMMAND" ] && shift
 
 case "$COMMAND" in
-    start)
-        start_env
+    up|start) start_infra ;;
+    down|stop)
+        info "Stopping all projects and cleaning up..."
+        # Stop under the current project name
+        docker compose --project-directory . -p "$PROJECT_NAME" -f "$COMPOSE_FILE" down 2>/dev/null || true
+        # Stop under the old project name (to fix conflicts)
+        docker compose --project-directory . -p "reminisce-fullstack" -f "$COMPOSE_FILE" down 2>/dev/null || true
+        # Stop observability
+        docker compose --project-directory . -p "$PROJECT_NAME" -f "$OBS_FILE" down 2>/dev/null || true
+        # Force remove any remaining containers by name
+        docker rm -f $ALL_CONTAINERS 2>/dev/null || true
+        success "Stopped and cleaned everything."
         ;;
-    start-obs)
-        start_obs
+    clean-docker)
+        warn "This will remove ALL project containers and volumes. Continue? [y/N]"
+        read -r response
+        if [[ "$response" =~ ^([yY][eE][sS]|[yY])$ ]]; then
+            docker compose --project-directory . -p "$PROJECT_NAME" -f "$COMPOSE_FILE" down -v --remove-orphans
+            docker compose --project-directory . -p "reminisce-fullstack" -f "$COMPOSE_FILE" down -v 2>/dev/null || true
+            docker rm -f $ALL_CONTAINERS 2>/dev/null || true
+            success "Docker environment wiped clean."
+        else
+            info "Cleanup cancelled."
+        fi
         ;;
-    stop)
-        stop_env
+    recreate)
+        info "Recreating infrastructure..."
+        docker compose --project-directory . -p "$PROJECT_NAME" -f "$COMPOSE_FILE" up -d --force-recreate "$@"
         ;;
-    test)
-        run_tests "$@"
+    ps)
+        docker compose --project-directory . -p "$PROJECT_NAME" -f "$COMPOSE_FILE" ps
+        ;;
+    logs)
+        docker compose --project-directory . -p "$PROJECT_NAME" -f "$COMPOSE_FILE" logs -f "$@"
+        ;;
+    shell)
+        [ -z "${1:-""}" ] && error "Usage: ./dev shell <service_name>"
+        docker exec -it "$1" /bin/bash || docker exec -it "$1" /bin/sh
         ;;
     run)
-        echo "🚀 Building and running Reminisce server..."
-        RUST_LOG=info cargo run --bin reminisce -- config-dev.yaml "$@"
+        check_tool "cargo"
+        [ ! -f "$DEV_CONFIG" ] && error "$DEV_CONFIG not found. Copy it from .example"
+        RUST_LOG=info cargo run --bin reminisce -- "$DEV_CONFIG" "$@"
         ;;
     watch)
-        if ! command -v cargo-watch &>/dev/null; then
-            echo "❌ cargo-watch not found. Install it with: cargo install cargo-watch"
-            exit 1
-        fi
-        echo "👀 Watching for changes (auto-rebuild + restart)..."
-        RUST_LOG=info cargo watch -x 'run --bin reminisce -- config-dev.yaml' "$@"
+        check_tool "cargo-watch"
+        RUST_LOG=info cargo watch -x "run --bin reminisce -- $DEV_CONFIG" "$@"
         ;;
     client)
-        echo "🌐 Starting frontend dev server..."
+        check_tool "npm"
         cd client && npm run dev
         ;;
+    test)
+        check_tool "cargo"
+        export PGHOST=localhost PGPORT=5432 PGUSER=postgres PGPASSWORD=postgres
+        cargo test "$@"
+        ;;
+    fullstack)
+        info "Starting full application stack..."
+        [ ! -f "$FULL_CONFIG" ] && error "$FULL_CONFIG not found. Copy it from .example"
+        docker compose --project-directory . -p "$PROJECT_NAME" -f "$COMPOSE_FILE" up -d
+        success "Access UI: https://localhost:28444"
+        ;;
+    fullstack-recreate)
+        info "Recreating full application stack..."
+        docker compose --project-directory . -p "$PROJECT_NAME" -f "$COMPOSE_FILE" up -d --force-recreate "$@"
+        ;;
+    docker-build)
+        info "Building Docker images..."
+        docker compose --project-directory . -f docker/docker-compose-build.yml build "$@"
+        ;;
+    docker-rebuild)
+        info "Rebuilding Docker images from scratch..."
+        docker compose --project-directory . -f docker/docker-compose-build.yml build --no-cache "$@"
+        ;;
+    docker-push)
+        info "Pushing images to registry..."
+        docker compose --project-directory . -f docker/docker-compose-build.yml push "$@"
+        ;;
     build)
-        echo "📦 Building release binary..."
+        info "Building local release binary..."
         cargo build --release "$@"
-        echo "✅ Binary at: target/release/reminisce ($(du -h target/release/reminisce | cut -f1))"
         ;;
     clean)
-        echo "🧹 Cleaning build artifacts..."
-        BEFORE=$(du -sh target 2>/dev/null | cut -f1)
+        info "Cleaning local artifacts..."
         cargo clean
-        echo "✅ Freed ~$BEFORE of disk space"
         ;;
     restore)
-        if [ -z "$1" ]; then
-            echo "Usage: ./dev restore <backup_file>"
-            exit 1
-        fi
-        echo "Restoring from $1..."
-        RUST_LOG=info cargo run --bin reminisce -- restore config-dev.yaml "$1"
+        [ -z "${1:-""}" ] && error "Usage: ./dev restore <backup_file>"
+        RUST_LOG=info cargo run --bin reminisce -- restore "$DEV_CONFIG" "$1"
+        ;;
+    start-obs)
+        info "Starting observability..."
+        docker compose --project-directory . -p "$PROJECT_NAME" -f "$OBS_FILE" up -d
+        success "Grafana: http://localhost:3000"
         ;;
     *)
-        echo "Unknown command: $COMMAND"
         show_help
         exit 1
         ;;

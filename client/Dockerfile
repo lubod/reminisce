@@ -1,13 +1,17 @@
 # Build stage
-FROM node:20-alpine as build
+FROM node:20-alpine AS build
 
 WORKDIR /app
 
 COPY package*.json ./
-RUN npm ci --prefer-offline
+# Use cache mount for npm registry
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --prefer-offline
 
 COPY . .
-RUN npm run build
+# Use cache mount for vite/build artifacts
+RUN --mount=type=cache,target=/app/node_modules/.cache \
+    npm run build
 
 # Production stage
 FROM nginx:alpine

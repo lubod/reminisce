@@ -1,38 +1,40 @@
-# Stage 1: Build with dependency caching
+# Stage 1: Planner - Generate recipe for dependencies
+FROM rust:slim-bookworm AS planner
+WORKDIR /app
+RUN cargo install cargo-chef 
+COPY . .
+RUN cargo chef prepare --recipe-path recipe.json
+
+# Stage 2: Cacher - Build dependencies only
+FROM rust:slim-bookworm AS cacher
+WORKDIR /app
+RUN cargo install cargo-chef
+COPY --from=planner /app/recipe.json recipe.json
+# Install build dependencies including mold linker
+RUN apt-get update && apt-get install -y libssl-dev pkg-config mold clang && rm -rf /var/lib/apt/lists/*
+
+# Build dependencies with cache mounts for cargo registry and target
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/app/target \
+    cargo chef cook --release --recipe-path recipe.json
+
+# Stage 3: Builder - Build the actual application
 FROM rust:slim-bookworm AS builder
+WORKDIR /app
+# Install build dependencies including mold linker
+RUN apt-get update && apt-get install -y libssl-dev pkg-config mold clang && rm -rf /var/lib/apt/lists/*
 
-# Install build dependencies
-RUN apt-get update && apt-get install -y libssl-dev pkg-config && rm -rf /var/lib/apt/lists/*
+# Copy source
+COPY . .
 
-WORKDIR /usr/src/reminisce
+# Final build with cache mounts. Copy binary out of mount after build.
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/app/target \
+    cargo build --release && \
+    mkdir -p /app/bin && \
+    cp target/release/reminisce /app/bin/reminisce
 
-# 1. Copy workspace manifests only
-COPY Cargo.toml Cargo.lock ./
-COPY np2p/Cargo.toml ./np2p/
-
-# 2. Create dummy source files to cache dependency compilation
-RUN mkdir -p src np2p/src/bin && \
-    echo "fn main() {}" > src/main.rs && \
-    echo "pub fn dummy() {}" > src/lib.rs && \
-    echo "fn main() {}" > np2p/src/bin/main.rs && \
-    echo "fn main() {}" > np2p/src/bin/e2e_client.rs && \
-    echo "pub fn dummy() {}" > np2p/src/lib.rs
-
-# Build dependencies only (this layer is cached until Cargo.toml/lock changes)
-RUN cargo build --release
-
-# 3. Copy actual source code
-COPY src ./src
-COPY np2p/src ./np2p/src
-
-# Remove dummy artifacts to force re-compilation of our crates
-RUN rm -f target/release/deps/reminisce* target/release/deps/libreminisce* target/release/reminisce \
-         target/release/deps/np2p* target/release/deps/libnp2p*
-
-# 4. Build the actual binary
-RUN cargo build --release
-
-# Stage 2: Runtime
+# Stage 4: Runtime
 FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y \
@@ -44,7 +46,8 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-COPY --from=builder /usr/src/reminisce/target/release/reminisce /usr/local/bin/reminisce
+# Copy binary from builder
+COPY --from=builder /app/bin/reminisce /usr/local/bin/reminisce
 
 EXPOSE 8080
 EXPOSE 5050/udp
