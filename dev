@@ -46,6 +46,7 @@ function show_help {
     echo "  up, start              Start infra containers (DBs, AI, Nginx)"
     echo "  down, stop             Stop ALL containers and projects"
     echo "  recreate [svc...]      Force recreate infra containers"
+    echo "  start-obs              Start observability stack (Grafana, Prometheus)"
     echo "  ps                     Show status of all containers"
     echo "  logs [svc...]          Follow logs"
     echo ""
