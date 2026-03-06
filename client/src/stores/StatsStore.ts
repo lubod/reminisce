@@ -322,6 +322,25 @@ export class StatsStore {
         }
     };
 
+    removeNode = async (nodeId: string): Promise<void> => {
+        try {
+            await axios.delete(`/p2p/nodes/${encodeURIComponent(nodeId)}`);
+            runInAction(() => {
+                this.discoveredPeers = this.discoveredPeers.filter(p => p.peer_id !== nodeId);
+            });
+            this.rootStore.uiStore.setSuccess(`Node removed and shards deleted.`);
+        } catch (error: any) {
+            const msg = error.response?.data?.error || 'Failed to remove node';
+            this.rootStore.uiStore.setError(msg);
+            throw error;
+        }
+    };
+
+    forceRebalance = async (): Promise<void> => {
+        await axios.post('/p2p/backup/rebalance');
+        this.rootStore.uiStore.setSuccess('Rebalance triggered — shards will redistribute in the background.');
+    };
+
     fetchAllStats = async () => {
         await Promise.all([
             this.fetchStats(),

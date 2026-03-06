@@ -5,8 +5,8 @@ import axios from "../api/axiosConfig";
 
 interface ConnectionInfo {
     node_id: string;
-    relay_url: string;
-    listen_addr: string;
+    local_ip?: string;
+    netbird_ip?: string;
 }
 
 export const AndroidConnectionQR = () => {
@@ -33,13 +33,26 @@ export const AndroidConnectionQR = () => {
         fetchConnectionInfo();
     }, []);
 
+    // Build URL entries (computed before early returns so copy handler can reference them)
+    const { protocol, port } = window.location;
+    const suffix = port ? `:${port}` : '';
+    const urlEntries: { label: string; url: string }[] = [];
+    if (connectionInfo?.local_ip)
+        urlEntries.push({ label: 'Local URL', url: `${protocol}//${connectionInfo.local_ip}${suffix}` });
+    if (connectionInfo?.netbird_ip)
+        urlEntries.push({ label: 'Netbird URL', url: `${protocol}//${connectionInfo.netbird_ip}${suffix}` });
+    if (urlEntries.length === 0)
+        urlEntries.push({ label: 'Server URL', url: window.location.origin });
+
+    const qrData = connectionInfo ? JSON.stringify({
+        node_id: connectionInfo.node_id,
+        server_urls: urlEntries.map(e => e.url),
+    }) : '';
+
     const handleCopyJson = () => {
-        if (connectionInfo) {
-            const jsonStr = JSON.stringify(connectionInfo, null, 2);
-            navigator.clipboard.writeText(jsonStr);
-            setCopied(true);
-            setTimeout(() => setCopied(false), 2000);
-        }
+        navigator.clipboard.writeText(qrData);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
     };
 
     if (isLoading) {
@@ -72,14 +85,6 @@ export const AndroidConnectionQR = () => {
             </div>
         );
     }
-
-    // Create QR code data
-    const qrData = JSON.stringify({
-        node_id: connectionInfo.node_id,
-        relay_url: connectionInfo.relay_url,
-        listen_addr: connectionInfo.listen_addr,
-        server_url: window.location.origin
-    });
 
     return (
         <div className="bg-gray-700/20 rounded-xl p-6 border border-gray-600/20">
@@ -122,23 +127,14 @@ export const AndroidConnectionQR = () => {
                         </code>
                     </div>
 
-                    {connectionInfo.relay_url && (
-                        <div className="text-xs">
-                            <span className="text-gray-500">Relay URL:</span>
-                            <code className="block text-gray-300 font-mono text-[10px] bg-gray-800/50 px-2 py-1 rounded mt-1 break-all">
-                                {connectionInfo.relay_url}
+                    {urlEntries.map(({ label, url }) => (
+                        <div key={label} className="text-xs">
+                            <span className="text-gray-500">{label}:</span>
+                            <code className="block text-green-300 font-mono text-[10px] bg-gray-800/50 px-2 py-1 rounded mt-1 break-all">
+                                {url}
                             </code>
                         </div>
-                    )}
-
-                    {connectionInfo.listen_addr && (
-                        <div className="text-xs">
-                            <span className="text-gray-500">Listen Address:</span>
-                            <code className="block text-gray-300 font-mono text-[10px] bg-gray-800/50 px-2 py-1 rounded mt-1">
-                                {connectionInfo.listen_addr}
-                            </code>
-                        </div>
-                    )}
+                    ))}
                 </div>
 
                 {/* Copy Button */}

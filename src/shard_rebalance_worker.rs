@@ -63,7 +63,7 @@ pub async fn start_rebalance_worker(
     ).await;
 }
 
-async fn rebalance_cycle(
+pub async fn rebalance_cycle(
     pool: &Pool,
     config: &Config,
     p2p_service: &Arc<P2PService>,

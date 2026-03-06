@@ -18,7 +18,7 @@ DEV_CONFIG="config-dev.yaml"
 FULL_CONFIG="config-fullstack.yaml"
 
 # List of all possible container names to avoid naming conflicts
-ALL_CONTAINERS="reminisce-dev-db reminisce-dev-geotagging reminisce-dev-ai netbird-client reminisce-dev-server reminisce-dev-nginx p2p-dev-node-1 p2p-dev-node-2 p2p-dev-node-3 p2p-dev-node-4 p2p-dev-node-5"
+ALL_CONTAINERS="reminisce-dev-db reminisce-dev-geotagging reminisce-dev-ai-server netbird-client reminisce-dev-server reminisce-dev-client p2p-dev-node-1 p2p-dev-node-2 p2p-dev-node-3 p2p-dev-node-4 p2p-dev-node-5"
 
 # --- HELPERS ---
 info() { echo -e "${BLUE}INFO:${NC} $1"; }
@@ -80,7 +80,7 @@ check_service_health() {
 function start_infra {
     info "Starting infrastructure..."
     docker compose --project-directory . -p "$PROJECT_NAME" -f "$COMPOSE_FILE" up -d --remove-orphans \
-        postgres geotagging-db ai-server nginx storage-node-1 storage-node-2
+        postgres geotagging-db ai-server client storage-node-1 storage-node-2
     
     info "Waiting for databases to be healthy..."
     local count=0

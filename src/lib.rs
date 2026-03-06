@@ -153,6 +153,8 @@ pub use crate::services::import_dir::import_directory;
         crate::services::p2p_status::get_p2p_connection_info,
         crate::services::p2p_status::get_discovered_peers,
         crate::services::p2p_status::get_invite_status,
+        crate::services::p2p_status::remove_p2p_node,
+        crate::services::p2p_status::trigger_rebalance,
         crate::services::duplicates::get_duplicates
     ),
     components(
@@ -195,6 +197,8 @@ pub use crate::services::import_dir::import_directory;
             crate::services::p2p_status::MembershipInfo,
             crate::services::p2p_status::VerificationResult,
             crate::services::p2p_status::FileVerifyResult,
+            crate::services::p2p_status::RemoveNodeResponse,
+            crate::services::p2p_status::RebalanceResponse,
             crate::services::stats::StatsResponse,
             crate::services::pool_stats::PoolStatsResponse,
             crate::services::pool_stats::PoolMetrics,
@@ -533,6 +537,8 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
                     .service(services::p2p_status::get_p2p_connection_info)
                     .service(services::p2p_status::get_discovered_peers)
                     .service(services::p2p_status::get_invite_status)
+                    .service(services::p2p_status::remove_p2p_node)
+                    .service(services::p2p_status::trigger_rebalance)
                     .service(services::duplicates::get_duplicates)
             )
     })

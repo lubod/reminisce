@@ -1,4 +1,4 @@
-use actix_web::{get, web, HttpRequest, HttpResponse};
+use actix_web::{get, post, delete, web, HttpRequest, HttpResponse};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use crate::config::Config;
@@ -58,6 +58,23 @@ pub async fn get_p2p_backup_status(
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct ConnectionInfoResponse {
     pub node_id: String,
+    pub local_ip: Option<String>,
+    pub netbird_ip: Option<String>,
+}
+
+fn get_netbird_ip() -> Option<String> {
+    let Ok(ifaces) = get_if_addrs::get_if_addrs() else { return None; };
+    for iface in &ifaces {
+        if iface.is_loopback() { continue; }
+        if let get_if_addrs::IfAddr::V4(ref v4) = iface.addr {
+            let o = v4.ip.octets();
+            // Netbird range: 100.64.0.0/10
+            if o[0] == 100 && o[1] >= 64 && o[1] <= 127 {
+                return Some(v4.ip.to_string());
+            }
+        }
+    }
+    None
 }
 
 #[utoipa::path(
@@ -80,8 +97,27 @@ pub async fn get_p2p_connection_info(
         Err(response) => return Ok(response),
     };
 
+    // Local IP: extracted from the Host header — what the browser actually connected to.
+    // This avoids returning Docker bridge IPs (172.17.x.x) that are invisible to clients.
+    let local_ip = req.connection_info().host().to_string()
+        .split(':').next()
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+
+    // Netbird IP: detected from server network interfaces (100.64.0.0/10 range)
+    let netbird_ip = get_netbird_ip();
+
+    // Avoid duplicates if browser connected via Netbird IP
+    let netbird_ip = if netbird_ip.as_deref() == local_ip.as_deref() {
+        None
+    } else {
+        netbird_ip
+    };
+
     Ok(HttpResponse::Ok().json(ConnectionInfoResponse {
         node_id: hex::encode(p2p_service.identity().node_id()),
+        local_ip,
+        netbird_ip,
     }))
 }
 
@@ -189,18 +225,26 @@ pub async fn verify_p2p_backup(
 
     let client = utils::get_db_client(&pool.0).await?;
 
-    // Query all synced files from both images and videos with their shard counts
+    // Query all synced files from both images and videos with their shard counts.
+    // Only count shards whose node is currently active (last_seen within 1h and is_active),
+    // so dead/stale node assignments don't falsely inflate the count.
     let rows = client.query(
         "SELECT hash, COALESCE(shard_count, 0) as shard_count FROM (
             SELECT i.hash, COUNT(s.id) as shard_count
             FROM images i
             LEFT JOIN p2p_shards s ON s.file_hash = i.hash
+            LEFT JOIN p2p_nodes n ON n.node_id = s.node_id
+                AND n.is_active = TRUE
+                AND n.last_seen > NOW() - INTERVAL '1 hour'
             WHERE i.p2p_synced_at IS NOT NULL AND i.deleted_at IS NULL
             GROUP BY i.hash
             UNION ALL
             SELECT v.hash, COUNT(s.id) as shard_count
             FROM videos v
             LEFT JOIN p2p_shards s ON s.file_hash = v.hash
+            LEFT JOIN p2p_nodes n ON n.node_id = s.node_id
+                AND n.is_active = TRUE
+                AND n.last_seen > NOW() - INTERVAL '1 hour'
             WHERE v.p2p_synced_at IS NOT NULL AND v.deleted_at IS NULL
             GROUP BY v.hash
         ) AS combined
@@ -294,3 +338,117 @@ pub async fn list_backup_timestamps() -> HttpResponse { HttpResponse::Ok().json(
 #[utoipa::path(get, path = "/api/p2p-invite-status", responses((status = 200, description = "Invite status", body = InviteStatusResponse)), tag = "P2P")]
 #[get("/p2p-invite-status")]
 pub async fn get_invite_status() -> HttpResponse { HttpResponse::Ok().json(InviteStatusResponse { is_member: true, membership: None }) }
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct RemoveNodeResponse {
+    pub node_id: String,
+    pub removed_shards: u64,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct RebalanceResponse {
+    pub status: String,
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/p2p/nodes/{node_id}",
+    params(("node_id" = String, Path, description = "Node ID to remove")),
+    responses(
+        (status = 200, description = "Node removed", body = RemoveNodeResponse),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Admin required"),
+        (status = 404, description = "Node not found"),
+        (status = 409, description = "Node is still active")
+    ),
+    tag = "P2P"
+)]
+#[delete("/p2p/nodes/{node_id}")]
+pub async fn remove_p2p_node(
+    req: HttpRequest,
+    path: web::Path<String>,
+    config: web::Data<Config>,
+    pool: web::Data<MainDbPool>,
+    p2p_service: web::Data<Arc<P2PService>>,
+) -> Result<HttpResponse, actix_web::Error> {
+    let claims = match utils::authenticate_request(&req, "remove_p2p_node", config.get_api_key()) {
+        Ok(c) => c,
+        Err(r) => return Ok(r),
+    };
+    if claims.role != "admin" {
+        return Ok(HttpResponse::Forbidden().json(serde_json::json!({"error": "admin required"})));
+    }
+
+    let node_id = path.into_inner();
+    let client = utils::get_db_client(&pool.0).await?;
+
+    let node_row = client.query_opt(
+        "SELECT node_id, is_active, last_seen FROM p2p_nodes WHERE node_id = $1",
+        &[&node_id],
+    ).await.map_err(|_| actix_web::error::ErrorInternalServerError("DB error"))?;
+
+    let Some(node) = node_row else {
+        return Ok(HttpResponse::NotFound().json(serde_json::json!({"error": "node not found"})));
+    };
+
+    let is_active: bool = node.get(1);
+    let last_seen: chrono::DateTime<chrono::Utc> = node.get(2);
+    let one_hour_ago = chrono::Utc::now() - chrono::Duration::hours(1);
+    if is_active && last_seen > one_hour_ago {
+        return Ok(HttpResponse::Conflict().json(serde_json::json!({"error": "node is still active"})));
+    }
+
+    let removed_shards = client.execute(
+        "DELETE FROM p2p_shards WHERE node_id = $1",
+        &[&node_id],
+    ).await.map_err(|_| actix_web::error::ErrorInternalServerError("DB error"))?;
+
+    client.execute(
+        "DELETE FROM p2p_nodes WHERE node_id = $1",
+        &[&node_id],
+    ).await.map_err(|_| actix_web::error::ErrorInternalServerError("DB error"))?;
+
+    let pool_clone = pool.0.clone();
+    let config_clone = config.get_ref().clone();
+    let p2p_clone = p2p_service.get_ref().clone();
+    tokio::spawn(async move {
+        let _ = crate::shard_rebalance_worker::rebalance_cycle(&pool_clone, &config_clone, &p2p_clone).await;
+    });
+
+    Ok(HttpResponse::Ok().json(RemoveNodeResponse { node_id, removed_shards }))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/p2p/backup/rebalance",
+    responses(
+        (status = 202, description = "Rebalance triggered", body = RebalanceResponse),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Admin required")
+    ),
+    tag = "P2P"
+)]
+#[post("/p2p/backup/rebalance")]
+pub async fn trigger_rebalance(
+    req: HttpRequest,
+    config: web::Data<Config>,
+    pool: web::Data<MainDbPool>,
+    p2p_service: web::Data<Arc<P2PService>>,
+) -> Result<HttpResponse, actix_web::Error> {
+    let claims = match utils::authenticate_request(&req, "trigger_rebalance", config.get_api_key()) {
+        Ok(c) => c,
+        Err(r) => return Ok(r),
+    };
+    if claims.role != "admin" {
+        return Ok(HttpResponse::Forbidden().json(serde_json::json!({"error": "admin required"})));
+    }
+
+    let pool_clone = pool.0.clone();
+    let config_clone = config.get_ref().clone();
+    let p2p_clone = p2p_service.get_ref().clone();
+    tokio::spawn(async move {
+        let _ = crate::shard_rebalance_worker::rebalance_cycle(&pool_clone, &config_clone, &p2p_clone).await;
+    });
+
+    Ok(HttpResponse::Accepted().json(RebalanceResponse { status: "rebalance triggered".to_string() }))
+}

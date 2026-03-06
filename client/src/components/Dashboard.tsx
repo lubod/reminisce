@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { observer } from "mobx-react-lite";
 import { useStore } from "../stores/RootStore";
-import { Image, Video, Users, CheckCircle, FileText, Database, Activity, Settings, Brain, Cpu, HardDrive, MemoryStick, Zap, Upload, Folder, Network, Shield, TrendingUp, RefreshCw, AlertTriangle, Server, Clock, X } from "lucide-react";
+import { Image, Video, Users, CheckCircle, FileText, Database, Activity, Settings, Brain, Cpu, HardDrive, MemoryStick, Zap, Upload, Folder, Network, Shield, TrendingUp, RefreshCw, AlertTriangle, Server, Clock, X, Shuffle, Trash2, Smartphone } from "lucide-react";
 import { DirectoryImportModal } from "./DirectoryImportModal";
 import { ServerImportModal } from "./ServerImportModal";
 import { AndroidConnectionQR } from "./AndroidConnectionQR";
@@ -10,7 +10,7 @@ export const Dashboard = observer(() => {
     const { statsStore, authStore } = useStore();
     const isAdmin = authStore.user?.role === "admin";
 
-    const [activeTab, setActiveTab] = useState<'overview' | 'import' | 'system' | 'backup' | 'settings'>('overview');
+    const [activeTab, setActiveTab] = useState<'overview' | 'import' | 'system' | 'backup' | 'settings' | 'app'>('overview');
 
     // Local state for settings form
     const [enableAiDescriptions, setEnableAiDescriptions] = useState<boolean>(true);
@@ -24,6 +24,7 @@ export const Dashboard = observer(() => {
     const [showServerImportModal, setShowServerImportModal] = useState<boolean>(false);
     const [showVerifyModal, setShowVerifyModal] = useState<boolean>(false);
     const [isVerifying, setIsVerifying] = useState<boolean>(false);
+    const [isRebalancing, setIsRebalancing] = useState<boolean>(false);
 
     useEffect(() => {
         if (isAdmin) {
@@ -95,6 +96,21 @@ export const Dashboard = observer(() => {
         }
     };
 
+    const handleForceRebalance = async () => {
+        setIsRebalancing(true);
+        try { await statsStore.forceRebalance(); }
+        finally { setIsRebalancing(false); }
+    };
+
+    const handleRemoveNode = async (peerId: string, shardCount: number) => {
+        if (!window.confirm(`Remove offline node ${peerId.substring(0, 16)}... and delete its ${shardCount} shards?`)) return;
+        try {
+            await statsStore.removeNode(peerId);
+        } catch {
+            // error toast shown by store
+        }
+    };
+
     const statCards = [
         { title: "Total Images", value: stats?.total_images, icon: <Image className="w-8 h-8 text-blue-500" /> },
         { title: "Total Videos", value: stats?.total_videos, icon: <Video className="w-8 h-8 text-purple-500" /> },
@@ -133,6 +149,9 @@ export const Dashboard = observer(() => {
                 <button onClick={() => setActiveTab('settings')} className={tabClass('settings')}>
                     <Settings size={18} /> Settings
                 </button>
+                <button onClick={() => setActiveTab('app')} className={tabClass('app')}>
+                    <Smartphone size={18} /> App Setup
+                </button>
             </div>
 
             {/* --- Main Content Area --- */}
@@ -146,7 +165,7 @@ export const Dashboard = observer(() => {
                     <>
                         {/* --- Overview Tab --- */}
                         {activeTab === 'overview' && (
-                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-6">
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
                                 {statCards.map((card, index) => (
                                     <div key={index} className="bg-gray-800 shadow-lg rounded-xl border border-gray-700 p-5 flex items-center transition-transform hover:scale-[1.02]">
                                         <div className="p-3 bg-gray-900/50 rounded-lg">{card.icon}</div>
@@ -203,6 +222,10 @@ export const Dashboard = observer(() => {
                                         <button onClick={handleVerifyBackup} disabled={isVerifying} className="flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg active:scale-95 transition-all">
                                             {isVerifying ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Shield className="w-4 h-4" />}
                                             {isVerifying ? 'Verifying...' : 'Verify Shards'}
+                                        </button>
+                                        <button onClick={handleForceRebalance} disabled={isRebalancing} className="flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold bg-amber-600 hover:bg-amber-500 text-white shadow-lg active:scale-95 transition-all">
+                                            {isRebalancing ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Shuffle className="w-4 h-4" />}
+                                            {isRebalancing ? 'Rebalancing...' : 'Force Rebalance'}
                                         </button>
                                         <button onClick={() => statsStore.fetchP2PBackupStatus()} className="p-2.5 bg-gray-700 hover:bg-gray-600 rounded-xl text-gray-300">
                                             <RefreshCw className={`w-5 h-5 ${statsStore.isP2PBackupStatsLoading ? 'animate-spin' : ''}`} />
@@ -286,9 +309,16 @@ export const Dashboard = observer(() => {
                                                                 </div>
                                                             )}
                                                         </div>
-                                                        <div className="flex flex-col items-end">
-                                                            <span className={`w-2.5 h-2.5 rounded-full mb-1 shadow-lg ${peer.is_active ? 'bg-green-400 animate-pulse shadow-green-500/20' : 'bg-red-500 shadow-red-500/20'}`}></span>
+                                                        <div className="flex flex-col items-end gap-1">
+                                                            <span className={`w-2.5 h-2.5 rounded-full shadow-lg ${peer.is_active ? 'bg-green-400 animate-pulse shadow-green-500/20' : 'bg-red-500 shadow-red-500/20'}`}></span>
                                                             <span className="text-[9px] text-gray-500">{new Date(peer.last_seen).toLocaleTimeString()}</span>
+                                                            {!peer.is_active && (
+                                                                <button onClick={() => handleRemoveNode(peer.peer_id, peer.shard_count)}
+                                                                    className="p-1.5 rounded-lg bg-red-900/40 hover:bg-red-600 text-red-400 hover:text-white transition-colors"
+                                                                    title="Remove offline node">
+                                                                    <Trash2 className="w-3.5 h-3.5" />
+                                                                </button>
+                                                            )}
                                                         </div>
                                                     </div>
                                                 )) : (
@@ -300,10 +330,6 @@ export const Dashboard = observer(() => {
                                             </div>
                                         </div>
 
-                                        {/* Mobile Connection */}
-                                        <div>
-                                            <AndroidConnectionQR />
-                                        </div>
                                     </div>
                                 </div>
                             </div>
@@ -396,6 +422,13 @@ export const Dashboard = observer(() => {
                                         </div>
                                     </div>
                                 ) : <div className="text-gray-500 italic">Syncing settings from vault...</div>}
+                            </div>
+                        )}
+
+                        {/* --- App Setup Tab --- */}
+                        {activeTab === 'app' && (
+                            <div className="max-w-sm">
+                                <AndroidConnectionQR />
                             </div>
                         )}
                     </>
