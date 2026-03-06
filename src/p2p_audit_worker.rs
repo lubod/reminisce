@@ -45,7 +45,9 @@ async fn perform_audit(
     ).await.map_err(|e| e.to_string())?;
 
     if rows.is_empty() {
-        return Ok(false);
+        // If we have no shards to audit, check for consistency issues
+        // (files marked as synced but missing from shard table)
+        return check_consistency(pool, config, p2p_service).await;
     }
 
     info!("Auditing {} distributed shards", rows.len());
@@ -105,6 +107,51 @@ async fn perform_audit(
     Ok(true)
 }
 
+async fn check_consistency(
+    pool: &Pool,
+    config: &Config,
+    p2p_service: &Arc<P2PService>,
+) -> Result<bool, String> {
+    let client = pool.get().await.map_err(|e| e.to_string())?;
+    
+    // Find images or videos that are marked as synced but have no/few shards in p2p_shards
+    let query = "
+        WITH synced_files AS (
+            SELECT hash FROM images WHERE p2p_synced_at IS NOT NULL
+            UNION ALL
+            SELECT hash FROM videos WHERE p2p_synced_at IS NOT NULL
+        ),
+        shard_counts AS (
+            SELECT file_hash, count(*) as count FROM p2p_shards GROUP BY file_hash
+        )
+        SELECT s.hash 
+        FROM synced_files s
+        LEFT JOIN shard_counts c ON s.hash = c.file_hash
+        WHERE c.count IS NULL OR c.count < 3
+        LIMIT 10";
+
+    let rows = client.query(query, &[]).await.map_err(|e| e.to_string())?;
+    
+    if rows.is_empty() {
+        return Ok(false);
+    }
+
+    info!("Consistency check: Found {} files with missing/incomplete shards", rows.len());
+
+    for row in rows {
+        let file_hash: String = row.get(0);
+        info!("Consistency check: Fixing missing shards for file {}", file_hash);
+        
+        for i in 0..SHARD_COUNT {
+            if let Err(e) = repair_file(pool, config, p2p_service, &file_hash, i).await {
+                error!("Consistency check: Failed to fix shard {} for {}: {}", i, file_hash, e);
+            }
+        }
+    }
+
+    Ok(true)
+}
+
 async fn repair_file(
     pool: &Pool,
     config: &Config,
@@ -125,6 +172,17 @@ async fn repair_file(
         return Err(format!("Shard index {} exceeds available nodes", failed_shard_index).into());
     }
     let target_node = &ideal_nodes[failed_shard_index];
+
+    // Check if this specific shard record already exists and is healthy
+    let existing_shard = client.query_opt(
+        "SELECT id FROM p2p_shards WHERE file_hash = $1 AND shard_index = $2 AND node_id = $3",
+        &[&file_hash, &(failed_shard_index as i32), target_node]
+    ).await?;
+
+    if existing_shard.is_some() {
+        // Shard already exists on the correct node, no need to repair unless it failed audit
+        return Ok(());
+    }
 
     // Try re-sharding from local file if encryption key is stored
     let file_info = find_file_info(&client, file_hash).await?;
@@ -158,10 +216,12 @@ async fn repair_file(
             let shard_data = &shards[failed_shard_index];
             let new_shard_hash = upload_shard_to_node(p2p_service, target_node, shard_data).await?;
 
-            // Update DB
+            // Update/Insert DB record
             client.execute(
-                "UPDATE p2p_shards SET node_id = $1, shard_hash = $2, last_checked_at = NOW() WHERE file_hash = $3 AND shard_index = $4",
-                &[target_node, &new_shard_hash, &file_hash, &(failed_shard_index as i32)],
+                "INSERT INTO p2p_shards (file_hash, shard_index, node_id, shard_hash, last_checked_at)
+                 VALUES ($1, $2, $3, $4, NOW())
+                 ON CONFLICT (file_hash, shard_index) DO UPDATE SET node_id = $3, shard_hash = $4, last_checked_at = NOW()",
+                &[&file_hash, &(failed_shard_index as i32), target_node, &new_shard_hash],
             ).await?;
 
             info!("Repaired shard {} of {} on node {}", failed_shard_index, file_hash, target_node);
