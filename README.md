@@ -86,6 +86,18 @@ Copy `config-fullstack.yaml.example` to `config-fullstack.yaml` and set:
 | `database_url` | PostgreSQL connection string |
 | `embedding_service_url` | URL of the AI service (default `http://localhost:8081`) |
 
+## 🔒 Security & Best Practices
+
+To protect your personal media, follow these essential security steps after installation:
+
+1.  **Generate a Unique Secret Key:** The `api_secret_key` is used to sign authentication tokens. Generate a random 32-character key and set it in your `config-fullstack.yaml`:
+    ```bash
+    openssl rand -base64 32
+    ```
+2.  **Change the Default Admin Password:** The default credentials are `admin` / `admin123`. **Log in immediately** and change your password in the User settings.
+3.  **Use a Private Mesh:** Run Reminisce behind a private mesh VPN like **NetBird** (default) or **Tailscale**. Avoid exposing the API port (8080) directly to the public internet.
+4.  **Hardware Encryption:** If your storage nodes are physically accessible to others, ensure their disks are encrypted (LUKS/FileVault).
+
 ## AI Service
 
 The AI service runs as a Docker container (`lubod/reminisce-ai-server`) and exposes:
