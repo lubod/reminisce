@@ -33,7 +33,15 @@ class LoginActivity : AppCompatActivity() {
         private const val TAG = "LoginActivity"
         private const val MODE_LOGIN = 0
         private const val MODE_REGISTER = 1
+        private const val PHASE_SERVER = 0
+        private const val PHASE_AUTH = 1
     }
+
+    // Phase containers
+    private lateinit var serverPhaseLayout: LinearLayout
+    private lateinit var authPhaseLayout: LinearLayout
+    private lateinit var continueButton: MaterialButton
+    private lateinit var backToServerButton: MaterialButton
 
     private lateinit var tabLayout: TabLayout
     private lateinit var serverUrlLayout: TextInputLayout
@@ -46,7 +54,6 @@ class LoginActivity : AppCompatActivity() {
     private lateinit var passwordInput: TextInputEditText
     private lateinit var actionButton: Button
     private lateinit var scanQrButton: Button
-    private lateinit var pasteJsonButton: Button
     private lateinit var progressBar: ProgressBar
     private lateinit var errorText: TextView
 
@@ -61,6 +68,7 @@ class LoginActivity : AppCompatActivity() {
     private var logsVisible = false
 
     private var currentMode = MODE_LOGIN
+    private var currentPhase = PHASE_SERVER
 
     private val logListener: (String) -> Unit = { logLine ->
         runOnUiThread {
@@ -71,7 +79,7 @@ class LoginActivity : AppCompatActivity() {
         }
     }
 
-    // QR Scanner launcher
+    // QR Scanner launcher — on success, fill URL and advance to auth phase
     private val qrScannerLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -82,6 +90,7 @@ class LoginActivity : AppCompatActivity() {
                     PreferenceHelper.setServerUrl(this, serverUrl)
                     serverUrlInput.setText(serverUrl)
                     Toast.makeText(this, "Server URL loaded", Toast.LENGTH_SHORT).show()
+                    showAuthPhase()
                 }
             }
         }
@@ -102,6 +111,103 @@ class LoginActivity : AppCompatActivity() {
     override fun onPause() {
         super.onPause()
         LogCollector.removeListener(logListener)
+    }
+
+    private fun initializeViews() {
+        serverPhaseLayout = findViewById(R.id.serverPhaseLayout)
+        authPhaseLayout = findViewById(R.id.authPhaseLayout)
+        continueButton = findViewById(R.id.continueButton)
+        backToServerButton = findViewById(R.id.backToServerButton)
+
+        tabLayout = findViewById(R.id.authTabLayout)
+        serverUrlLayout = findViewById(R.id.serverUrlLayout)
+        serverUrlInput = findViewById(R.id.serverUrlInput)
+        usernameLayout = findViewById(R.id.usernameLayout)
+        usernameInput = findViewById(R.id.usernameInput)
+        emailLayout = findViewById(R.id.emailLayout)
+        emailInput = findViewById(R.id.emailInput)
+        passwordLayout = findViewById(R.id.passwordLayout)
+        passwordInput = findViewById(R.id.passwordInput)
+        actionButton = findViewById(R.id.actionButton)
+        scanQrButton = findViewById(R.id.scanQrButton)
+        progressBar = findViewById(R.id.progressBar)
+        errorText = findViewById(R.id.errorText)
+
+        toggleLogsButton = findViewById(R.id.toggleLogsButton)
+        logsContainer = findViewById(R.id.logsContainer)
+        logsTextView = findViewById(R.id.logsTextView)
+        copyLogsButton = findViewById(R.id.copyLogsButton)
+        clearLogsButton = findViewById(R.id.clearLogsButton)
+        refreshLogsButton = findViewById(R.id.refreshLogsButton)
+        testConnectionButton = findViewById(R.id.testConnectionButton)
+
+        logsTextView.movementMethod = ScrollingMovementMethod()
+
+        serverUrlInput.setText(PreferenceHelper.getServerUrl(this))
+        logsTextView.text = LogCollector.getLogs().ifEmpty { "Logs will appear here..." }
+    }
+
+    private fun setupListeners() {
+        continueButton.setOnClickListener {
+            val serverUrl = serverUrlInput.text.toString().trim()
+            if (serverUrl.isEmpty()) {
+                serverUrlLayout.error = "Server URL required"
+                return@setOnClickListener
+            }
+            serverUrlLayout.error = null
+            PreferenceHelper.setServerUrl(this, serverUrl)
+            showAuthPhase()
+        }
+
+        backToServerButton.setOnClickListener {
+            showServerPhase()
+        }
+
+        tabLayout.addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
+            override fun onTabSelected(tab: TabLayout.Tab?) {
+                when (tab?.position) {
+                    MODE_LOGIN -> switchToLoginMode()
+                    MODE_REGISTER -> switchToRegisterMode()
+                }
+            }
+            override fun onTabUnselected(tab: TabLayout.Tab?) {}
+            override fun onTabReselected(tab: TabLayout.Tab?) {}
+        })
+
+        actionButton.setOnClickListener {
+            hideError()
+            when (currentMode) {
+                MODE_LOGIN -> performLogin()
+                MODE_REGISTER -> performRegistration()
+            }
+        }
+
+        scanQrButton.setOnClickListener {
+            qrScannerLauncher.launch(Intent(this, QRScannerActivity::class.java))
+        }
+
+        toggleLogsButton.setOnClickListener { toggleLogs() }
+        copyLogsButton.setOnClickListener { copyLogsToClipboard() }
+        clearLogsButton.setOnClickListener {
+            LogCollector.clear()
+            logsTextView.text = "Logs cleared."
+        }
+        refreshLogsButton.setOnClickListener { logsTextView.text = LogCollector.getLogs() }
+        testConnectionButton.setOnClickListener { testConnection() }
+    }
+
+    private fun showServerPhase() {
+        currentPhase = PHASE_SERVER
+        serverPhaseLayout.visibility = View.VISIBLE
+        authPhaseLayout.visibility = View.GONE
+        hideError()
+    }
+
+    private fun showAuthPhase() {
+        currentPhase = PHASE_AUTH
+        serverPhaseLayout.visibility = View.GONE
+        authPhaseLayout.visibility = View.VISIBLE
+        hideError()
     }
 
     private fun toggleLogs() {
@@ -145,72 +251,6 @@ class LoginActivity : AppCompatActivity() {
         }
     }
 
-    private fun initializeViews() {
-        tabLayout = findViewById(R.id.authTabLayout)
-        serverUrlLayout = findViewById(R.id.serverUrlLayout)
-        serverUrlInput = findViewById(R.id.serverUrlInput)
-        usernameLayout = findViewById(R.id.usernameLayout)
-        usernameInput = findViewById(R.id.usernameInput)
-        emailLayout = findViewById(R.id.emailLayout)
-        emailInput = findViewById(R.id.emailInput)
-        passwordLayout = findViewById(R.id.passwordLayout)
-        passwordInput = findViewById(R.id.passwordInput)
-        actionButton = findViewById(R.id.actionButton)
-        scanQrButton = findViewById(R.id.scanQrButton)
-        pasteJsonButton = findViewById(R.id.pasteJsonButton)
-        progressBar = findViewById(R.id.progressBar)
-        errorText = findViewById(R.id.errorText)
-
-        toggleLogsButton = findViewById(R.id.toggleLogsButton)
-        logsContainer = findViewById(R.id.logsContainer)
-        logsTextView = findViewById(R.id.logsTextView)
-        copyLogsButton = findViewById(R.id.copyLogsButton)
-        clearLogsButton = findViewById(R.id.clearLogsButton)
-        refreshLogsButton = findViewById(R.id.refreshLogsButton)
-        testConnectionButton = findViewById(R.id.testConnectionButton)
-
-        logsTextView.movementMethod = ScrollingMovementMethod()
-
-        serverUrlInput.setText(PreferenceHelper.getServerUrl(this))
-        logsTextView.text = LogCollector.getLogs().ifEmpty { "Logs will appear here..." }
-    }
-
-    private fun setupListeners() {
-        tabLayout.addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
-            override fun onTabSelected(tab: TabLayout.Tab?) {
-                when (tab?.position) {
-                    MODE_LOGIN -> switchToLoginMode()
-                    MODE_REGISTER -> switchToRegisterMode()
-                }
-            }
-            override fun onTabUnselected(tab: TabLayout.Tab?) {}
-            override fun onTabReselected(tab: TabLayout.Tab?) {}
-        })
-
-        actionButton.setOnClickListener {
-            hideError()
-            when (currentMode) {
-                MODE_LOGIN -> performLogin()
-                MODE_REGISTER -> performRegistration()
-            }
-        }
-
-        scanQrButton.setOnClickListener {
-            qrScannerLauncher.launch(Intent(this, QRScannerActivity::class.java))
-        }
-
-        pasteJsonButton.setOnClickListener { testConnection() }
-
-        toggleLogsButton.setOnClickListener { toggleLogs() }
-        copyLogsButton.setOnClickListener { copyLogsToClipboard() }
-        clearLogsButton.setOnClickListener {
-            LogCollector.clear()
-            logsTextView.text = "Logs cleared."
-        }
-        refreshLogsButton.setOnClickListener { logsTextView.text = LogCollector.getLogs() }
-        testConnectionButton.setOnClickListener { testConnection() }
-    }
-
     private fun copyLogsToClipboard() {
         val logs = LogCollector.getLogs()
         if (logs.isEmpty()) {
@@ -239,11 +279,10 @@ class LoginActivity : AppCompatActivity() {
     private fun performLogin() {
         if (!validateInputs()) return
 
-        val serverUrl = serverUrlInput.text.toString().trim()
+        val serverUrl = PreferenceHelper.getServerUrl(this)
         val username = usernameInput.text.toString().trim()
         val password = passwordInput.text.toString()
 
-        PreferenceHelper.setServerUrl(this, serverUrl)
         showLoading()
 
         CoroutineScope(Dispatchers.IO).launch {
@@ -276,12 +315,11 @@ class LoginActivity : AppCompatActivity() {
     private fun performRegistration() {
         if (!validateInputs()) return
 
-        val serverUrl = serverUrlInput.text.toString().trim()
+        val serverUrl = PreferenceHelper.getServerUrl(this)
         val username = usernameInput.text.toString().trim()
         val email = emailInput.text.toString().trim()
         val password = passwordInput.text.toString()
 
-        PreferenceHelper.setServerUrl(this, serverUrl)
         showLoading()
 
         CoroutineScope(Dispatchers.IO).launch {
@@ -310,14 +348,6 @@ class LoginActivity : AppCompatActivity() {
 
     private fun validateInputs(): Boolean {
         var isValid = true
-
-        val serverUrl = serverUrlInput.text.toString().trim()
-        if (serverUrl.isEmpty()) {
-            serverUrlLayout.error = "Server URL required"
-            isValid = false
-        } else {
-            serverUrlLayout.error = null
-        }
 
         val username = usernameInput.text.toString().trim()
         if (username.isEmpty()) {
@@ -351,7 +381,6 @@ class LoginActivity : AppCompatActivity() {
     private fun showLoading() {
         progressBar.visibility = View.VISIBLE
         actionButton.isEnabled = false
-        serverUrlInput.isEnabled = false
         usernameInput.isEnabled = false
         emailInput.isEnabled = false
         passwordInput.isEnabled = false
@@ -360,7 +389,6 @@ class LoginActivity : AppCompatActivity() {
     private fun hideLoading() {
         progressBar.visibility = View.GONE
         actionButton.isEnabled = true
-        serverUrlInput.isEnabled = true
         usernameInput.isEnabled = true
         emailInput.isEnabled = true
         passwordInput.isEnabled = true
