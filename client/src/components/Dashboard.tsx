@@ -242,15 +242,18 @@ export const Dashboard = observer(() => {
                                                         <h3 className="text-xs font-bold text-gray-500 uppercase tracking-widest flex items-center gap-2">
                                                             <Server className="w-4 h-4 text-purple-400" /> P2P Engine
                                                         </h3>
-                                                        <p className="text-lg font-bold text-white mt-1">Static Overlay</p>
+                                                        <p className="text-lg font-bold text-white mt-1">Dynamic Mesh</p>
                                                     </div>
-                                                    <span className="px-3 py-1 bg-green-900/30 text-green-400 text-[10px] font-bold rounded-full border border-green-500/20">ONLINE</span>
+                                                    {p2pStatus?.is_healthy === false
+                                                        ? <span className="px-3 py-1 bg-red-900/30 text-red-400 text-[10px] font-bold rounded-full border border-red-500/20">DEGRADED</span>
+                                                        : <span className="px-3 py-1 bg-green-900/30 text-green-400 text-[10px] font-bold rounded-full border border-green-500/20">ONLINE</span>
+                                                    }
                                                 </div>
                                                 <div className="grid grid-cols-2 gap-4 mb-6">
                                                     <div className="p-3 bg-gray-800 rounded-xl border border-gray-700/50">
-                                                        <div className="text-[10px] text-gray-500 uppercase">Configured Peers</div>
+                                                        <div className="text-[10px] text-gray-500 uppercase">Active Peers</div>
                                                         <div className="text-xl font-black text-white">
-                                                            {statsStore.p2pDaemonStatus?.p2p_peer_count ?? 0}
+                                                            {p2pStatus?.active_peers ?? 0}
                                                         </div>
                                                     </div>
                                                     <div className="p-3 bg-gray-800 rounded-xl border border-gray-700/50">
@@ -329,6 +332,9 @@ export const Dashboard = observer(() => {
                                                 )}
                                             </div>
                                         </div>
+
+                                        {/* Android Connection */}
+                                        <AndroidConnectionQR />
 
                                     </div>
                                 </div>

@@ -81,9 +81,25 @@ pub struct Config {
     #[serde(default = "default_p2p_data_dir")]
     pub p2p_data_dir: String,
 
-    // P2P Storage (Nebula/Static Overlay)
+    // P2P Storage — dynamic discovery
+    /// UDP port to listen on for LAN broadcast announcements from storage nodes.
+    #[serde(default = "default_p2p_discovery_port")]
+    pub p2p_discovery_port: u16,
+    /// Coordinator QUIC address for cross-network peer discovery (e.g. 1.2.3.4:5055).
     #[serde(default)]
-    pub p2p_peers: Vec<String>, // List of static overlay IPs
+    pub p2p_coordinator_addr: Option<String>,
+    /// Legacy static peer list — kept for backward compatibility, prefer discovery.
+    #[serde(default)]
+    pub p2p_peers: Vec<String>,
+
+    // Reverse tunnel — lets Android reach the home server through the VPS coordinator
+    /// Local port to expose through the coordinator tunnel (e.g. 28444 for nginx HTTPS).
+    #[serde(default)]
+    pub p2p_tunnel_local_port: Option<u16>,
+    /// Public URL that Android uses to reach this server via the tunnel
+    /// (e.g. https://vps-ip:8443). Included in the QR code.
+    #[serde(default)]
+    pub p2p_tunnel_public_url: Option<String>,
 }
 
 fn default_port() -> u16 {
@@ -124,6 +140,10 @@ fn default_db_pool_timeout_secs() -> u64 {
 
 fn default_p2p_data_dir() -> String {
     "data/p2p".to_string()
+}
+
+fn default_p2p_discovery_port() -> u16 {
+    5060
 }
 
 impl Config {

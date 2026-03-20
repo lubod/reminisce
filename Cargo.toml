@@ -5,7 +5,7 @@ edition = "2021"
 
 [workspace]
 members = [
-    ".", "np2p",
+    ".", "np2p", "coordinator",
 ]
 
 [lib]

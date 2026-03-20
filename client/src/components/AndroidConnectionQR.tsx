@@ -6,7 +6,7 @@ import axios from "../api/axiosConfig";
 interface ConnectionInfo {
     node_id: string;
     local_ip?: string;
-    netbird_ip?: string;
+    tunnel_url?: string;
 }
 
 export const AndroidConnectionQR = () => {
@@ -38,9 +38,9 @@ export const AndroidConnectionQR = () => {
     const suffix = port ? `:${port}` : '';
     const urlEntries: { label: string; url: string }[] = [];
     if (connectionInfo?.local_ip)
-        urlEntries.push({ label: 'Local URL', url: `${protocol}//${connectionInfo.local_ip}${suffix}` });
-    if (connectionInfo?.netbird_ip)
-        urlEntries.push({ label: 'Netbird URL', url: `${protocol}//${connectionInfo.netbird_ip}${suffix}` });
+        urlEntries.push({ label: 'Local Network', url: `${protocol}//${connectionInfo.local_ip}${suffix}` });
+    if (connectionInfo?.tunnel_url)
+        urlEntries.push({ label: 'Remote (via VPS)', url: connectionInfo.tunnel_url });
     if (urlEntries.length === 0)
         urlEntries.push({ label: 'Server URL', url: window.location.origin });
 

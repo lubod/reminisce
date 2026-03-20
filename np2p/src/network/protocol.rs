@@ -42,6 +42,46 @@ pub enum Message {
     /// Periodic heartbeat to maintain NAT mappings and report status.
     Heartbeat { available_space_bytes: u64 },
 
+    /// Coordinator: register this node. Coordinator replies with PeerList.
+    RegisterNode { node_id: String, quic_port: u16 },
+
+    /// Coordinator: request the current peer list. Coordinator replies with PeerList.
+    GetPeers,
+
+    /// Coordinator: list of known peers as ("node_id", "ip:port") pairs.
+    PeerList { peers: Vec<(String, String)> },
+
+    /// Relay: forward payload (bincode-serialized Message) to target node.
+    /// Coordinator replies with RelayResponse or Error.
+    RelayRequest { target_node_id: String, payload: Vec<u8> },
+
+    /// Relay: the response bytes (bincode-serialized Message) from the target.
+    RelayResponse { payload: Vec<u8> },
+
+    /// Tunnel: home server registers itself as the HTTP tunnel backend (step 1).
+    TunnelRegister { node_id: String },
+
+    /// Tunnel: coordinator sends a random nonce for the home server to sign (step 2).
+    TunnelChallenge { nonce: Vec<u8> },
+
+    /// Tunnel: home server replies with Ed25519 signature over the nonce (step 3).
+    TunnelChallengeResponse { signature: Vec<u8> },
+
+    /// Tunnel: coordinator acknowledges the tunnel registration (step 4).
+    TunnelAccepted,
+
+    /// Channel: storage node registers a persistent reverse channel for relay (step 1).
+    NodeChannelRegister { node_id: String },
+
+    /// Channel: coordinator sends nonce to sign (step 2).
+    NodeChannelChallenge { nonce: Vec<u8> },
+
+    /// Channel: storage node replies with Ed25519 signature (step 3).
+    NodeChannelChallengeResponse { signature: Vec<u8> },
+
+    /// Channel: coordinator accepts the channel registration (step 4).
+    NodeChannelAccepted,
+
     /// Generic error message.
     Error { code: u16, message: String },
 }

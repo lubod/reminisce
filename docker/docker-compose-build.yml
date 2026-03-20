@@ -38,3 +38,11 @@ services:
       target: storage
     image: lubod/reminisce-p2p:latest
     container_name: reminisce-p2p-build
+
+  coordinator:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.p2p
+      target: coordinator
+    image: lubod/reminisce-coordinator:latest
+    container_name: reminisce-coordinator-build

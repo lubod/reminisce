@@ -62,7 +62,7 @@ impl ConnectionHandler {
         }
     }
 
-    async fn handle_stream(
+    pub async fn handle_stream(
         mut send: SendStream,
         mut recv: RecvStream,
         storage: DiskStorage,

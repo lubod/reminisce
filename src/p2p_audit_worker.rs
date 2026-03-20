@@ -1,7 +1,6 @@
 use crate::config::Config;
 use crate::media_replication_worker::{rendezvous_select_nodes, SHARD_COUNT, MIN_NODES_REQUIRED};
-use crate::shard_rebalance_worker::{find_file_info, upload_shard_to_node};
-use crate::utils::parse_peer_addr;
+use crate::shard_rebalance_worker::{find_file_info, upload_shard_to_node, lookup_node_addr};
 use log::{info, warn, error};
 use deadpool_postgres::Pool;
 use np2p::network::{P2PService, Message, Protocol};
@@ -56,10 +55,16 @@ async fn perform_audit(
         let shard_db_id: i64 = row.get(0);
         let file_hash: String = row.get(1);
         let shard_index: i32 = row.get(2);
-        let node_ip: String = row.get(3);
+        let node_id: String = row.get(3);
         let expected_shard_hash: String = row.get(4);
 
-        let addr = parse_peer_addr(&node_ip).map_err(|e| e.to_string())?;
+        let addr = match lookup_node_addr(&pool, p2p_service, &node_id).await {
+            Some(a) => a,
+            None => {
+                warn!("Cannot audit shard: unknown addr for node {}", node_id);
+                continue;
+            }
+        };
         let connection = p2p_service.connect_to_addr(addr).await;
 
         let mut success = false;
@@ -78,16 +83,16 @@ async fn perform_audit(
                         if actual_hash == expected_shard_hash {
                             success = true;
                         } else {
-                            warn!("Shard {} index {} on node {} is CORRUPTED!", file_hash, shard_index, node_ip);
+                            warn!("Shard {} index {} on node {} is CORRUPTED!", file_hash, shard_index, node_id);
                         }
                     } else {
-                        warn!("Shard {} index {} on node {} is MISSING!", file_hash, shard_index, node_ip);
+                        warn!("Shard {} index {} on node {} is MISSING!", file_hash, shard_index, node_id);
                     }
                 }
                 conn.close(0u32.into(), b"done");
             }
             Err(e) => {
-                warn!("Failed to reach node {} for audit: {}", node_ip, e);
+                warn!("Failed to reach node {} for audit: {}", node_id, e);
             }
         }
 
@@ -161,8 +166,9 @@ async fn repair_file(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let client = pool.get().await?;
 
-    // Determine the correct target node for this shard
-    let active_nodes = config.p2p_peers.clone();
+    // Determine the correct target node for this shard using live registry peers
+    let active_nodes: Vec<(String, std::net::SocketAddr)> = p2p_service.registry.all()
+        .into_iter().map(|p| (p.node_id, p.addr)).collect();
     if active_nodes.len() < MIN_NODES_REQUIRED {
         return Err("Not enough active nodes for repair".into());
     }
@@ -171,16 +177,15 @@ async fn repair_file(
     if failed_shard_index >= ideal_nodes.len() {
         return Err(format!("Shard index {} exceeds available nodes", failed_shard_index).into());
     }
-    let target_node = &ideal_nodes[failed_shard_index];
+    let (target_node_id, target_node_addr) = &ideal_nodes[failed_shard_index];
 
     // Check if this specific shard record already exists and is healthy
     let existing_shard = client.query_opt(
         "SELECT id FROM p2p_shards WHERE file_hash = $1 AND shard_index = $2 AND node_id = $3",
-        &[&file_hash, &(failed_shard_index as i32), target_node]
+        &[&file_hash, &(failed_shard_index as i32), target_node_id]
     ).await?;
 
     if existing_shard.is_some() {
-        // Shard already exists on the correct node, no need to repair unless it failed audit
         return Ok(());
     }
 
@@ -189,7 +194,6 @@ async fn repair_file(
 
     match file_info {
         Some((ext, Some(key), _enc_size)) => {
-            // Re-shard from local file
             info!("Repairing shard {} of {} by re-sharding from local file", failed_shard_index, file_hash);
 
             let images_path = PathBuf::from(config.get_images_dir())
@@ -214,17 +218,16 @@ async fn repair_file(
             }
 
             let shard_data = &shards[failed_shard_index];
-            let new_shard_hash = upload_shard_to_node(p2p_service, target_node, shard_data).await?;
+            let new_shard_hash = upload_shard_to_node(p2p_service, *target_node_addr, shard_data).await?;
 
-            // Update/Insert DB record
             client.execute(
                 "INSERT INTO p2p_shards (file_hash, shard_index, node_id, shard_hash, last_checked_at)
                  VALUES ($1, $2, $3, $4, NOW())
                  ON CONFLICT (file_hash, shard_index) DO UPDATE SET node_id = $3, shard_hash = $4, last_checked_at = NOW()",
-                &[&file_hash, &(failed_shard_index as i32), target_node, &new_shard_hash],
+                &[&file_hash, &(failed_shard_index as i32), target_node_id, &new_shard_hash],
             ).await?;
 
-            info!("Repaired shard {} of {} on node {}", failed_shard_index, file_hash, target_node);
+            info!("Repaired shard {} of {} on node {}", failed_shard_index, file_hash, target_node_id);
             Ok(())
         }
         _ => {
@@ -243,17 +246,12 @@ async fn repair_file(
             let expected_shard_hash: String = shard_rows[0].get(2);
 
             // Try each active node to find the shard (it may have been stored on a different node before)
-            for node in &active_nodes {
-                if node == target_node {
+            for (node_id, node_addr) in &active_nodes {
+                if node_id == target_node_id {
                     continue; // Skip the target, we're trying to send it there
                 }
 
-                let addr = match parse_peer_addr(node) {
-                    Ok(a) => a,
-                    Err(_) => continue,
-                };
-
-                if let Ok(conn) = p2p_service.connect_to_addr(addr).await {
+                if let Ok(conn) = p2p_service.connect_to_addr(*node_addr).await {
                     let mut shard_hash_bytes = [0u8; 32];
                     if let Ok(decoded) = hex::decode(&expected_shard_hash) {
                         shard_hash_bytes.copy_from_slice(&decoded);
@@ -269,14 +267,13 @@ async fn repair_file(
                                 if actual_hash == expected_shard_hash {
                                     conn.close(0u32.into(), b"done");
 
-                                    // Upload to target node
-                                    let new_hash = upload_shard_to_node(p2p_service, target_node, &data).await?;
+                                    let new_hash = upload_shard_to_node(p2p_service, *target_node_addr, &data).await?;
                                     client.execute(
                                         "UPDATE p2p_shards SET node_id = $1, shard_hash = $2, last_checked_at = NOW() WHERE file_hash = $3 AND shard_index = $4",
-                                        &[target_node, &new_hash, &file_hash, &(failed_shard_index as i32)],
+                                        &[target_node_id, &new_hash, &file_hash, &(failed_shard_index as i32)],
                                     ).await?;
 
-                                    info!("Repaired shard {} of {} via fallback from node {}", failed_shard_index, file_hash, node);
+                                    info!("Repaired shard {} of {} via fallback from node {}", failed_shard_index, file_hash, node_id);
                                     return Ok(());
                                 }
                             }

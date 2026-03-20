@@ -383,12 +383,47 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
             });
         }
     
-        // Auto-register configured P2P peers at startup
-        if !config.p2p_peers.is_empty() {
-            if let Err(e) = crate::shard_rebalance_worker::ensure_peers_registered(&main_pool.0, &config).await {
-                error!("Failed to register P2P peers at startup: {}", e);
+        // Discovery listener — hears UDP broadcasts from storage nodes on the LAN
+        np2p::network::discovery::start_listener(
+            p2p_service.registry.clone(),
+            config.p2p_discovery_port,
+            hex::encode(p2p_service.identity().node_id()),
+        );
+
+        // Coordinator client — cross-network peer discovery + reverse tunnel
+        if let Some(coord_str) = &config.p2p_coordinator_addr {
+            match tokio::net::lookup_host(coord_str.as_str()).await {
+                Ok(mut addrs) => match addrs.next() {
+                    Some(coord_addr) => {
+                        let node_id = hex::encode(p2p_service.identity().node_id());
+
+                        // Register with coordinator and sync peer list
+                        np2p::network::coordinator::start_coordinator_client(
+                            coord_addr,
+                            p2p_service.node().clone(),
+                            node_id.clone(),
+                            None, // home server doesn't expose a storage port
+                            p2p_service.registry.clone(),
+                        );
+
+                        // Reverse tunnel — lets Android reach this home server via VPS
+                        if let Some(local_port) = config.p2p_tunnel_local_port {
+                            np2p::network::tunnel::start_tunnel_client(
+                                coord_addr,
+                                p2p_service.node().clone(),
+                                (*p2p_service.identity()).clone(),
+                                local_port,
+                            );
+                            info!("Reverse tunnel started → coordinator={} local_port={}", coord_str, local_port);
+                        }
+                    }
+                    None => error!("p2p_coordinator_addr '{}' resolved to no addresses", coord_str),
+                },
+                Err(e) => error!("Failed to resolve p2p_coordinator_addr '{}': {}", coord_str, e),
             }
         }
+
+        // Registry starts empty on boot — peers register as they connect via discovery
 
             tokio::spawn(
                 crate::p2p_audit_worker::start_audit_worker(

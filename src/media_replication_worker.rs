@@ -1,11 +1,12 @@
 use crate::config::Config;
 use log::{info, warn, error};
 use deadpool_postgres::Pool;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::path::PathBuf;
 use futures::stream::{self, StreamExt};
 use std::time::Duration;
-use crate::utils::{get_load_average, get_cpu_count, calculate_worker_concurrency, parse_peer_addr};
+use crate::utils::{get_load_average, get_cpu_count, calculate_worker_concurrency};
 use np2p::network::{P2PService, Message, Protocol};
 use np2p::storage::StorageEngine;
 use tokio::sync::Mutex;
@@ -20,18 +21,17 @@ struct MediaToReplicate {
     ext: String,
 }
 
-/// Rendezvous hashing (HRW): for a given file, rank all nodes by
-/// hash(file_hash || node_addr) and return the top `count` nodes.
-/// Shard i is assigned to the i-th ranked node, guaranteeing each shard
-/// lands on a different node (when count <= nodes.len()).
-pub fn rendezvous_select_nodes(file_hash: &str, nodes: &[String], count: usize) -> Vec<String> {
-    let mut scored: Vec<(u64, &String)> = nodes.iter().map(|node| {
-        let hash = blake3::hash(format!("{}:{}", file_hash, node).as_bytes());
+/// Rendezvous hashing (HRW): rank nodes by hash(file_hash || node_id),
+/// return top `count`. Uses the stable hex node_id (public key) for consistent
+/// assignment across restarts — not the socket address which may change.
+pub fn rendezvous_select_nodes(file_hash: &str, nodes: &[(String, SocketAddr)], count: usize) -> Vec<(String, SocketAddr)> {
+    let mut scored: Vec<(u64, usize)> = nodes.iter().enumerate().map(|(i, (node_id, _))| {
+        let hash = blake3::hash(format!("{}:{}", file_hash, node_id).as_bytes());
         let score = u64::from_le_bytes(hash.as_bytes()[0..8].try_into().unwrap());
-        (score, node)
+        (score, i)
     }).collect();
     scored.sort_by(|a, b| b.0.cmp(&a.0));
-    scored.into_iter().take(count).map(|(_, node)| node.clone()).collect()
+    scored.into_iter().take(count).map(|(_, i)| nodes[i].clone()).collect()
 }
 
 pub async fn media_replication_loop(
@@ -54,23 +54,24 @@ async fn replicate_all(
     config: &Config,
     p2p_service: &Arc<P2PService>,
 ) -> Result<bool, String> {
-    // Exclusively use static peers from config
-    let nodes = config.p2p_peers.clone();
+    // Use dynamically discovered peers from the in-memory registry (LAN + coordinator)
+    let nodes: Vec<(String, SocketAddr)> = p2p_service.registry.all()
+        .into_iter()
+        .map(|p| (p.node_id, p.addr))
+        .collect();
 
     if nodes.is_empty() {
         return Ok(false);
     }
 
     if nodes.len() < MIN_NODES_REQUIRED {
-        warn!("Only {} P2P nodes defined in config. Minimum {} required for 3/5 EC replication.", nodes.len(), MIN_NODES_REQUIRED);
+        warn!("Only {} P2P nodes discovered. Minimum {} required for 3/5 EC replication.", nodes.len(), MIN_NODES_REQUIRED);
         return Ok(false);
     }
 
-    // 2. Process images
     let images_done = replicate_batch(pool, config, p2p_service, &nodes, "images").await
         .map_err(|e| format!("Failed to replicate image batch: {}", e))?;
 
-    // 3. Process videos
     let videos_done = replicate_batch(pool, config, p2p_service, &nodes, "videos").await
         .map_err(|e| format!("Failed to replicate video batch: {}", e))?;
 
@@ -81,7 +82,7 @@ async fn replicate_batch(
     pool: &Pool,
     config: &Config,
     p2p_service: &Arc<P2PService>,
-    nodes: &[String],
+    nodes: &[(String, SocketAddr)],
     table: &str,
 ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
     let load_average = get_load_average().await;
@@ -154,7 +155,7 @@ async fn replicate_single_file(
     p2p_service: &Arc<P2PService>,
     base_dir: &str,
     table: &str,
-    nodes: &[String],
+    nodes: &[(String, SocketAddr)],
     file: &MediaToReplicate,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let file_path = PathBuf::from(base_dir)
@@ -181,23 +182,21 @@ async fn replicate_single_file(
     info!("Sharding {} into {} pieces across {} nodes (rendezvous)", file.hash, shards.len(), target_nodes.len());
 
     // 3. Upload Shards in Parallel
-    let shard_results = Arc::new(Mutex::new(Vec::new()));
+    // Results: (shard_index, node_id, addr_str, shard_hash)
+    let shard_results: Arc<Mutex<Vec<(usize, String, String, String)>>> = Arc::new(Mutex::new(Vec::new()));
     let mut set = tokio::task::JoinSet::new();
 
-    for (idx, target_peer) in target_nodes.iter().enumerate() {
+    for (idx, (node_id, addr)) in target_nodes.iter().enumerate() {
         let shard_data = shards[idx % shards.len()].clone();
         let p2p_service = p2p_service.clone();
-        let target_peer = target_peer.clone();
-
+        let node_id = node_id.clone();
+        let addr = *addr;
         let results = shard_results.clone();
 
         set.spawn(async move {
             let shard_hash = blake3::hash(&shard_data).to_hex().to_string();
 
-            let addr = parse_peer_addr(&target_peer)?;
-            let connection = p2p_service.connect_to_addr(addr).await;
-
-            match connection {
+            match p2p_service.connect_to_addr(addr).await {
                 Ok(conn) => {
                     let (mut send, mut recv) = conn.open_bi().await.map_err(|e| e.to_string())?;
                     let req = Message::StoreShardRequest {
@@ -210,7 +209,7 @@ async fn replicate_single_file(
                     if let Message::StoreShardResponse { success, .. } = resp {
                         if success {
                             let mut r = results.lock().await;
-                            r.push((idx, target_peer, shard_hash));
+                            r.push((idx, node_id, addr.to_string(), shard_hash));
                             Ok(())
                         } else {
                             Err("Node rejected shard".to_string())
@@ -219,7 +218,7 @@ async fn replicate_single_file(
                         Err("Unexpected response".to_string())
                     }
                 }
-                Err(e) => Err(format!("Connection to {} failed: {}", target_peer, e)),
+                Err(e) => Err(format!("Connection to {} failed: {}", addr, e)),
             }
         });
     }
@@ -239,7 +238,15 @@ async fn replicate_single_file(
     let mut client = pool.get().await?;
     let trans = client.transaction().await?;
 
-    for (idx, node_id, shard_hash) in final_results.iter() {
+    for (idx, node_id, addr_str, shard_hash) in final_results.iter() {
+        // Upsert node into p2p_nodes (satisfies FK + makes node visible in UI)
+        trans.execute(
+            "INSERT INTO p2p_nodes (node_id, public_addr, is_active)
+             VALUES ($1, $2, TRUE)
+             ON CONFLICT (node_id) DO UPDATE SET public_addr = $2, is_active = TRUE, last_seen = NOW()",
+            &[node_id, addr_str],
+        ).await?;
+
         trans.execute(
             "INSERT INTO p2p_shards (file_hash, shard_index, node_id, shard_hash)
              VALUES ($1, $2, $3, $4)

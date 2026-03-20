@@ -59,22 +59,8 @@ pub async fn get_p2p_backup_status(
 pub struct ConnectionInfoResponse {
     pub node_id: String,
     pub local_ip: Option<String>,
-    pub netbird_ip: Option<String>,
-}
-
-fn get_netbird_ip() -> Option<String> {
-    let Ok(ifaces) = get_if_addrs::get_if_addrs() else { return None; };
-    for iface in &ifaces {
-        if iface.is_loopback() { continue; }
-        if let get_if_addrs::IfAddr::V4(ref v4) = iface.addr {
-            let o = v4.ip.octets();
-            // Netbird range: 100.64.0.0/10
-            if o[0] == 100 && o[1] >= 64 && o[1] <= 127 {
-                return Some(v4.ip.to_string());
-            }
-        }
-    }
-    None
+    /// Public URL to reach this server via the VPS coordinator tunnel (for Android on other networks).
+    pub tunnel_url: Option<String>,
 }
 
 #[utoipa::path(
@@ -104,20 +90,13 @@ pub async fn get_p2p_connection_info(
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string());
 
-    // Netbird IP: detected from server network interfaces (100.64.0.0/10 range)
-    let netbird_ip = get_netbird_ip();
-
-    // Avoid duplicates if browser connected via Netbird IP
-    let netbird_ip = if netbird_ip.as_deref() == local_ip.as_deref() {
-        None
-    } else {
-        netbird_ip
-    };
+    // Tunnel URL: configured public URL to reach this server via VPS coordinator tunnel.
+    let tunnel_url = config.p2p_tunnel_public_url.clone();
 
     Ok(HttpResponse::Ok().json(ConnectionInfoResponse {
         node_id: hex::encode(p2p_service.identity().node_id()),
         local_ip,
-        netbird_ip,
+        tunnel_url,
     }))
 }
 
@@ -148,6 +127,7 @@ pub struct DiscoveredPeersResponse {
 pub async fn get_discovered_peers(
     req: HttpRequest,
     config: web::Data<Config>,
+    p2p_service: web::Data<Arc<P2PService>>,
     pool: web::Data<MainDbPool>,
 ) -> Result<HttpResponse, actix_web::Error> {
     let _claims = match utils::authenticate_request(&req, "get_discovered_peers", config.get_api_key()) {
@@ -167,7 +147,7 @@ pub async fn get_discovered_peers(
     ).await
         .map_err(|_| actix_web::error::ErrorInternalServerError("DB query error"))?;
 
-    let peers = rows.iter().map(|row| {
+    let mut peers: Vec<DiscoveredPeer> = rows.iter().map(|row| {
         let last_seen: chrono::DateTime<chrono::Utc> = row.get(1);
         DiscoveredPeer {
             peer_id: row.get(0),
@@ -175,7 +155,21 @@ pub async fn get_discovered_peers(
             is_active: row.get(2),
             shard_count: row.get(3),
         }
-    }).collect::<Vec<_>>();
+    }).collect();
+
+    // Merge in-memory registry peers not yet persisted to DB (e.g. before first replication)
+    let db_ids: std::collections::HashSet<String> = peers.iter().map(|p| p.peer_id.clone()).collect();
+    let now = chrono::Utc::now().to_rfc3339();
+    for registry_peer in p2p_service.registry.all() {
+        if !db_ids.contains(&registry_peer.node_id) {
+            peers.push(DiscoveredPeer {
+                peer_id: registry_peer.node_id,
+                last_seen: now.clone(),
+                is_active: true,
+                shard_count: 0,
+            });
+        }
+    }
 
     Ok(HttpResponse::Ok().json(DiscoveredPeersResponse {
         peer_count: peers.len(),

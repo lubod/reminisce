@@ -6,12 +6,14 @@ use tracing_subscriber::EnvFilter;
 use clap::Parser;
 use np2p::crypto::NodeIdentity;
 use np2p::network::{P2PService, ConnectionHandler};
+use np2p::network::discovery;
+use np2p::network::coordinator;
 use np2p::storage::DiskStorage;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about = "np2p storage node daemon", long_about = None)]
 struct Args {
-    /// Address to listen on for P2P connections
+    /// Address to listen on for P2P (QUIC) connections
     #[arg(short, long, default_value = "0.0.0.0:5050")]
     listen: SocketAddr,
 
@@ -22,11 +24,18 @@ struct Args {
     /// Secret key in hex (optional, generates new if missing)
     #[arg(short, long)]
     secret_key: Option<String>,
+
+    /// UDP port to broadcast discovery announcements on (LAN discovery)
+    #[arg(long, default_value_t = discovery::DEFAULT_DISCOVERY_PORT)]
+    discovery_port: u16,
+
+    /// Coordinator QUIC address for cross-network discovery and relay (e.g. 1.2.3.4:5055)
+    #[arg(long)]
+    coordinator_addr: Option<SocketAddr>,
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Required for rustls 0.23+
     let _ = rustls::crypto::ring::default_provider().install_default();
 
     tracing_subscriber::fmt()
@@ -55,17 +64,46 @@ async fn main() -> anyhow::Result<()> {
         id
     };
 
-    info!("Node ID: {}", hex::encode(identity.node_id()));
-    std::fs::write(args.data_dir.join("node_id.txt"), hex::encode(identity.node_id()))?;
+    let node_id_hex = hex::encode(identity.node_id());
+    info!("Node ID: {}", node_id_hex);
+    std::fs::write(args.data_dir.join("node_id.txt"), &node_id_hex)?;
 
     let storage_path = args.data_dir.join("shards");
     let storage = DiskStorage::new(storage_path).await?;
 
-    let service = Arc::new(P2PService::new(args.listen, identity.clone()).await?);
+    let mut service = P2PService::new(args.listen, identity.clone()).await?;
+    let quic_port = service.node().local_addr()?.port();
     info!("np2p daemon listening on {}", service.node().local_addr()?);
 
-    // Accept connections loop
+    // LAN broadcast — announces our QUIC port to all nodes on the same subnet
+    discovery::start_broadcaster(node_id_hex.clone(), quic_port, args.discovery_port);
+    info!("Broadcasting on discovery port {}", args.discovery_port);
+
+    // Coordinator — for nodes on different networks
+    if let Some(addr) = args.coordinator_addr {
+        service.coordinator_addr = Some(addr);
+        coordinator::start_coordinator_client(
+            addr,
+            service.node().clone(),
+            node_id_hex.clone(),
+            Some(quic_port),
+            service.registry.clone(),
+        );
+
+        // Reverse channel — so coordinator can relay messages to us even when behind NAT
+        np2p::network::channel::start_channel_client(
+            addr,
+            service.node().clone(),
+            identity.clone(),
+            storage.clone(),
+        );
+    } else {
+        info!("No coordinator configured — LAN discovery only");
+    }
+
+    let service = Arc::new(service);
     let identity_arc = Arc::new(identity);
+
     loop {
         if let Some(incoming) = service.node().accept().await {
             let storage_clone = storage.clone();

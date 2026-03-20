@@ -154,6 +154,6 @@ pub async fn get_p2p_daemon_status(
         bytes_stored: 0, // In-memory tracking could be added
         bytes_uploaded: 0,
         files_uploaded: 0,
-        p2p_peer_count: config.p2p_peers.len(),
+        p2p_peer_count: p2p_service.registry.len(),
     }))
 }

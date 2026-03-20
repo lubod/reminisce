@@ -1,41 +1,42 @@
 use crate::config::Config;
 use crate::media_replication_worker::{rendezvous_select_nodes, SHARD_COUNT, MIN_NODES_REQUIRED};
-use crate::utils::parse_peer_addr;
 use deadpool_postgres::Pool;
 use log::{info, warn, error};
 use np2p::network::{P2PService, Message, Protocol};
 use np2p::storage::StorageEngine;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 const REBALANCE_BATCH_SIZE: i64 = 20;
 
-/// Ensure all configured peers are registered in p2p_nodes.
-/// Peers in config are marked active; peers not in config are marked inactive.
-pub async fn ensure_peers_registered(pool: &Pool, config: &Config) -> Result<(), String> {
+/// Sync dynamically discovered peers into p2p_nodes.
+/// Upserts active nodes; marks any node not currently in the registry as inactive.
+pub async fn ensure_peers_registered(pool: &Pool, nodes: &[(String, SocketAddr)]) -> Result<(), String> {
     let client = pool.get().await.map_err(|e| e.to_string())?;
 
-    for peer in &config.p2p_peers {
+    for (node_id, addr) in nodes {
         client.execute(
             "INSERT INTO p2p_nodes (node_id, public_addr, is_active)
-             VALUES ($1, $1, TRUE)
-             ON CONFLICT (node_id) DO UPDATE SET is_active = TRUE, last_seen = NOW()",
-            &[peer],
-        ).await.map_err(|e| format!("Failed to upsert peer {}: {}", peer, e))?;
+             VALUES ($1, $2, TRUE)
+             ON CONFLICT (node_id) DO UPDATE SET public_addr = $2, is_active = TRUE, last_seen = NOW()",
+            &[node_id, &addr.to_string()],
+        ).await.map_err(|e| format!("Failed to upsert peer {}: {}", node_id, e))?;
     }
 
-    // Mark peers NOT in current config as inactive
-    if !config.p2p_peers.is_empty() {
-        let placeholders: Vec<String> = config.p2p_peers.iter().enumerate()
+    // Mark peers not currently seen as inactive
+    if !nodes.is_empty() {
+        let placeholders: Vec<String> = nodes.iter().enumerate()
             .map(|(i, _)| format!("${}", i + 1))
             .collect();
         let query = format!(
             "UPDATE p2p_nodes SET is_active = FALSE WHERE node_id NOT IN ({})",
             placeholders.join(", ")
         );
-        let params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = config.p2p_peers.iter()
-            .map(|p| p as &(dyn tokio_postgres::types::ToSql + Sync))
+        let node_ids: Vec<&str> = nodes.iter().map(|(id, _)| id.as_str()).collect();
+        let params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = node_ids.iter()
+            .map(|id| id as &(dyn tokio_postgres::types::ToSql + Sync))
             .collect();
         client.execute(&query, &params).await.map_err(|e| e.to_string())?;
     }
@@ -68,10 +69,14 @@ pub async fn rebalance_cycle(
     config: &Config,
     p2p_service: &Arc<P2PService>,
 ) -> Result<bool, String> {
-    // Ensure peers are up to date
-    ensure_peers_registered(pool, config).await?;
+    // Get currently discovered peers and sync to DB
+    let active_nodes: Vec<(String, SocketAddr)> = p2p_service.registry.all()
+        .into_iter()
+        .map(|p| (p.node_id, p.addr))
+        .collect();
 
-    let active_nodes = config.p2p_peers.clone();
+    ensure_peers_registered(pool, &active_nodes).await?;
+
     if active_nodes.len() < MIN_NODES_REQUIRED {
         return Ok(false);
     }
@@ -113,7 +118,7 @@ async fn rebalance_file(
     config: &Config,
     p2p_service: &Arc<P2PService>,
     file_hash: &str,
-    active_nodes: &[String],
+    active_nodes: &[(String, SocketAddr)],
 ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
     let client = pool.get().await?;
 
@@ -138,22 +143,21 @@ async fn rebalance_file(
             continue;
         }
 
-        let ideal_node = &ideal_nodes[idx];
-        if &current_node == ideal_node {
+        let (ideal_node_id, ideal_node_addr) = &ideal_nodes[idx];
+        if &current_node == ideal_node_id {
             continue; // Already on the correct node
         }
 
-        info!("Rebalancing file {} shard {} from {} to {}", file_hash, shard_index, current_node, ideal_node);
+        info!("Rebalancing file {} shard {} from {} to {}", file_hash, shard_index, current_node, ideal_node_id);
 
-        match migrate_shard(pool, config, p2p_service, file_hash, idx, ideal_node, &current_node, &_current_shard_hash).await {
+        match migrate_shard(pool, config, p2p_service, file_hash, idx, ideal_node_id, *ideal_node_addr, &current_node, &_current_shard_hash).await {
             Ok(new_shard_hash) => {
-                // Update DB with new node and shard hash
                 client.execute(
                     "UPDATE p2p_shards SET node_id = $1, shard_hash = $2 WHERE file_hash = $3 AND shard_index = $4",
-                    &[ideal_node, &new_shard_hash, &file_hash, &shard_index],
+                    &[ideal_node_id, &new_shard_hash, &file_hash, &shard_index],
                 ).await?;
                 migrated_any = true;
-                info!("Migrated shard {} of {} to {}", shard_index, file_hash, ideal_node);
+                info!("Migrated shard {} of {} to {}", shard_index, file_hash, ideal_node_id);
             }
             Err(e) => {
                 warn!("Failed to migrate shard {} of {}: {}", shard_index, file_hash, e);
@@ -172,34 +176,57 @@ async fn migrate_shard(
     p2p_service: &Arc<P2PService>,
     file_hash: &str,
     shard_index: usize,
-    new_node: &str,
-    old_node: &str,
+    new_node_id: &str,
+    new_node_addr: SocketAddr,
+    old_node_id: &str,
     old_shard_hash: &str,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-    // Try to find the file info and encryption key
     let client = pool.get().await?;
 
     let file_info = find_file_info(&client, file_hash).await?;
 
     let shard_data = match file_info {
         Some((ext, Some(key), _enc_size)) => {
-            // Re-shard from local file using stored key
             reshard_from_local(config, file_hash, &ext, &key, shard_index).await?
         }
         _ => {
-            // Fallback: retrieve shard from old node
-            retrieve_shard_from_node(p2p_service, old_node, old_shard_hash).await
-                .or_else(|_| -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
-                    Err("Cannot migrate: no encryption key and old node unreachable".into())
-                })?
+            // Look up old node's addr from DB public_addr or in-memory registry
+            let old_addr = lookup_node_addr(pool, p2p_service, old_node_id).await;
+            match old_addr {
+                Some(addr) => retrieve_shard_from_node(p2p_service, addr, old_shard_hash).await
+                    .or_else(|_| -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
+                        Err("Cannot migrate: no encryption key and old node unreachable".into())
+                    })?,
+                None => return Err("Cannot migrate: no encryption key and old node addr unknown".into()),
+            }
         }
     };
 
-    // Upload shard to new node
     let shard_hash = blake3::hash(&shard_data).to_hex().to_string();
-    upload_shard_to_node(p2p_service, new_node, &shard_data).await?;
+    upload_shard_to_node(p2p_service, new_node_addr, &shard_data).await?;
 
     Ok(shard_hash)
+}
+
+/// Resolve a node's socket address: check in-memory registry first, then DB public_addr.
+pub async fn lookup_node_addr(pool: &Pool, p2p_service: &Arc<P2PService>, node_id: &str) -> Option<SocketAddr> {
+    // Fast path: in-memory registry
+    if let Some(peer) = p2p_service.registry.get(node_id) {
+        return Some(peer.addr);
+    }
+    // Slow path: DB
+    if let Ok(client) = pool.get().await {
+        if let Ok(Some(row)) = client.query_opt(
+            "SELECT public_addr FROM p2p_nodes WHERE node_id = $1",
+            &[&node_id],
+        ).await {
+            let addr_str: String = row.get(0);
+            if let Ok(addr) = addr_str.parse() {
+                return Some(addr);
+            }
+        }
+    }
+    None
 }
 
 /// Look up file info (ext, encryption_key, encrypted_size) from images or videos table.
@@ -272,12 +299,11 @@ async fn reshard_from_local(
 /// Retrieve a shard from a remote node.
 async fn retrieve_shard_from_node(
     p2p_service: &Arc<P2PService>,
-    node_addr: &str,
+    addr: SocketAddr,
     shard_hash_hex: &str,
 ) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
-    let addr = parse_peer_addr(node_addr)?;
     let conn = p2p_service.connect_to_addr(addr).await
-        .map_err(|e| format!("Connection to {} failed: {}", node_addr, e))?;
+        .map_err(|e| format!("Connection to {} failed: {}", addr, e))?;
 
     let mut shard_hash_bytes = [0u8; 32];
     let decoded = hex::decode(shard_hash_hex)?;
@@ -302,12 +328,11 @@ async fn retrieve_shard_from_node(
 /// Upload a shard to a remote node.
 pub async fn upload_shard_to_node(
     p2p_service: &Arc<P2PService>,
-    node_addr: &str,
+    addr: SocketAddr,
     shard_data: &[u8],
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-    let addr = parse_peer_addr(node_addr)?;
     let conn = p2p_service.connect_to_addr(addr).await
-        .map_err(|e| format!("Connection to {} failed: {}", node_addr, e))?;
+        .map_err(|e| format!("Connection to {} failed: {}", addr, e))?;
 
     let shard_hash = blake3::hash(shard_data);
     let shard_hash_hex = shard_hash.to_hex().to_string();
@@ -326,7 +351,7 @@ pub async fn upload_shard_to_node(
         }
         _ => {
             conn.close(0u32.into(), b"done");
-            Err(format!("Node {} rejected shard", node_addr).into())
+            Err(format!("Node {} rejected shard", addr).into())
         }
     }
 }

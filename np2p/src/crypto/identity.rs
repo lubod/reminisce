@@ -1,4 +1,4 @@
-use ed25519_dalek::SigningKey;
+use ed25519_dalek::{SigningKey, Signer, Verifier, VerifyingKey, Signature};
 use crate::error::{Np2pError, Result};
 use rcgen::{CertificateParams, DistinguishedName, KeyPair as RcKeyPair};
 use rustls_pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
@@ -37,6 +37,11 @@ impl NodeIdentity {
 
     pub fn node_id(&self) -> [u8; NODE_ID_LENGTH] {
         self.signing_key.verifying_key().to_bytes()
+    }
+
+    /// Sign a message with this node's Ed25519 private key.
+    pub fn sign(&self, msg: &[u8]) -> Vec<u8> {
+        self.signing_key.sign(msg).to_bytes().to_vec()
     }
 
     pub fn generate_tls_config(&self) -> Result<(quinn::ServerConfig, quinn::ClientConfig)> {
@@ -84,6 +89,16 @@ impl NodeIdentity {
             quinn::ClientConfig::new(Arc::new(client_quic))
         ))
     }
+}
+
+/// Verify an Ed25519 signature produced by `node_id_bytes` over `msg`.
+/// Verify an Ed25519 signature produced by the node whose public key is `node_id_bytes` over `msg`.
+pub fn verify_signature(node_id_bytes: &[u8], msg: &[u8], signature_bytes: &[u8]) -> bool {
+    let Ok(key_bytes) = <[u8; 32]>::try_from(node_id_bytes) else { return false };
+    let Ok(sig_bytes) = <[u8; 64]>::try_from(signature_bytes) else { return false };
+    let Ok(key) = VerifyingKey::from_bytes(&key_bytes) else { return false };
+    let sig = Signature::from_bytes(&sig_bytes);
+    key.verify(msg, &sig).is_ok()
 }
 
 /// A verifier that skips standard CA verification but could be used to verify Node IDs.

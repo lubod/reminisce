@@ -113,11 +113,13 @@ class QRScannerActivity : AppCompatActivity() {
         val host = try {
             java.net.URL(url).host
         } catch (e: Exception) {
-            url
+            return url
         }
-        // Netbird uses the 100.64.0.0/10 CGNAT range
-        val isNetbird = host.matches(Regex("^100\\.(6[4-9]|[7-9]\\d|1[01]\\d|12[0-7])\\..*"))
-        return if (isNetbird) "Netbird VPN  —  $url" else "Local Network  —  $url"
+        val isPrivate = host.startsWith("192.168.") ||
+            host.startsWith("10.") ||
+            host.matches(Regex("^172\\.(1[6-9]|2[0-9]|3[0-1])\\..*")) ||
+            host == "localhost" || host == "127.0.0.1"
+        return if (isPrivate) "Local Network  —  $url" else "Remote (via VPS)  —  $url"
     }
 
     private fun returnUrl(url: String) {
