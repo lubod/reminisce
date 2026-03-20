@@ -8,6 +8,7 @@ import android.os.Bundle
 import android.text.method.ScrollingMovementMethod
 import android.util.Patterns
 import android.view.View
+import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ProgressBar
@@ -21,6 +22,7 @@ import org.openreminisce.app.util.PreferenceHelper
 import org.openreminisce.app.util.SecureStorageHelper
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.tabs.TabLayout
+import com.google.android.material.textfield.MaterialAutoCompleteTextView
 import com.google.android.material.textfield.TextInputEditText
 import com.google.android.material.textfield.TextInputLayout
 import kotlinx.coroutines.CoroutineScope
@@ -45,7 +47,7 @@ class LoginActivity : AppCompatActivity() {
 
     private lateinit var tabLayout: TabLayout
     private lateinit var serverUrlLayout: TextInputLayout
-    private lateinit var serverUrlInput: TextInputEditText
+    private lateinit var serverUrlInput: MaterialAutoCompleteTextView
     private lateinit var usernameLayout: TextInputLayout
     private lateinit var usernameInput: TextInputEditText
     private lateinit var emailLayout: TextInputLayout
@@ -89,6 +91,7 @@ class LoginActivity : AppCompatActivity() {
                 if (serverUrl != null) {
                     PreferenceHelper.setServerUrl(this, serverUrl)
                     serverUrlInput.setText(serverUrl)
+                    refreshServerUrlAdapter()
                     Toast.makeText(this, "Server URL loaded", Toast.LENGTH_SHORT).show()
                     showAuthPhase()
                 }
@@ -122,7 +125,7 @@ class LoginActivity : AppCompatActivity() {
         tabLayout = findViewById(R.id.authTabLayout)
         serverUrlLayout = findViewById(R.id.serverUrlLayout)
         serverUrlInput = findViewById(R.id.serverUrlInput)
-        usernameLayout = findViewById(R.id.usernameLayout)
+usernameLayout = findViewById(R.id.usernameLayout)
         usernameInput = findViewById(R.id.usernameInput)
         emailLayout = findViewById(R.id.emailLayout)
         emailInput = findViewById(R.id.emailInput)
@@ -144,7 +147,15 @@ class LoginActivity : AppCompatActivity() {
         logsTextView.movementMethod = ScrollingMovementMethod()
 
         serverUrlInput.setText(PreferenceHelper.getServerUrl(this))
+        refreshServerUrlAdapter()
         logsTextView.text = LogCollector.getLogs().ifEmpty { "Logs will appear here..." }
+    }
+
+    private fun refreshServerUrlAdapter() {
+        val known = PreferenceHelper.getKnownServerUrls(this)
+        val adapter = ArrayAdapter(this, android.R.layout.simple_dropdown_item_1line, known)
+        serverUrlInput.setAdapter(adapter)
+        serverUrlInput.threshold = 0
     }
 
     private fun setupListeners() {

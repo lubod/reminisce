@@ -12,6 +12,7 @@ import androidx.core.content.ContextCompat
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import org.json.JSONObject
+import org.openreminisce.app.util.PreferenceHelper
 
 class QRScannerActivity : AppCompatActivity() {
 
@@ -77,13 +78,19 @@ class QRScannerActivity : AppCompatActivity() {
                 urls.add(json.getString("server_url"))
             }
 
-            when {
-                urls.isEmpty() -> {
-                    Toast.makeText(this, "No server URL in QR code", Toast.LENGTH_LONG).show()
-                    finish()
-                }
-                urls.size == 1 -> returnUrl(urls[0])
-                else -> showUrlSelectionDialog(urls)
+            if (urls.isEmpty()) {
+                Toast.makeText(this, "No server URL in QR code", Toast.LENGTH_LONG).show()
+                finish()
+                return
+            }
+
+            // Persist all discovered URLs so the login screen can offer them as options
+            PreferenceHelper.addKnownServerUrls(this, urls)
+
+            if (urls.size == 1) {
+                returnUrl(urls[0])
+            } else {
+                showUrlSelectionDialog(urls)
             }
 
         } catch (e: Exception) {

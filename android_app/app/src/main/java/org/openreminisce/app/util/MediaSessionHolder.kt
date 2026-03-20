@@ -11,4 +11,13 @@ import org.openreminisce.app.model.ImageInfo
 object MediaSessionHolder {
     var hashes: List<String> = emptyList()
     var imageInfos: List<ImageInfo> = emptyList()
+    /** Starred state changes from RemoteMediaDetailActivity, keyed by hash. */
+    var starredUpdates: MutableMap<String, Boolean> = mutableMapOf()
+    /** Hashes deleted in RemoteMediaDetailActivity, to be removed from the grid on return. */
+    var deletedHashes: MutableSet<String> = mutableSetOf()
+
+    fun clear() {
+        hashes = emptyList()
+        imageInfos = emptyList()
+    }
 }

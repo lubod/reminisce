@@ -40,7 +40,7 @@
                 android:layout_marginBottom="16dp"
                 android:textColor="?android:attr/textColorPrimary" />
 
-            <!-- Server URL Input -->
+            <!-- Server URL Input (autocomplete shows previously scanned/saved URLs) -->
             <com.google.android.material.textfield.TextInputLayout
                 android:id="@+id/serverUrlLayout"
                 android:layout_width="match_parent"
@@ -48,14 +48,16 @@
                 android:layout_marginBottom="8dp"
                 android:hint="Server URL"
                 app:helperText="e.g. http://100.x.x.x:8080"
-                app:startIconDrawable="@android:drawable/ic_menu_compass">
+                app:startIconDrawable="@android:drawable/ic_menu_compass"
+                app:endIconMode="dropdown_menu">
 
-                <com.google.android.material.textfield.TextInputEditText
+                <com.google.android.material.textfield.MaterialAutoCompleteTextView
                     android:id="@+id/serverUrlInput"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:inputType="textUri"
-                    android:maxLines="1" />
+                    android:maxLines="1"
+                    android:completionThreshold="0" />
             </com.google.android.material.textfield.TextInputLayout>
 
             <!-- QR Scan button -->
