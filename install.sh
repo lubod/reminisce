@@ -99,11 +99,11 @@ videos_dir: "/app/uploaded_videos"
 # P2P networking
 p2p_data_dir: "/app/data/p2p"
 p2p_discovery_port: 5060
-# Optional: coordinator for cross-network peer discovery
-# p2p_coordinator_addr: "dnet.openreminisce.org:5055"
-# Optional: reverse tunnel so the Android app can reach you over the internet
-# p2p_tunnel_local_port: 8080
-# p2p_tunnel_public_url: "https://dnet.openreminisce.org:8443"
+# Coordinator for cross-network peer discovery and relay
+p2p_coordinator_addr: "dnet.openreminisce.org:5055"
+# Reverse tunnel — lets Android reach this server via the VPS
+p2p_tunnel_local_port: 8080
+p2p_tunnel_public_url: "https://dnet.openreminisce.org:8443"
 
 # AI services (internal Docker network — do not change unless you move ai-server)
 embedding_service_url: "http://ai-server:8081"
