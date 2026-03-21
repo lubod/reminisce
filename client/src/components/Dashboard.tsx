@@ -5,12 +5,13 @@ import { Image, Video, Users, CheckCircle, FileText, Database, Activity, Setting
 import { DirectoryImportModal } from "./DirectoryImportModal";
 import { ServerImportModal } from "./ServerImportModal";
 import { AndroidConnectionQR } from "./AndroidConnectionQR";
+import { UserManagement } from "./UserManagement";
 
 export const Dashboard = observer(() => {
     const { statsStore, authStore } = useStore();
     const isAdmin = authStore.user?.role === "admin";
 
-    const [activeTab, setActiveTab] = useState<'overview' | 'import' | 'system' | 'backup' | 'settings' | 'app'>('overview');
+    const [activeTab, setActiveTab] = useState<'overview' | 'import' | 'system' | 'backup' | 'settings' | 'app' | 'users'>('overview');
 
     // Local state for settings form
     const [enableAiDescriptions, setEnableAiDescriptions] = useState<boolean>(true);
@@ -152,6 +153,9 @@ export const Dashboard = observer(() => {
                 <button onClick={() => setActiveTab('app')} className={tabClass('app')}>
                     <Smartphone size={18} /> App Setup
                 </button>
+                <button onClick={() => setActiveTab('users')} className={tabClass('users')}>
+                    <Users size={18} /> Users
+                </button>
             </div>
 
             {/* --- Main Content Area --- */}
@@ -211,6 +215,7 @@ export const Dashboard = observer(() => {
                         {/* --- Backup Tab --- */}
                         {activeTab === 'backup' && (
                             <div className="bg-gray-800/80 backdrop-blur-md shadow-2xl rounded-2xl border border-gray-700 overflow-hidden">
+                                {/* Header */}
                                 <div className="px-8 py-6 border-b border-gray-700 bg-gray-800/50 flex justify-between items-center">
                                     <div>
                                         <h2 className="text-2xl font-bold text-gray-100 flex items-center">
@@ -233,109 +238,104 @@ export const Dashboard = observer(() => {
                                     </div>
                                 </div>
 
-                                <div className="p-8">
-                                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                                        <div className="space-y-6">
-                                            <div className="bg-gray-900/50 rounded-2xl p-6 border border-gray-700">
-                                                <div className="flex justify-between items-start mb-6">
-                                                    <div>
-                                                        <h3 className="text-xs font-bold text-gray-500 uppercase tracking-widest flex items-center gap-2">
-                                                            <Server className="w-4 h-4 text-purple-400" /> P2P Engine
-                                                        </h3>
-                                                        <p className="text-lg font-bold text-white mt-1">Dynamic Mesh</p>
-                                                    </div>
-                                                    {p2pStatus?.is_healthy === false
-                                                        ? <span className="px-3 py-1 bg-red-900/30 text-red-400 text-[10px] font-bold rounded-full border border-red-500/20">DEGRADED</span>
-                                                        : <span className="px-3 py-1 bg-green-900/30 text-green-400 text-[10px] font-bold rounded-full border border-green-500/20">ONLINE</span>
-                                                    }
-                                                </div>
-                                                <div className="grid grid-cols-2 gap-4 mb-6">
-                                                    <div className="p-3 bg-gray-800 rounded-xl border border-gray-700/50">
-                                                        <div className="text-[10px] text-gray-500 uppercase">Active Peers</div>
-                                                        <div className="text-xl font-black text-white">
-                                                            {p2pStatus?.active_peers ?? 0}
-                                                        </div>
-                                                    </div>
-                                                    <div className="p-3 bg-gray-800 rounded-xl border border-gray-700/50">
-                                                        <div className="text-[10px] text-gray-500 uppercase">Shards</div>
-                                                        <div className="text-xl font-black text-indigo-400">{p2pStatus?.total_shards_stored ?? 0}</div>
-                                                    </div>
-                                                </div>
-                                                <div className="pt-4 border-t border-gray-700/50">
-                                                    <div className="text-[10px] text-gray-500 uppercase mb-2">Local Node ID</div>
-                                                    <code className="text-[10px] text-blue-300 font-mono break-all bg-black/30 p-2 rounded block">{p2pStatus?.local_peer_id || 'Generating...'}</code>
-                                                </div>
+                                <div className="p-8 space-y-6">
+                                    {/* Stat chips row */}
+                                    <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                                        <div className="bg-gray-900/50 rounded-xl p-4 border border-gray-700 flex items-center gap-4">
+                                            <div className="p-2.5 bg-green-900/30 rounded-lg"><Activity className="w-5 h-5 text-green-400" /></div>
+                                            <div>
+                                                <div className="text-[10px] text-gray-500 uppercase font-bold">Active Peers</div>
+                                                <div className="text-2xl font-black text-white">{p2pStatus?.active_peers ?? 0}</div>
                                             </div>
+                                        </div>
+                                        <div className="bg-gray-900/50 rounded-xl p-4 border border-gray-700 flex items-center gap-4">
+                                            <div className="p-2.5 bg-indigo-900/30 rounded-lg"><Database className="w-5 h-5 text-indigo-400" /></div>
+                                            <div>
+                                                <div className="text-[10px] text-gray-500 uppercase font-bold">Total Shards</div>
+                                                <div className="text-2xl font-black text-indigo-400">{p2pStatus?.total_shards_stored ?? 0}</div>
+                                            </div>
+                                        </div>
+                                        <div className="bg-gray-900/50 rounded-xl p-4 border border-gray-700">
+                                            <div className="flex justify-between text-xs mb-2">
+                                                <span className="text-gray-400 flex items-center gap-1.5"><Image className="w-3.5 h-3.5 text-blue-400" /> Photos</span>
+                                                <span className="text-white font-bold">{stats?.total_p2p_synced_images ?? 0} / {stats?.total_images ?? 0}</span>
+                                            </div>
+                                            <div className="h-2 bg-gray-800 rounded-full overflow-hidden">
+                                                <div className="h-full bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,0.5)] transition-all duration-1000" style={{ width: `${stats?.total_images ? (stats.total_p2p_synced_images / stats.total_images) * 100 : 0}%` }} />
+                                            </div>
+                                        </div>
+                                        <div className="bg-gray-900/50 rounded-xl p-4 border border-gray-700">
+                                            <div className="flex justify-between text-xs mb-2">
+                                                <span className="text-gray-400 flex items-center gap-1.5"><Video className="w-3.5 h-3.5 text-purple-400" /> Videos</span>
+                                                <span className="text-white font-bold">{stats?.total_p2p_synced_videos ?? 0} / {stats?.total_videos ?? 0}</span>
+                                            </div>
+                                            <div className="h-2 bg-gray-800 rounded-full overflow-hidden">
+                                                <div className="h-full bg-purple-500 shadow-[0_0_8px_rgba(168,85,247,0.5)] transition-all duration-1000" style={{ width: `${stats?.total_videos ? (stats.total_p2p_synced_videos / stats.total_videos) * 100 : 0}%` }} />
+                                            </div>
+                                        </div>
+                                    </div>
 
-                                            {/* Replication Progress */}
-                                            <div className="bg-gray-900/50 rounded-2xl p-6 border border-gray-700">
-                                                <h3 className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-6 flex items-center gap-2">
-                                                    <Image className="w-4 h-4 text-indigo-400" /> Replication
-                                                </h3>
-                                                <div className="space-y-6">
-                                                    <div>
-                                                        <div className="flex justify-between text-xs mb-2">
-                                                            <span className="text-gray-400">Photos Synced</span>
-                                                            <span className="text-white font-bold">{stats?.total_p2p_synced_images ?? 0} / {stats?.total_images ?? 0}</span>
-                                                        </div>
-                                                        <div className="h-2 bg-gray-800 rounded-full overflow-hidden">
-                                                            <div className="h-full bg-blue-500 shadow-[0_0_10px_rgba(59,130,246,0.5)] transition-all duration-1000" style={{ width: `${stats?.total_images ? (stats.total_p2p_synced_images / stats.total_images) * 100 : 0}%` }}></div>
-                                                        </div>
-                                                    </div>
-                                                    <div>
-                                                        <div className="flex justify-between text-xs mb-2">
-                                                            <span className="text-gray-400">Videos Synced</span>
-                                                            <span className="text-white font-bold">{stats?.total_p2p_synced_videos ?? 0} / {stats?.total_videos ?? 0}</span>
-                                                        </div>
-                                                        <div className="h-2 bg-gray-800 rounded-full overflow-hidden">
-                                                            <div className="h-full bg-purple-500 shadow-[0_0_10px_rgba(168,85,247,0.5)] transition-all duration-1000" style={{ width: `${stats?.total_videos ? (stats.total_p2p_synced_videos / stats.total_videos) * 100 : 0}%` }}></div>
-                                                        </div>
-                                                    </div>
+                                    {/* Engine info + Peers */}
+                                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                                        {/* Engine status */}
+                                        <div className="bg-gray-900/50 rounded-2xl p-6 border border-gray-700 flex flex-col gap-5">
+                                            <div className="flex justify-between items-start">
+                                                <div>
+                                                    <h3 className="text-xs font-bold text-gray-500 uppercase tracking-widest flex items-center gap-2">
+                                                        <Server className="w-4 h-4 text-purple-400" /> P2P Engine
+                                                    </h3>
+                                                    <p className="text-lg font-bold text-white mt-1">Dynamic Mesh</p>
                                                 </div>
+                                                {p2pStatus?.is_healthy === false
+                                                    ? <span className="px-3 py-1 bg-red-900/30 text-red-400 text-[10px] font-bold rounded-full border border-red-500/20">DEGRADED</span>
+                                                    : <span className="px-3 py-1 bg-green-900/30 text-green-400 text-[10px] font-bold rounded-full border border-green-500/20">ONLINE</span>
+                                                }
+                                            </div>
+                                            <div className="pt-4 border-t border-gray-700/50 mt-auto">
+                                                <div className="text-[10px] text-gray-500 uppercase mb-2">Local Node ID</div>
+                                                <code className="text-[10px] text-blue-300 font-mono break-all bg-black/30 p-2.5 rounded-lg block">{p2pStatus?.local_peer_id || 'Generating...'}</code>
                                             </div>
                                         </div>
 
-                                        {/* Peer List */}
-                                        <div className="bg-gray-900/50 rounded-2xl p-6 border border-gray-700 flex flex-col">
-                                            <h3 className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-6 flex items-center gap-2">
-                                                <Activity className="w-4 h-4 text-green-400" /> Active Peers
+                                        {/* Peers — spans 2 columns, uses 2-col internal grid */}
+                                        <div className="lg:col-span-2 bg-gray-900/50 rounded-2xl p-6 border border-gray-700">
+                                            <h3 className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-4 flex items-center gap-2">
+                                                <Activity className="w-4 h-4 text-green-400" /> Storage Nodes
                                             </h3>
-                                            <div className="flex-1 space-y-3 overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-gray-700">
-                                                {discoveredPeers.length > 0 ? discoveredPeers.map((peer) => (
-                                                    <div key={peer.peer_id} className={`border p-4 rounded-xl flex items-center justify-between group transition-colors ${peer.is_active ? 'bg-gray-800/80 border-gray-700/50 hover:border-blue-500/50' : 'bg-gray-900/40 border-gray-700/30 opacity-60'}`}>
-                                                        <div className="overflow-hidden">
-                                                            <div className="text-[9px] text-gray-500 uppercase font-black">{peer.is_active ? 'Storage Node' : 'Offline Node'}</div>
-                                                            <code className="text-xs text-gray-300 font-mono block truncate">{peer.peer_id.substring(0, 16)}...</code>
-                                                            {peer.shard_count > 0 && (
-                                                                <div className={`text-[9px] font-bold mt-1 ${peer.is_active ? 'text-indigo-400' : 'text-yellow-600'}`}>
-                                                                    {peer.shard_count} shards{!peer.is_active && ' (pending rebalance)'}
-                                                                </div>
-                                                            )}
+                                            {discoveredPeers.length > 0 ? (
+                                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                                    {discoveredPeers.map((peer) => (
+                                                        <div key={peer.peer_id} className={`border p-4 rounded-xl flex items-center justify-between group transition-colors ${peer.is_active ? 'bg-gray-800/80 border-gray-700/50 hover:border-blue-500/50' : 'bg-gray-900/40 border-gray-700/30 opacity-60'}`}>
+                                                            <div className="overflow-hidden min-w-0">
+                                                                <div className="text-[9px] text-gray-500 uppercase font-black">{peer.is_active ? 'Storage Node' : 'Offline Node'}</div>
+                                                                <code className="text-xs text-gray-300 font-mono block truncate">{peer.peer_id.substring(0, 20)}...</code>
+                                                                {peer.shard_count > 0 && (
+                                                                    <div className={`text-[9px] font-bold mt-1 ${peer.is_active ? 'text-indigo-400' : 'text-yellow-600'}`}>
+                                                                        {peer.shard_count} shards{!peer.is_active && ' (pending rebalance)'}
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                            <div className="flex flex-col items-end gap-1 ml-3 flex-shrink-0">
+                                                                <span className={`w-2.5 h-2.5 rounded-full shadow-lg ${peer.is_active ? 'bg-green-400 animate-pulse shadow-green-500/20' : 'bg-red-500 shadow-red-500/20'}`} />
+                                                                <span className="text-[9px] text-gray-500">{new Date(peer.last_seen).toLocaleTimeString()}</span>
+                                                                {!peer.is_active && (
+                                                                    <button onClick={() => handleRemoveNode(peer.peer_id, peer.shard_count)}
+                                                                        className="p-1.5 rounded-lg bg-red-900/40 hover:bg-red-600 text-red-400 hover:text-white transition-colors"
+                                                                        title="Remove offline node">
+                                                                        <Trash2 className="w-3.5 h-3.5" />
+                                                                    </button>
+                                                                )}
+                                                            </div>
                                                         </div>
-                                                        <div className="flex flex-col items-end gap-1">
-                                                            <span className={`w-2.5 h-2.5 rounded-full shadow-lg ${peer.is_active ? 'bg-green-400 animate-pulse shadow-green-500/20' : 'bg-red-500 shadow-red-500/20'}`}></span>
-                                                            <span className="text-[9px] text-gray-500">{new Date(peer.last_seen).toLocaleTimeString()}</span>
-                                                            {!peer.is_active && (
-                                                                <button onClick={() => handleRemoveNode(peer.peer_id, peer.shard_count)}
-                                                                    className="p-1.5 rounded-lg bg-red-900/40 hover:bg-red-600 text-red-400 hover:text-white transition-colors"
-                                                                    title="Remove offline node">
-                                                                    <Trash2 className="w-3.5 h-3.5" />
-                                                                </button>
-                                                            )}
-                                                        </div>
-                                                    </div>
-                                                )) : (
-                                                    <div className="text-center py-12 bg-gray-800/30 rounded-2xl border border-dashed border-gray-700">
-                                                        <AlertTriangle className="w-8 h-8 text-gray-600 mx-auto mb-3" />
-                                                        <p className="text-gray-500 text-xs font-medium">Waiting for peers...</p>
-                                                    </div>
-                                                )}
-                                            </div>
+                                                    ))}
+                                                </div>
+                                            ) : (
+                                                <div className="text-center py-12 bg-gray-800/30 rounded-2xl border border-dashed border-gray-700">
+                                                    <AlertTriangle className="w-8 h-8 text-gray-600 mx-auto mb-3" />
+                                                    <p className="text-gray-500 text-xs font-medium">Waiting for peers...</p>
+                                                </div>
+                                            )}
                                         </div>
-
-                                        {/* Android Connection */}
-                                        <AndroidConnectionQR />
-
                                     </div>
                                 </div>
                             </div>
@@ -433,9 +433,12 @@ export const Dashboard = observer(() => {
 
                         {/* --- App Setup Tab --- */}
                         {activeTab === 'app' && (
-                            <div className="max-w-sm">
-                                <AndroidConnectionQR />
-                            </div>
+                            <AndroidConnectionQR />
+                        )}
+
+                        {/* --- Users Tab --- */}
+                        {activeTab === 'users' && (
+                            <UserManagement />
                         )}
                     </>
                 )}

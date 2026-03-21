@@ -33,7 +33,6 @@ export const AndroidConnectionQR = () => {
         fetchConnectionInfo();
     }, []);
 
-    // Build URL entries (computed before early returns so copy handler can reference them)
     const { protocol, port } = window.location;
     const suffix = port ? `:${port}` : '';
     const urlEntries: { label: string; url: string }[] = [];
@@ -57,112 +56,95 @@ export const AndroidConnectionQR = () => {
 
     if (isLoading) {
         return (
-            <div className="bg-gray-700/20 rounded-xl p-6 border border-gray-600/20">
-                <div className="flex items-center justify-center">
-                    <RefreshCw className="w-5 h-5 animate-spin text-gray-400" />
-                    <span className="ml-2 text-gray-400">Loading connection info...</span>
-                </div>
+            <div className="bg-gray-800 rounded-2xl border border-gray-700 p-16 flex items-center justify-center">
+                <RefreshCw className="w-6 h-6 animate-spin text-blue-400 mr-3" />
+                <span className="text-gray-400">Loading connection info...</span>
             </div>
         );
     }
 
     if (error || !connectionInfo) {
         return (
-            <div className="bg-gray-700/20 rounded-xl p-6 border border-gray-600/20">
-                <div className="flex items-start">
-                    <AlertTriangle className="w-5 h-5 text-orange-400 mt-0.5 mr-3 flex-shrink-0" />
-                    <div>
-                        <h4 className="text-orange-300 font-semibold text-sm">Connection Info Unavailable</h4>
-                        <p className="text-orange-200/70 text-sm mt-1">{error || 'Unable to fetch connection information'}</p>
-                        <button
-                            onClick={fetchConnectionInfo}
-                            className="mt-3 px-3 py-1.5 bg-orange-600 hover:bg-orange-500 text-white text-xs rounded transition-colors"
-                        >
-                            Retry
-                        </button>
-                    </div>
-                </div>
+            <div className="bg-gray-800 rounded-2xl border border-gray-700 p-12 flex flex-col items-center justify-center gap-4">
+                <AlertTriangle className="w-10 h-10 text-orange-400" />
+                <p className="text-orange-300 font-semibold">{error || 'Unable to fetch connection information'}</p>
+                <button onClick={fetchConnectionInfo} className="px-4 py-2 bg-orange-600 hover:bg-orange-500 text-white text-sm rounded-lg transition-colors">
+                    Retry
+                </button>
             </div>
         );
     }
 
     return (
-        <div className="bg-gray-700/20 rounded-xl p-6 border border-gray-600/20">
-            <h3 className="text-sm font-semibold text-gray-300 mb-4 flex items-center uppercase tracking-wide">
-                <Smartphone className="w-4 h-4 mr-2 text-blue-400" />
-                Android App Setup
-            </h3>
-
-            <div className="space-y-4">
-                {/* QR Code */}
-                <div className="flex flex-col items-center bg-white p-4 rounded-lg">
-                    <QRCodeSVG
-                        value={qrData}
-                        size={200}
-                        level="M"
-                        includeMargin={true}
-                    />
-                    <p className="text-xs text-gray-600 mt-2 text-center">
-                        Scan with Android app to connect
-                    </p>
+        <div className="bg-gray-800 rounded-2xl border border-gray-700 overflow-hidden">
+            <div className="px-8 py-6 border-b border-gray-700 bg-gray-800/50 flex items-center gap-3">
+                <div className="p-2.5 bg-blue-900/40 rounded-xl">
+                    <Smartphone className="w-6 h-6 text-blue-400" />
                 </div>
-
-                {/* Instructions */}
-                <div className="bg-blue-900/20 border border-blue-500/30 rounded-lg p-3">
-                    <h4 className="text-blue-300 font-semibold text-xs mb-2">Quick Setup:</h4>
-                    <ol className="text-blue-200/80 text-xs space-y-1 list-decimal list-inside">
-                        <li>Open Reminisce Android app</li>
-                        <li>Tap "Scan QR Code" on login screen</li>
-                        <li>Scan this QR code</li>
-                        <li>Enter your username and password</li>
-                    </ol>
+                <div>
+                    <h2 className="text-xl font-bold text-gray-100">Android App Setup</h2>
+                    <p className="text-gray-500 text-sm">Scan to connect your device — no manual config needed</p>
                 </div>
+            </div>
 
-                {/* Connection Details */}
-                <div className="space-y-2">
-                    <div className="text-xs">
-                        <span className="text-gray-500">Node ID:</span>
-                        <code className="block text-gray-300 font-mono text-[10px] bg-gray-800/50 px-2 py-1 rounded mt-1 break-all">
-                            {connectionInfo.node_id}
-                        </code>
+            <div className="p-8">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-10 items-start">
+                    {/* Left: QR code + action buttons */}
+                    <div className="flex flex-col items-center gap-5">
+                        <div className="bg-white p-5 rounded-2xl shadow-2xl shadow-black/30">
+                            <QRCodeSVG value={qrData} size={260} level="M" includeMargin={false} />
+                        </div>
+                        <p className="text-xs text-gray-500 text-center -mt-1">
+                            Scan with the Reminisce Android app
+                        </p>
+                        <div className="flex gap-3 w-full">
+                            <button onClick={handleCopyJson} className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-gray-700 hover:bg-gray-600 text-gray-300 text-sm font-medium rounded-xl transition-colors">
+                                {copied ? <><CheckCircle className="w-4 h-4 text-green-400" /><span className="text-green-400">Copied!</span></> : <><Copy className="w-4 h-4" /><span>Copy JSON</span></>}
+                            </button>
+                            <button onClick={fetchConnectionInfo} className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded-xl transition-colors">
+                                <RefreshCw className="w-4 h-4" /><span>Refresh</span>
+                            </button>
+                        </div>
                     </div>
 
-                    {urlEntries.map(({ label, url }) => (
-                        <div key={label} className="text-xs">
-                            <span className="text-gray-500">{label}:</span>
-                            <code className="block text-green-300 font-mono text-[10px] bg-gray-800/50 px-2 py-1 rounded mt-1 break-all">
-                                {url}
-                            </code>
+                    {/* Right: instructions + connection details */}
+                    <div className="space-y-6">
+                        <div className="bg-blue-900/20 border border-blue-500/30 rounded-xl p-6">
+                            <h4 className="text-blue-300 font-bold text-sm mb-4 uppercase tracking-wide">Quick Setup</h4>
+                            <ol className="space-y-3">
+                                {[
+                                    'Install the Reminisce app on your Android device',
+                                    'Open the app and tap "Scan QR Code" on the login screen',
+                                    'Point your camera at this QR code',
+                                    'Enter your username and password to sign in',
+                                ].map((step, i) => (
+                                    <li key={i} className="flex items-start gap-3 text-sm text-blue-200/80">
+                                        <span className="flex-shrink-0 w-6 h-6 bg-blue-500/20 border border-blue-500/40 rounded-full flex items-center justify-center text-xs font-bold text-blue-300">{i + 1}</span>
+                                        {step}
+                                    </li>
+                                ))}
+                            </ol>
                         </div>
-                    ))}
+
+                        <div className="space-y-3">
+                            <h4 className="text-xs font-bold text-gray-500 uppercase tracking-widest">Connection Details</h4>
+                            <div>
+                                <div className="text-xs text-gray-500 mb-1">Node ID</div>
+                                <code className="block text-gray-300 font-mono text-[11px] bg-gray-900/60 px-3 py-2 rounded-lg border border-gray-700 break-all">
+                                    {connectionInfo.node_id}
+                                </code>
+                            </div>
+                            {urlEntries.map(({ label, url }) => (
+                                <div key={label}>
+                                    <div className="text-xs text-gray-500 mb-1">{label}</div>
+                                    <code className="block text-green-300 font-mono text-[11px] bg-gray-900/60 px-3 py-2 rounded-lg border border-gray-700 break-all">
+                                        {url}
+                                    </code>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
                 </div>
-
-                {/* Copy Button */}
-                <button
-                    onClick={handleCopyJson}
-                    className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 text-xs rounded transition-colors"
-                >
-                    {copied ? (
-                        <>
-                            <CheckCircle className="w-4 h-4 text-green-400" />
-                            <span className="text-green-400">Copied!</span>
-                        </>
-                    ) : (
-                        <>
-                            <Copy className="w-4 h-4" />
-                            <span>Copy JSON</span>
-                        </>
-                    )}
-                </button>
-
-                {/* Refresh Button */}
-                <button
-                    onClick={fetchConnectionInfo}
-                    className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs rounded transition-colors"
-                >
-                    <RefreshCw className="w-4 h-4" />
-                    <span>Refresh Connection Info</span>
-                </button>
             </div>
         </div>
     );

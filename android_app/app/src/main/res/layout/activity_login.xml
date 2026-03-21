@@ -84,7 +84,102 @@
 
         </LinearLayout>
 
-        <!-- ===================== Phase 2: Authentication ===================== -->
+        <!-- ===================== Phase 2: First-Run Setup ===================== -->
+        <LinearLayout
+            android:id="@+id/setupPhaseLayout"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/backToServerFromSetupButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="&lt; Change Server"
+                android:layout_marginBottom="8dp"
+                android:layout_gravity="start"
+                style="@style/Widget.MaterialComponents.Button.TextButton" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Create Admin Account"
+                android:textSize="20sp"
+                android:textStyle="bold"
+                android:layout_marginBottom="4dp"
+                android:textColor="?android:attr/textColorPrimary" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="No users found. Set up your administrator account."
+                android:textSize="14sp"
+                android:layout_marginBottom="24dp"
+                android:textColor="?android:attr/textColorSecondary" />
+
+            <com.google.android.material.textfield.TextInputLayout
+                android:id="@+id/setupUsernameLayout"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="16dp"
+                android:hint="Username"
+                app:startIconDrawable="@android:drawable/ic_menu_myplaces">
+
+                <com.google.android.material.textfield.TextInputEditText
+                    android:id="@+id/setupUsernameInput"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:inputType="text"
+                    android:maxLines="1" />
+            </com.google.android.material.textfield.TextInputLayout>
+
+            <com.google.android.material.textfield.TextInputLayout
+                android:id="@+id/setupPasswordLayout"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="16dp"
+                android:hint="Password (min 8 characters)"
+                app:startIconDrawable="@android:drawable/ic_lock_lock"
+                app:endIconMode="password_toggle">
+
+                <com.google.android.material.textfield.TextInputEditText
+                    android:id="@+id/setupPasswordInput"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:inputType="textPassword"
+                    android:maxLines="1" />
+            </com.google.android.material.textfield.TextInputLayout>
+
+            <com.google.android.material.textfield.TextInputLayout
+                android:id="@+id/setupConfirmPasswordLayout"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="24dp"
+                android:hint="Confirm Password"
+                app:startIconDrawable="@android:drawable/ic_lock_lock"
+                app:endIconMode="password_toggle">
+
+                <com.google.android.material.textfield.TextInputEditText
+                    android:id="@+id/setupConfirmPasswordInput"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:inputType="textPassword"
+                    android:maxLines="1" />
+            </com.google.android.material.textfield.TextInputLayout>
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/setupActionButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Create Admin Account"
+                android:padding="16dp"
+                android:textSize="16sp"
+                style="@style/Widget.MaterialComponents.Button" />
+
+        </LinearLayout>
+
+        <!-- ===================== Phase 3: Login ===================== -->
         <LinearLayout
             android:id="@+id/authPhaseLayout"
             android:layout_width="match_parent"
@@ -102,25 +197,14 @@
                 android:layout_gravity="start"
                 style="@style/Widget.MaterialComponents.Button.TextButton" />
 
-            <!-- Login / Register tabs -->
-            <com.google.android.material.tabs.TabLayout
-                android:id="@+id/authTabLayout"
-                android:layout_width="match_parent"
+            <TextView
+                android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
+                android:text="Sign In"
+                android:textSize="20sp"
+                android:textStyle="bold"
                 android:layout_marginBottom="24dp"
-                app:tabMode="fixed"
-                app:tabGravity="fill">
-
-                <com.google.android.material.tabs.TabItem
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="@string/login" />
-
-                <com.google.android.material.tabs.TabItem
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="@string/register" />
-            </com.google.android.material.tabs.TabLayout>
+                android:textColor="?android:attr/textColorPrimary" />
 
             <!-- Username Input -->
             <com.google.android.material.textfield.TextInputLayout
@@ -136,24 +220,6 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:inputType="text"
-                    android:maxLines="1" />
-            </com.google.android.material.textfield.TextInputLayout>
-
-            <!-- Email Input (registration only) -->
-            <com.google.android.material.textfield.TextInputLayout
-                android:id="@+id/emailLayout"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginBottom="16dp"
-                android:hint="@string/email"
-                android:visibility="gone"
-                app:startIconDrawable="@android:drawable/ic_dialog_email">
-
-                <com.google.android.material.textfield.TextInputEditText
-                    android:id="@+id/emailInput"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:inputType="textEmailAddress"
                     android:maxLines="1" />
             </com.google.android.material.textfield.TextInputLayout>
 
@@ -175,7 +241,7 @@
                     android:maxLines="1" />
             </com.google.android.material.textfield.TextInputLayout>
 
-            <!-- Login / Register action button -->
+            <!-- Login action button -->
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/actionButton"
                 android:layout_width="match_parent"

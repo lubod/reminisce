@@ -6,7 +6,6 @@ import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import android.text.method.ScrollingMovementMethod
-import android.util.Patterns
 import android.view.View
 import android.widget.ArrayAdapter
 import android.widget.Button
@@ -21,7 +20,6 @@ import org.openreminisce.app.util.LogCollector
 import org.openreminisce.app.util.PreferenceHelper
 import org.openreminisce.app.util.SecureStorageHelper
 import com.google.android.material.button.MaterialButton
-import com.google.android.material.tabs.TabLayout
 import com.google.android.material.textfield.MaterialAutoCompleteTextView
 import com.google.android.material.textfield.TextInputEditText
 import com.google.android.material.textfield.TextInputLayout
@@ -33,29 +31,41 @@ import kotlinx.coroutines.withContext
 class LoginActivity : AppCompatActivity() {
     companion object {
         private const val TAG = "LoginActivity"
-        private const val MODE_LOGIN = 0
-        private const val MODE_REGISTER = 1
         private const val PHASE_SERVER = 0
-        private const val PHASE_AUTH = 1
+        private const val PHASE_SETUP = 1
+        private const val PHASE_LOGIN = 2
     }
 
     // Phase containers
     private lateinit var serverPhaseLayout: LinearLayout
+    private lateinit var setupPhaseLayout: LinearLayout
     private lateinit var authPhaseLayout: LinearLayout
     private lateinit var continueButton: MaterialButton
     private lateinit var backToServerButton: MaterialButton
+    private lateinit var backToServerFromSetupButton: MaterialButton
 
-    private lateinit var tabLayout: TabLayout
+    // Server phase
     private lateinit var serverUrlLayout: TextInputLayout
     private lateinit var serverUrlInput: MaterialAutoCompleteTextView
+    private lateinit var scanQrButton: Button
+
+    // Setup phase
+    private lateinit var setupUsernameLayout: TextInputLayout
+    private lateinit var setupUsernameInput: TextInputEditText
+    private lateinit var setupPasswordLayout: TextInputLayout
+    private lateinit var setupPasswordInput: TextInputEditText
+    private lateinit var setupConfirmPasswordLayout: TextInputLayout
+    private lateinit var setupConfirmPasswordInput: TextInputEditText
+    private lateinit var setupActionButton: MaterialButton
+
+    // Login phase
     private lateinit var usernameLayout: TextInputLayout
     private lateinit var usernameInput: TextInputEditText
-    private lateinit var emailLayout: TextInputLayout
-    private lateinit var emailInput: TextInputEditText
     private lateinit var passwordLayout: TextInputLayout
     private lateinit var passwordInput: TextInputEditText
     private lateinit var actionButton: Button
-    private lateinit var scanQrButton: Button
+
+    // Shared
     private lateinit var progressBar: ProgressBar
     private lateinit var errorText: TextView
 
@@ -69,7 +79,6 @@ class LoginActivity : AppCompatActivity() {
     private lateinit var testConnectionButton: MaterialButton
     private var logsVisible = false
 
-    private var currentMode = MODE_LOGIN
     private var currentPhase = PHASE_SERVER
 
     private val logListener: (String) -> Unit = { logLine ->
@@ -93,7 +102,7 @@ class LoginActivity : AppCompatActivity() {
                     serverUrlInput.setText(serverUrl)
                     refreshServerUrlAdapter()
                     Toast.makeText(this, "Server URL loaded", Toast.LENGTH_SHORT).show()
-                    showAuthPhase()
+                    advanceFromServer()
                 }
             }
         }
@@ -118,21 +127,30 @@ class LoginActivity : AppCompatActivity() {
 
     private fun initializeViews() {
         serverPhaseLayout = findViewById(R.id.serverPhaseLayout)
+        setupPhaseLayout = findViewById(R.id.setupPhaseLayout)
         authPhaseLayout = findViewById(R.id.authPhaseLayout)
         continueButton = findViewById(R.id.continueButton)
         backToServerButton = findViewById(R.id.backToServerButton)
+        backToServerFromSetupButton = findViewById(R.id.backToServerFromSetupButton)
 
-        tabLayout = findViewById(R.id.authTabLayout)
         serverUrlLayout = findViewById(R.id.serverUrlLayout)
         serverUrlInput = findViewById(R.id.serverUrlInput)
-usernameLayout = findViewById(R.id.usernameLayout)
+        scanQrButton = findViewById(R.id.scanQrButton)
+
+        setupUsernameLayout = findViewById(R.id.setupUsernameLayout)
+        setupUsernameInput = findViewById(R.id.setupUsernameInput)
+        setupPasswordLayout = findViewById(R.id.setupPasswordLayout)
+        setupPasswordInput = findViewById(R.id.setupPasswordInput)
+        setupConfirmPasswordLayout = findViewById(R.id.setupConfirmPasswordLayout)
+        setupConfirmPasswordInput = findViewById(R.id.setupConfirmPasswordInput)
+        setupActionButton = findViewById(R.id.setupActionButton)
+
+        usernameLayout = findViewById(R.id.usernameLayout)
         usernameInput = findViewById(R.id.usernameInput)
-        emailLayout = findViewById(R.id.emailLayout)
-        emailInput = findViewById(R.id.emailInput)
         passwordLayout = findViewById(R.id.passwordLayout)
         passwordInput = findViewById(R.id.passwordInput)
         actionButton = findViewById(R.id.actionButton)
-        scanQrButton = findViewById(R.id.scanQrButton)
+
         progressBar = findViewById(R.id.progressBar)
         errorText = findViewById(R.id.errorText)
 
@@ -167,30 +185,20 @@ usernameLayout = findViewById(R.id.usernameLayout)
             }
             serverUrlLayout.error = null
             PreferenceHelper.setServerUrl(this, serverUrl)
-            showAuthPhase()
+            advanceFromServer()
         }
 
-        backToServerButton.setOnClickListener {
-            showServerPhase()
-        }
+        backToServerButton.setOnClickListener { showServerPhase() }
+        backToServerFromSetupButton.setOnClickListener { showServerPhase() }
 
-        tabLayout.addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
-            override fun onTabSelected(tab: TabLayout.Tab?) {
-                when (tab?.position) {
-                    MODE_LOGIN -> switchToLoginMode()
-                    MODE_REGISTER -> switchToRegisterMode()
-                }
-            }
-            override fun onTabUnselected(tab: TabLayout.Tab?) {}
-            override fun onTabReselected(tab: TabLayout.Tab?) {}
-        })
+        setupActionButton.setOnClickListener {
+            hideError()
+            performSetup()
+        }
 
         actionButton.setOnClickListener {
             hideError()
-            when (currentMode) {
-                MODE_LOGIN -> performLogin()
-                MODE_REGISTER -> performRegistration()
-            }
+            performLogin()
         }
 
         scanQrButton.setOnClickListener {
@@ -207,16 +215,43 @@ usernameLayout = findViewById(R.id.usernameLayout)
         testConnectionButton.setOnClickListener { testConnection() }
     }
 
+    /** Check setup status and show either setup phase or login phase. */
+    private fun advanceFromServer() {
+        val serverUrl = PreferenceHelper.getServerUrl(this)
+        showLoading()
+        CoroutineScope(Dispatchers.IO).launch {
+            val needsSetup = try {
+                AuthHelper.checkSetupStatus(serverUrl)
+            } catch (e: Exception) {
+                false
+            }
+            withContext(Dispatchers.Main) {
+                hideLoading()
+                if (needsSetup) showSetupPhase() else showLoginPhase()
+            }
+        }
+    }
+
     private fun showServerPhase() {
         currentPhase = PHASE_SERVER
         serverPhaseLayout.visibility = View.VISIBLE
+        setupPhaseLayout.visibility = View.GONE
         authPhaseLayout.visibility = View.GONE
         hideError()
     }
 
-    private fun showAuthPhase() {
-        currentPhase = PHASE_AUTH
+    private fun showSetupPhase() {
+        currentPhase = PHASE_SETUP
         serverPhaseLayout.visibility = View.GONE
+        setupPhaseLayout.visibility = View.VISIBLE
+        authPhaseLayout.visibility = View.GONE
+        hideError()
+    }
+
+    private fun showLoginPhase() {
+        currentPhase = PHASE_LOGIN
+        serverPhaseLayout.visibility = View.GONE
+        setupPhaseLayout.visibility = View.GONE
         authPhaseLayout.visibility = View.VISIBLE
         hideError()
     }
@@ -244,10 +279,8 @@ usernameLayout = findViewById(R.id.usernameLayout)
             Toast.makeText(this, "Enter Server URL first", Toast.LENGTH_SHORT).show()
             return
         }
-
         Toast.makeText(this, "Testing connection...", Toast.LENGTH_SHORT).show()
         LogCollector.i(TAG, "Testing connection to $serverUrl")
-
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 val ok = AuthHelper.pingServer(serverUrl)
@@ -273,33 +306,63 @@ usernameLayout = findViewById(R.id.usernameLayout)
         Toast.makeText(this, "Logs copied to clipboard", Toast.LENGTH_SHORT).show()
     }
 
-    private fun switchToLoginMode() {
-        currentMode = MODE_LOGIN
-        emailLayout.visibility = View.GONE
-        actionButton.text = getString(R.string.login)
-        hideError()
-    }
+    private fun performSetup() {
+        val username = setupUsernameInput.text.toString().trim()
+        val password = setupPasswordInput.text.toString()
+        val confirm = setupConfirmPasswordInput.text.toString()
 
-    private fun switchToRegisterMode() {
-        currentMode = MODE_REGISTER
-        emailLayout.visibility = View.VISIBLE
-        actionButton.text = getString(R.string.register)
-        hideError()
+        setupUsernameLayout.error = null
+        setupPasswordLayout.error = null
+        setupConfirmPasswordLayout.error = null
+
+        if (username.length < 3) { setupUsernameLayout.error = "Min 3 characters"; return }
+        if (password.length < 8) { setupPasswordLayout.error = "Min 8 characters"; return }
+        if (password != confirm) { setupConfirmPasswordLayout.error = "Passwords do not match"; return }
+
+        val serverUrl = PreferenceHelper.getServerUrl(this)
+        showLoading()
+
+        CoroutineScope(Dispatchers.IO).launch {
+            val error = AuthHelper.setupAdmin(username, password, serverUrl)
+            if (error == null) {
+                // Auto-login after setup
+                val loginOk = AuthHelper.loginWithCredentials(this@LoginActivity, username, password, serverUrl)
+                withContext(Dispatchers.Main) {
+                    hideLoading()
+                    if (loginOk) {
+                        SecureStorageHelper.setUsername(this@LoginActivity, username)
+                        SecureStorageHelper.setPassword(this@LoginActivity, password)
+                        navigateToMain()
+                    } else {
+                        showError("Account created. Please sign in.")
+                        showLoginPhase()
+                    }
+                }
+            } else {
+                withContext(Dispatchers.Main) {
+                    hideLoading()
+                    showError(error)
+                }
+            }
+        }
     }
 
     private fun performLogin() {
-        if (!validateInputs()) return
-
-        val serverUrl = PreferenceHelper.getServerUrl(this)
         val username = usernameInput.text.toString().trim()
         val password = passwordInput.text.toString()
 
+        usernameLayout.error = null
+        passwordLayout.error = null
+
+        if (username.isEmpty()) { usernameLayout.error = getString(R.string.username_required); return }
+        if (password.isEmpty()) { passwordLayout.error = getString(R.string.password_required); return }
+
+        val serverUrl = PreferenceHelper.getServerUrl(this)
         showLoading()
 
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 val result = AuthHelper.loginWithCredentials(this@LoginActivity, username, password, serverUrl)
-
                 if (result) {
                     SecureStorageHelper.setUsername(this@LoginActivity, username)
                     SecureStorageHelper.setPassword(this@LoginActivity, password)
@@ -323,86 +386,28 @@ usernameLayout = findViewById(R.id.usernameLayout)
         }
     }
 
-    private fun performRegistration() {
-        if (!validateInputs()) return
-
-        val serverUrl = PreferenceHelper.getServerUrl(this)
-        val username = usernameInput.text.toString().trim()
-        val email = emailInput.text.toString().trim()
-        val password = passwordInput.text.toString()
-
-        showLoading()
-
-        CoroutineScope(Dispatchers.IO).launch {
-            try {
-                val result = AuthHelper.registerUser(username, email, password, serverUrl)
-                withContext(Dispatchers.Main) {
-                    hideLoading()
-                    if (result) {
-                        SecureStorageHelper.setUsername(this@LoginActivity, username)
-                        SecureStorageHelper.setPassword(this@LoginActivity, password)
-                        SecureStorageHelper.setEmail(this@LoginActivity, email)
-                        performLogin()
-                    } else {
-                        showError(getString(R.string.registration_failed, "Registration failed"))
-                    }
-                }
-            } catch (e: Exception) {
-                LogCollector.e(TAG, "Error during registration", e)
-                withContext(Dispatchers.Main) {
-                    hideLoading()
-                    showError(getString(R.string.registration_failed, e.message ?: "Unknown error"))
-                }
-            }
-        }
-    }
-
-    private fun validateInputs(): Boolean {
-        var isValid = true
-
-        val username = usernameInput.text.toString().trim()
-        if (username.isEmpty()) {
-            usernameLayout.error = getString(R.string.username_required)
-            isValid = false
-        } else {
-            usernameLayout.error = null
-        }
-
-        val password = passwordInput.text.toString()
-        if (password.isEmpty()) {
-            passwordLayout.error = getString(R.string.password_required)
-            isValid = false
-        } else {
-            passwordLayout.error = null
-        }
-
-        if (currentMode == MODE_REGISTER) {
-            val email = emailInput.text.toString().trim()
-            if (email.isEmpty() || !Patterns.EMAIL_ADDRESS.matcher(email).matches()) {
-                emailLayout.error = getString(R.string.invalid_email)
-                isValid = false
-            } else {
-                emailLayout.error = null
-            }
-        }
-
-        return isValid
-    }
-
     private fun showLoading() {
         progressBar.visibility = View.VISIBLE
         actionButton.isEnabled = false
+        setupActionButton.isEnabled = false
+        continueButton.isEnabled = false
         usernameInput.isEnabled = false
-        emailInput.isEnabled = false
         passwordInput.isEnabled = false
+        setupUsernameInput.isEnabled = false
+        setupPasswordInput.isEnabled = false
+        setupConfirmPasswordInput.isEnabled = false
     }
 
     private fun hideLoading() {
         progressBar.visibility = View.GONE
         actionButton.isEnabled = true
+        setupActionButton.isEnabled = true
+        continueButton.isEnabled = true
         usernameInput.isEnabled = true
-        emailInput.isEnabled = true
         passwordInput.isEnabled = true
+        setupUsernameInput.isEnabled = true
+        setupPasswordInput.isEnabled = true
+        setupConfirmPasswordInput.isEnabled = true
     }
 
     private fun showError(message: String) {

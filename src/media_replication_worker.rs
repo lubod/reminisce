@@ -236,17 +236,21 @@ async fn replicate_single_file(
 
     // 4. Update Database
     let mut client = pool.get().await?;
-    let trans = client.transaction().await?;
 
-    for (idx, node_id, addr_str, shard_hash) in final_results.iter() {
-        // Upsert node into p2p_nodes (satisfies FK + makes node visible in UI)
-        trans.execute(
+    // Upsert nodes first in a separate statement (outside the per-file transaction)
+    // so concurrent file transactions don't race on the same p2p_nodes rows.
+    for (_, node_id, addr_str, _) in final_results.iter() {
+        client.execute(
             "INSERT INTO p2p_nodes (node_id, public_addr, is_active)
              VALUES ($1, $2, TRUE)
              ON CONFLICT (node_id) DO UPDATE SET public_addr = $2, is_active = TRUE, last_seen = NOW()",
             &[node_id, addr_str],
         ).await?;
+    }
 
+    let trans = client.transaction().await?;
+
+    for (idx, node_id, _addr_str, shard_hash) in final_results.iter() {
         trans.execute(
             "INSERT INTO p2p_shards (file_hash, shard_index, node_id, shard_hash)
              VALUES ($1, $2, $3, $4)

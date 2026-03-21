@@ -1,4 +1,4 @@
-use actix_web::{ post, web, HttpResponse };
+use actix_web::{ get, post, web, HttpResponse };
 use jsonwebtoken::{ encode, Algorithm, EncodingKey, Header };
 use log::{ info, warn };
 use serde::{ Deserialize, Serialize };
@@ -107,85 +107,86 @@ pub struct UserLoginRequest {
     pub password: String,
 }
 
-// User registration endpoint
-#[utoipa::path(
-    post,
-    path = "/auth/register",
-    request_body = RegisterRequest,
-    responses(
-        (status = 201, description = "User registered successfully", body = serde_json::Value),
-        (status = 400, description = "Invalid input or user already exists"),
-        (status = 500, description = "Server error")
-    )
-)]
+// Public registration is disabled — users are created by admins only.
 #[post("/auth/register")]
-pub async fn register_user(
-    req_body: web::Json<RegisterRequest>,
+pub async fn register_user() -> HttpResponse {
+    HttpResponse::Forbidden().json(serde_json::json!({
+        "status": "error",
+        "message": "Registration is disabled. Contact your administrator."
+    }))
+}
+
+// --- Setup endpoints (first-run only) ---
+
+#[derive(Serialize, Deserialize)]
+pub struct SetupRequest {
+    pub username: String,
+    pub password: String,
+}
+
+/// Returns whether the server needs initial setup (no users exist yet).
+#[get("/auth/setup-status")]
+pub async fn setup_status(pool: web::Data<MainDbPool>) -> HttpResponse {
+    let client = match pool.0.get().await {
+        Ok(c) => c,
+        Err(_) => return HttpResponse::InternalServerError().finish(),
+    };
+    match client.query_one("SELECT COUNT(*) FROM users", &[]).await {
+        Ok(row) => {
+            let count: i64 = row.get(0);
+            HttpResponse::Ok().json(serde_json::json!({ "needs_setup": count == 0 }))
+        }
+        Err(_) => HttpResponse::InternalServerError().finish(),
+    }
+}
+
+/// Creates the first admin account. Returns 403 if any user already exists.
+#[post("/auth/setup")]
+pub async fn setup_admin(
+    req_body: web::Json<SetupRequest>,
     pool: web::Data<MainDbPool>,
 ) -> HttpResponse {
-    // Validate input
-    if let Err(errors) = req_body.validate() {
+    if req_body.username.len() < 3 || req_body.password.len() < 8 {
         return HttpResponse::BadRequest().json(serde_json::json!({
             "status": "error",
-            "message": "Validation failed",
-            "errors": errors.to_string()
+            "message": "Username must be ≥3 chars and password ≥8 chars"
         }));
     }
 
-    // Hash password
-    let password_hash = match hash_password(&req_body.password) {
-        Ok(hash) => hash,
-        Err(e) => {
-            warn!("Failed to hash password: {:?}", e);
-            return HttpResponse::InternalServerError().json(serde_json::json!({
-                "status": "error",
-                "message": "Failed to process password"
-            }));
-        }
-    };
-
-    // Insert user into database
     let client = match pool.0.get().await {
-        Ok(client) => client,
-        Err(e) => {
-            warn!("Failed to get database connection: {:?}", e);
-            return HttpResponse::InternalServerError().json(serde_json::json!({
-                "status": "error",
-                "message": "Database connection failed"
-            }));
-        }
+        Ok(c) => c,
+        Err(_) => return HttpResponse::InternalServerError().finish(),
     };
 
-    let query = "INSERT INTO users (username, email, password_hash, role) VALUES ($1, $2, $3, 'user') RETURNING id";
+    let row = client.query_one("SELECT COUNT(*) FROM users", &[]).await.unwrap();
+    let count: i64 = row.get(0);
+    if count > 0 {
+        return HttpResponse::Forbidden().json(serde_json::json!({
+            "status": "error",
+            "message": "Setup already completed"
+        }));
+    }
 
-    match instrumented_query_one(&client, query, &[&req_body.username, &req_body.email, &password_hash], "register_user").await {
-        Ok(row) => {
-            let user_id: Uuid = row.get("id");
-            info!("User registered successfully: {}", req_body.username);
+    let password_hash = match hash_password(&req_body.password) {
+        Ok(h) => h,
+        Err(_) => return HttpResponse::InternalServerError().finish(),
+    };
 
-            // Increment registration metrics
+    let email = format!("{}@local", req_body.username);
+    match client.execute(
+        "INSERT INTO users (username, email, password_hash, role) VALUES ($1, $2, $3, 'admin')",
+        &[&req_body.username, &email, &password_hash],
+    ).await {
+        Ok(_) => {
+            info!("Initial admin account created: {}", req_body.username);
             USER_REGISTRATIONS_TOTAL.inc();
-
-            HttpResponse::Created().json(serde_json::json!({
-                "status": "success",
-                "message": "User registered successfully",
-                "user_id": user_id.to_string()
-            }))
+            HttpResponse::Created().json(serde_json::json!({ "status": "ok" }))
         }
         Err(e) => {
-            if e.to_string().contains("duplicate key") {
-                warn!("User already exists: {}", req_body.username);
-                HttpResponse::BadRequest().json(serde_json::json!({
-                    "status": "error",
-                    "message": "Username or email already exists"
-                }))
-            } else {
-                warn!("Database error during registration: {:?}", e);
-                HttpResponse::InternalServerError().json(serde_json::json!({
-                    "status": "error",
-                    "message": "Registration failed"
-                }))
-            }
+            warn!("Setup failed: {:?}", e);
+            HttpResponse::InternalServerError().json(serde_json::json!({
+                "status": "error", "message": "Setup failed"
+            }))
         }
     }
 }

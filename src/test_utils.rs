@@ -79,12 +79,22 @@ impl TestDatabase {
             admin_config: admin_url,
         };
 
-        // Run schema migrations on the fresh database
-        instance.run_migrations().await?;
-        
+        // Run schema migrations and seed the test user on the fresh database
+        instance.run_migrations_with_seed().await?;
+
         // Ensure the database is fully ready by attempting a simple query
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
+        Ok(instance)
+    }
+
+    /// Creates a fresh isolated test database with schema only — no seeded users.
+    /// Use this for tests that require an empty users table (e.g. first-run setup tests).
+    pub async fn new_empty() -> Result<Self, Box<dyn std::error::Error>> {
+        let instance = Self::new().await?;
+        // Remove the seeded test user so the DB is truly empty for setup flow tests
+        let client = instance.pool.get().await?;
+        client.execute("DELETE FROM users", &[]).await?;
         Ok(instance)
     }
 
@@ -97,6 +107,21 @@ impl TestDatabase {
             .map_err(|e| format!("Failed to read db/init.sql: {}", e))?;
 
         client.batch_execute(&sql).await?;
+        Ok(())
+    }
+
+    /// Runs migrations AND seeds the fixed-UUID test user needed by most integration tests.
+    async fn run_migrations_with_seed(&self) -> Result<(), Box<dyn std::error::Error>> {
+        self.run_migrations().await?;
+        let client = self.pool.get().await?;
+        // password: "admin123"
+        client.execute(
+            "INSERT INTO users (id, username, email, password_hash, role) \
+             VALUES ('550e8400-e29b-41d4-a716-446655440000', 'test-user', 'test@localhost', \
+             '$argon2id$v=19$m=19456,t=2,p=1$ykODG4Kjv3ZOijtRLuNlFA$+6QnBbvOF+uWMm/po/O6mEZc9I9sZ/VBzi0fnp95ZnM', \
+             'admin') ON CONFLICT (id) DO NOTHING",
+            &[],
+        ).await?;
         Ok(())
     }
 
@@ -159,6 +184,15 @@ pub async fn setup_test_database() -> Pool {
         .expect("Failed to create test database")
         .pool()
         .clone()
+}
+
+/// Creates a test database with schema only (no seeded users). Use for first-run setup tests.
+pub async fn setup_empty_test_database_with_instance() -> (Pool, TestDatabase) {
+    let test_db = TestDatabase::new_empty()
+        .await
+        .expect("Failed to create empty test database");
+    let pool = test_db.pool().clone();
+    (pool, test_db)
 }
 
 /// Helper function to create a test database instance that can be kept alive for the duration of a test

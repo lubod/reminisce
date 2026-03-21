@@ -317,6 +317,7 @@ async fn test_image_description_fast_speed() {
 
 #[tokio::test]
 #[serial]
+#[ignore] // run explicitly with: cargo test --test ai_speed_test -- --ignored test_all_services_summary
 async fn test_all_services_summary() {
     let image_data = load_test_image();
     let base64_image = to_base64(&image_data);

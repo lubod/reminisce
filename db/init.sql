@@ -22,29 +22,6 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 
--- Insert default admin user
--- Password: "admin123" (CHANGE IMMEDIATELY AFTER FIRST LOGIN!)
--- Hash generated using Argon2::default() with random salt
-INSERT INTO users (username, email, password_hash, role)
-VALUES (
-    'admin',
-    'admin@localhost',
-    '$argon2id$v=19$m=19456,t=2,p=1$ykODG4Kjv3ZOijtRLuNlFA$+6QnBbvOF+uWMm/po/O6mEZc9I9sZ/VBzi0fnp95ZnM',
-    'admin'
-)
-ON CONFLICT (username) DO NOTHING;
-
--- Insert test user for integration tests (with specific UUID)
-INSERT INTO users (id, username, email, password_hash, role)
-VALUES (
-    '550e8400-e29b-41d4-a716-446655440000',
-    'test-user',
-    'test@localhost',
-    '$argon2id$v=19$m=19456,t=2,p=1$ykODG4Kjv3ZOijtRLuNlFA$+6QnBbvOF+uWMm/po/O6mEZc9I9sZ/VBzi0fnp95ZnM',
-    'admin'
-)
-ON CONFLICT (id) DO NOTHING;
-
 -- Create the tables if they don't exist (same as schema.sql)
 CREATE TABLE IF NOT EXISTS images (
     deviceid VARCHAR(255) NOT NULL,

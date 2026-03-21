@@ -46,6 +46,7 @@ pub mod services {
     pub mod proxy_manager;
     pub mod duplicates;
     pub mod quality;
+    pub mod user_management;
 }
 
 use crate::config::Config;
@@ -76,7 +77,8 @@ async fn metrics_handler() -> HttpResponse {
     }
 }
 
-pub use crate::services::auth::{register_user, user_login, Claims};
+pub use crate::services::auth::{register_user, user_login, setup_status, setup_admin, Claims};
+pub use crate::services::user_management::{list_users, create_user, update_user, delete_user};
 pub use crate::services::health::{ping, health_check, HealthCheckResponse};
 pub use crate::services::existence_check::{check_image_exists, check_video_exists};
 pub use crate::services::upload::{upload_image, upload_video, upload_image_metadata, upload_video_metadata, batch_upload_image, check_images_exist_batch, check_videos_exist_batch, batch_check_images, batch_check_videos};
@@ -93,7 +95,6 @@ pub use crate::services::import_dir::import_directory;
 #[derive(OpenApi)]
 #[openapi(
     paths(
-        crate::services::auth::register_user,
         crate::services::auth::user_login,
         crate::services::health::ping,
         crate::services::health::health_check,
@@ -314,6 +315,11 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
     let geotagging_pool = db::create_pool_with_options(&config.geotagging_database_url, pool_options)
         .expect("Failed to create geotagging database pool");
 
+    // Apply idempotent schema migrations on every startup
+    if let Err(e) = db::run_migrations(&pool).await {
+        error!("DB migration failed: {}", e);
+    }
+
     let main_pool = db::MainDbPool(pool.clone());
     let geo_pool = db::GeotaggingDbPool(geotagging_pool.clone());
 
@@ -513,6 +519,12 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
                 web::scope("/api")
                     .service(register_user)
                     .service(user_login)
+                    .service(setup_status)
+                    .service(setup_admin)
+                    .service(list_users)
+                    .service(create_user)
+                    .service(update_user)
+                    .service(delete_user)
                     .service(check_image_exists)
                     .service(check_video_exists)
                     .service(upload_image)

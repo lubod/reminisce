@@ -1,6 +1,6 @@
 use reminisce::services::thumbnail::ThumbnailsResponse;
 use tokio::fs;
-use reminisce::services::auth::{RegisterRequest, UserLoginRequest};
+use reminisce::services::auth::UserLoginRequest;
 use actix_web::{test, App, web};
 
 mod common;
@@ -11,81 +11,66 @@ use common::multipart_builder;
 async fn test_user_isolation_workflow() {
     common::init_log();
     let config = utils::create_test_config();
-    let (pool, _db_instance) = reminisce::test_utils::setup_test_database_with_instance().await;
+    let (pool, _db_instance) = reminisce::test_utils::setup_empty_test_database_with_instance().await;
     let main_pool = utils::wrap_main_pool(pool.clone());
     let geo_pool = utils::create_mock_geotagging_pool(pool.clone());
-    
+
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(main_pool.clone()))
             .app_data(web::Data::new(geo_pool.clone()))
             .app_data(web::Data::new(config.clone()))
-            .service(reminisce::services::auth::register_user)
+            .service(reminisce::services::auth::setup_admin)
             .service(reminisce::services::auth::user_login)
+            .service(reminisce::services::user_management::create_user)
             .service(reminisce::services::upload::upload_image)
             .service(reminisce::services::thumbnail::list_all_media_thumbnails)
             .service(reminisce::services::media::get_image_metadata)
     ).await;
 
-    // 1. Register User A and User B
-    let user_a_creds = RegisterRequest {
-        username: "user_a".to_string(),
-        email: "user_a@example.com".to_string(),
-        password: "password123".to_string(),
-    };
-    let user_b_creds = RegisterRequest {
-        username: "user_b".to_string(),
-        email: "user_b@example.com".to_string(),
-        password: "password123".to_string(),
-    };
-
+    // 1. Create User A via setup (first admin), then User B via admin create_user
     let req = test::TestRequest::post()
-        .uri("/auth/register")
-        .set_json(&user_a_creds)
+        .uri("/auth/setup")
+        .set_json(&serde_json::json!({"username": "user_a", "password": "password123"}))
         .to_request();
     let resp = test::call_service(&app, req).await;
     assert_eq!(resp.status(), actix_web::http::StatusCode::CREATED);
 
-    let req = test::TestRequest::post()
-        .uri("/auth/register")
-        .set_json(&user_b_creds)
-        .to_request();
-    let resp = test::call_service(&app, req).await;
-    assert_eq!(resp.status(), actix_web::http::StatusCode::CREATED);
-
-    // 2. Login to get tokens
-    let login_a = UserLoginRequest {
-        username: "user_a".to_string(),
-        password: "password123".to_string(),
-    };
+    // Login as user_a (admin) to get token for creating user_b
     let req = test::TestRequest::post()
         .uri("/auth/user-login")
-        .set_json(&login_a)
+        .set_json(&UserLoginRequest { username: "user_a".to_string(), password: "password123".to_string() })
         .to_request();
     let resp = test::call_service(&app, req).await;
     let body_a: serde_json::Value = test::read_body_json(resp).await;
-    let token_a = body_a["access_token"].as_str().unwrap();
+    let token_a = body_a["access_token"].as_str().unwrap().to_string();
 
-    let login_b = UserLoginRequest {
-        username: "user_b".to_string(),
-        password: "password123".to_string(),
-    };
+    // Create user_b via admin endpoint
+    let req = test::TestRequest::post()
+        .uri("/users")
+        .insert_header(("Authorization", format!("Bearer {}", token_a)))
+        .set_json(&serde_json::json!({"username": "user_b", "password": "password123", "role": "user"}))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), actix_web::http::StatusCode::CREATED);
+
+    // Login as user_b
     let req = test::TestRequest::post()
         .uri("/auth/user-login")
-        .set_json(&login_b)
+        .set_json(&UserLoginRequest { username: "user_b".to_string(), password: "password123".to_string() })
         .to_request();
     let resp = test::call_service(&app, req).await;
     let body_b: serde_json::Value = test::read_body_json(resp).await;
-    let token_b = body_b["access_token"].as_str().unwrap();
+    let token_b = body_b["access_token"].as_str().unwrap().to_string();
 
-    // 3. User A uploads an image
+    // 2. User A uploads an image
     let image_data = fs::read("tests/test_image.jpg").await.unwrap();
     let (payload, content_type) = multipart_builder::create_multipart_payload_without_thumbnail(
         common::TEST_IMAGE_HASH,
         common::TEST_IMAGE_NAME,
         &image_data
     );
-    
+
     let req = test::TestRequest::post()
         .uri("/upload/image")
         .insert_header(("Authorization", format!("Bearer {}", token_a)))
@@ -96,11 +81,11 @@ async fn test_user_isolation_workflow() {
     let resp = test::call_service(&app, req).await;
     assert_eq!(resp.status(), actix_web::http::StatusCode::CREATED);
 
-    // Manually set has_thumbnail = true to simulate verification worker for thumbnail listing
+    // Manually set has_thumbnail = true to simulate verification worker
     let client = pool.get().await.unwrap();
     client.execute("UPDATE images SET has_thumbnail = true WHERE hash = $1", &[&common::TEST_IMAGE_HASH]).await.unwrap();
 
-    // 4. Verify User A can see it
+    // 3. Verify User A can see it
     let req = test::TestRequest::get()
         .uri("/media_thumbnails")
         .insert_header(("Authorization", format!("Bearer {}", token_a)))
@@ -109,7 +94,7 @@ async fn test_user_isolation_workflow() {
     let body: ThumbnailsResponse = test::read_body_json(resp).await;
     assert_eq!(body.total, 1);
 
-    // 5. Verify User B CANNOT see it
+    // 4. Verify User B CANNOT see it
     let req = test::TestRequest::get()
         .uri("/media_thumbnails")
         .insert_header(("Authorization", format!("Bearer {}", token_b)))
@@ -118,13 +103,12 @@ async fn test_user_isolation_workflow() {
     let body: ThumbnailsResponse = test::read_body_json(resp).await;
     assert_eq!(body.total, 0);
 
-    // 6. Verify User B CANNOT access User A's image metadata directly
+    // 5. Verify User B CANNOT access User A's image metadata directly
     let req = test::TestRequest::get()
         .uri(&format!("/image/{}/metadata", common::TEST_IMAGE_HASH))
         .insert_header(("Authorization", format!("Bearer {}", token_b)))
         .to_request();
     let resp = test::call_service(&app, req).await;
-    // Non-admin User B shouldn't be able to find it because it filters by their deviceid
     assert_eq!(resp.status(), actix_web::http::StatusCode::NOT_FOUND);
 
     // Cleanup

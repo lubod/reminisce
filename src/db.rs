@@ -4,7 +4,7 @@ use tokio_postgres::Config as PgConfig;
 use std::str::FromStr;
 use deadpool_postgres::Manager as PgManager;
 use std::time::Duration;
-use log::info;
+use log::{info, warn};
 
 /// Configuration options for database connection pool
 #[derive(Clone)]
@@ -54,6 +54,48 @@ pub fn create_pool_with_options(
     );
 
     Ok(pool)
+}
+
+/// Run init.sql against the pool at startup.
+/// All statements use IF NOT EXISTS / ADD COLUMN IF NOT EXISTS, so this is idempotent.
+pub async fn run_migrations(pool: &Pool) -> Result<(), Box<dyn std::error::Error>> {
+    let sql = include_str!("../db/init.sql");
+    let client = pool.get().await?;
+
+    // Split on semicolons while respecting $$-quoted blocks (PL/pgSQL DO blocks).
+    let mut ok = 0usize;
+    let mut errs = 0usize;
+    let mut current = String::new();
+    let mut in_dollar_quote = false;
+    for line in sql.lines() {
+        // Toggle dollar-quote state on $$ markers
+        let dollar_count = line.matches("$$").count();
+        if dollar_count % 2 != 0 {
+            in_dollar_quote = !in_dollar_quote;
+        }
+        current.push_str(line);
+        current.push('\n');
+        if !in_dollar_quote && line.trim_end().ends_with(';') {
+            let trimmed = current.trim();
+            if !trimmed.is_empty() && !trimmed.starts_with("--") {
+                match client.execute(trimmed, &[]).await {
+                    Ok(_) => ok += 1,
+                    Err(e) => {
+                        warn!("Migration statement warning: {}", e);
+                        errs += 1;
+                    }
+                }
+            }
+            current.clear();
+        }
+    }
+
+    if errs > 0 {
+        warn!("DB migrations: {} ok, {} warnings (check above)", ok, errs);
+    } else {
+        info!("DB migrations: {} statements applied successfully", ok);
+    }
+    Ok(())
 }
 
 // Wrapper types to distinguish between different database pools in dependency injection

@@ -91,6 +91,64 @@ class AuthHelper {
         }
 
         /**
+         * Check whether the server needs first-run admin setup.
+         * Endpoint: GET /auth/setup-status
+         */
+        fun checkSetupStatus(baseUrl: String): Boolean {
+            return try {
+                val client = createHttpClient(baseUrl).newBuilder()
+                    .connectTimeout(10, TimeUnit.SECONDS)
+                    .readTimeout(10, TimeUnit.SECONDS)
+                    .build()
+                val request = Request.Builder()
+                    .url("${baseUrl.trimEnd('/')}/api/auth/setup-status")
+                    .get()
+                    .build()
+                val response = client.newCall(request).execute()
+                if (response.isSuccessful) {
+                    val body = response.body?.string() ?: "{}"
+                    JSONObject(body).optBoolean("needs_setup", false)
+                } else false
+            } catch (e: Exception) {
+                LogCollector.w(TAG, "checkSetupStatus failed: ${e.message}")
+                false
+            }
+        }
+
+        /**
+         * Create the first admin account during initial setup.
+         * Endpoint: POST /auth/setup
+         * Returns null on success, or an error message string.
+         */
+        fun setupAdmin(username: String, password: String, baseUrl: String): String? {
+            return try {
+                val client = createHttpClient(baseUrl).newBuilder()
+                    .connectTimeout(10, TimeUnit.SECONDS)
+                    .readTimeout(10, TimeUnit.SECONDS)
+                    .build()
+                val json = JSONObject().apply {
+                    put("username", username)
+                    put("password", password)
+                }.toString()
+                val body = json.toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
+                val request = Request.Builder()
+                    .url("${baseUrl.trimEnd('/')}/api/auth/setup")
+                    .post(body)
+                    .addHeader("Content-Type", "application/json")
+                    .build()
+                val response = client.newCall(request).execute()
+                if (response.isSuccessful) null
+                else {
+                    val errBody = response.body?.string() ?: ""
+                    JSONObject(errBody).optString("message", "Setup failed (${response.code})")
+                }
+            } catch (e: Exception) {
+                LogCollector.e(TAG, "setupAdmin failed: ${e.message}")
+                e.message ?: "Setup failed"
+            }
+        }
+
+        /**
          * Register a new user with username, email, and password.
          * Endpoint: POST /auth/register
          */

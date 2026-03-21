@@ -1,157 +1,156 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { observer } from "mobx-react-lite";
 import { useStore } from "../stores/RootStore";
 import { useNavigate } from "react-router-dom";
+import { Shield, Eye, EyeOff, Loader } from "lucide-react";
 
 export const LoginForm = observer(() => {
     const { authStore } = useStore();
-    const [mode, setMode] = useState<'login' | 'register'>('login');
     const [username, setUsername] = useState("");
-    const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
     const [confirmPassword, setConfirmPassword] = useState("");
+    const [showPassword, setShowPassword] = useState(false);
     const [error, setError] = useState("");
-    const [successMessage, setSuccessMessage] = useState("");
+    const [isLoading, setIsLoading] = useState(true);
     const navigate = useNavigate();
 
-    const clearMessages = () => {
-        setError("");
-        setSuccessMessage("");
-    };
+    useEffect(() => {
+        authStore.checkSetupStatus().finally(() => setIsLoading(false));
+    }, [authStore]);
 
-    const handleModeChange = (newMode: 'login' | 'register') => {
-        setMode(newMode);
-        clearMessages();
-    };
-
-    const handleLogin = async () => {
-        const result = await authStore.login(username, password);
-        if (result.success) {
-            navigate("/");
-        } else {
-            setError(result.error || "Login failed");
-        }
-    };
-
-    const handleRegister = async () => {
-        if (password !== confirmPassword) {
-            setError("Passwords do not match");
-            return;
-        }
-        const result = await authStore.register(username, email, password);
-        if (result.success) {
-            handleModeChange('login');
-            setSuccessMessage("Registration successful! Please log in.");
-        } else {
-            setError(result.error || "Registration failed");
-        }
-    };
-
-    const handleSubmit = async (e: React.FormEvent) => {
+    const handleSetup = async (e: React.FormEvent) => {
         e.preventDefault();
-        clearMessages();
-        if (mode === 'login') {
-            await handleLogin();
+        setError("");
+        if (password !== confirmPassword) { setError("Passwords do not match"); return; }
+        if (password.length < 8) { setError("Password must be at least 8 characters"); return; }
+        setIsLoading(true);
+        const result = await authStore.setupAdmin(username, password);
+        setIsLoading(false);
+        if (result.success) {
+            // Auto-login after setup
+            const loginResult = await authStore.login(username, password);
+            if (loginResult.success) navigate("/");
         } else {
-            await handleRegister();
+            setError(result.error || "Setup failed");
         }
     };
 
+    const handleLogin = async (e: React.FormEvent) => {
+        e.preventDefault();
+        setError("");
+        setIsLoading(true);
+        const result = await authStore.login(username, password);
+        setIsLoading(false);
+        if (result.success) navigate("/");
+        else setError(result.error || "Login failed");
+    };
+
+    if (isLoading) {
+        return (
+            <div className="flex items-center justify-center min-h-screen bg-gray-900">
+                <Loader className="w-8 h-8 text-blue-500 animate-spin" />
+            </div>
+        );
+    }
+
+    // ── First-run setup ──────────────────────────────────────────────────────
+    if (authStore.needsSetup) {
+        return (
+            <div className="flex items-center justify-center min-h-screen bg-gray-900">
+                <div className="w-full max-w-sm p-8 bg-gray-800 rounded-2xl shadow-2xl border border-gray-700">
+                    <div className="flex flex-col items-center mb-8">
+                        <div className="p-3 bg-blue-900/40 rounded-2xl mb-4">
+                            <Shield className="w-10 h-10 text-blue-400" />
+                        </div>
+                        <h1 className="text-2xl font-bold text-gray-100">Welcome to Reminisce</h1>
+                        <p className="text-gray-400 text-sm text-center mt-2">Create your administrator account to get started.</p>
+                    </div>
+
+                    <form onSubmit={handleSetup} className="space-y-4">
+                        {error && <p className="text-xs text-red-400 bg-red-900/20 border border-red-800 rounded-lg px-3 py-2">{error}</p>}
+
+                        <div>
+                            <label className="block text-sm font-medium text-gray-300 mb-1.5">Username</label>
+                            <input
+                                type="text" value={username} onChange={e => setUsername(e.target.value)}
+                                className="w-full px-3 py-2.5 bg-gray-700 border border-gray-600 rounded-lg text-gray-100 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                                placeholder="admin" autoFocus required minLength={3}
+                            />
+                        </div>
+
+                        <div>
+                            <label className="block text-sm font-medium text-gray-300 mb-1.5">Password</label>
+                            <div className="relative">
+                                <input
+                                    type={showPassword ? "text" : "password"} value={password} onChange={e => setPassword(e.target.value)}
+                                    className="w-full px-3 py-2.5 bg-gray-700 border border-gray-600 rounded-lg text-gray-100 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 pr-10"
+                                    placeholder="Min 8 characters" required minLength={8}
+                                />
+                                <button type="button" onClick={() => setShowPassword(v => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-200">
+                                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                                </button>
+                            </div>
+                        </div>
+
+                        <div>
+                            <label className="block text-sm font-medium text-gray-300 mb-1.5">Confirm Password</label>
+                            <input
+                                type={showPassword ? "text" : "password"} value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)}
+                                className="w-full px-3 py-2.5 bg-gray-700 border border-gray-600 rounded-lg text-gray-100 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                                placeholder="Repeat password" required
+                            />
+                        </div>
+
+                        <button type="submit" disabled={isLoading} className="w-full py-3 mt-2 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl transition-all active:scale-95 disabled:opacity-50">
+                            {isLoading ? <Loader className="w-5 h-5 animate-spin mx-auto" /> : "Create Admin Account"}
+                        </button>
+                    </form>
+                </div>
+            </div>
+        );
+    }
+
+    // ── Normal login ─────────────────────────────────────────────────────────
     return (
         <div className="flex items-center justify-center min-h-screen bg-gray-900">
-            <div className="p-8 bg-gray-800 rounded shadow-md w-96 border border-gray-700">
-                <div className="flex border-b border-gray-700 mb-6">
-                    <button
-                        onClick={() => handleModeChange('login')}
-                        className={`w-1/2 py-2 text-center text-lg font-medium transition-colors ${mode === 'login' ? 'text-blue-400 border-b-2 border-blue-400' : 'text-gray-400 hover:text-gray-200'}`}
-                    >
-                        Login
-                    </button>
-                    <button
-                        onClick={() => handleModeChange('register')}
-                        className={`w-1/2 py-2 text-center text-lg font-medium transition-colors ${mode === 'register' ? 'text-blue-400 border-b-2 border-blue-400' : 'text-gray-400 hover:text-gray-200'}`}
-                    >
-                        Register
-                    </button>
+            <div className="w-full max-w-sm p-8 bg-gray-800 rounded-2xl shadow-2xl border border-gray-700">
+                <div className="flex flex-col items-center mb-8">
+                    <div className="p-3 bg-blue-900/40 rounded-2xl mb-4">
+                        <Shield className="w-10 h-10 text-blue-400" />
+                    </div>
+                    <h1 className="text-2xl font-bold text-gray-100">Reminisce</h1>
+                    <p className="text-gray-400 text-sm mt-1">Sign in to your account</p>
                 </div>
 
-                <h2 className="mb-6 text-2xl font-bold text-center text-gray-100">{mode === 'login' ? 'Login' : 'Create an Account'}</h2>
-                <form onSubmit={handleSubmit}>
-                    {successMessage && <p className="mb-4 text-xs italic text-green-500">{successMessage}</p>}
-                    {error && <p className="mb-4 text-xs italic text-red-500">{error}</p>}
-                    
-                    <div className="mb-4">
-                        <label className="block mb-2 text-sm font-bold text-gray-300" htmlFor="username">
-                            Username
-                        </label>
+                <form onSubmit={handleLogin} className="space-y-4">
+                    {error && <p className="text-xs text-red-400 bg-red-900/20 border border-red-800 rounded-lg px-3 py-2">{error}</p>}
+
+                    <div>
+                        <label className="block text-sm font-medium text-gray-300 mb-1.5">Username</label>
                         <input
-                            id="username"
-                            type="text"
-                            value={username}
-                            onChange={(e) => setUsername(e.target.value)}
-                            className="w-full px-3 py-2 leading-tight text-gray-100 bg-gray-700 border border-gray-600 rounded shadow appearance-none focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-                            placeholder="Enter your username"
-                            required
+                            type="text" value={username} onChange={e => setUsername(e.target.value)}
+                            className="w-full px-3 py-2.5 bg-gray-700 border border-gray-600 rounded-lg text-gray-100 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                            placeholder="Enter your username" autoFocus required
                         />
                     </div>
 
-                    {mode === 'register' && (
-                        <div className="mb-4">
-                            <label className="block mb-2 text-sm font-bold text-gray-300" htmlFor="email">
-                                Email
-                            </label>
+                    <div>
+                        <label className="block text-sm font-medium text-gray-300 mb-1.5">Password</label>
+                        <div className="relative">
                             <input
-                                id="email"
-                                type="email"
-                                value={email}
-                                onChange={(e) => setEmail(e.target.value)}
-                                className="w-full px-3 py-2 leading-tight text-gray-100 bg-gray-700 border border-gray-600 rounded shadow appearance-none focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-                                placeholder="Enter your email"
-                                required
+                                type={showPassword ? "text" : "password"} value={password} onChange={e => setPassword(e.target.value)}
+                                className="w-full px-3 py-2.5 bg-gray-700 border border-gray-600 rounded-lg text-gray-100 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 pr-10"
+                                placeholder="Enter your password" required
                             />
+                            <button type="button" onClick={() => setShowPassword(v => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-200">
+                                {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                            </button>
                         </div>
-                    )}
-
-                    <div className="mb-4">
-                        <label className="block mb-2 text-sm font-bold text-gray-300" htmlFor="password">
-                            Password
-                        </label>
-                        <input
-                            id="password"
-                            type="password"
-                            value={password}
-                            onChange={(e) => setPassword(e.target.value)}
-                            className="w-full px-3 py-2 leading-tight text-gray-100 bg-gray-700 border border-gray-600 rounded shadow appearance-none focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-                            placeholder="Enter your password"
-                            required
-                        />
                     </div>
 
-                    {mode === 'register' && (
-                        <div className="mb-4">
-                            <label className="block mb-2 text-sm font-bold text-gray-300" htmlFor="confirmPassword">
-                                Confirm Password
-                            </label>
-                            <input
-                                id="confirmPassword"
-                                type="password"
-                                value={confirmPassword}
-                                onChange={(e) => setConfirmPassword(e.target.value)}
-                                className="w-full px-3 py-2 leading-tight text-gray-100 bg-gray-700 border border-gray-600 rounded shadow appearance-none focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-                                placeholder="Confirm your password"
-                                required
-                            />
-                        </div>
-                    )}
-
-                    <div className="flex items-center justify-between mt-6">
-                        <button
-                            type="submit"
-                            className="px-4 py-2 font-bold text-white bg-blue-600 rounded hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:ring-offset-gray-800 w-full transition-colors"
-                        >
-                            {mode === 'login' ? 'Sign In' : 'Sign Up'}
-                        </button>
-                    </div>
+                    <button type="submit" disabled={isLoading} className="w-full py-3 mt-2 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl transition-all active:scale-95 disabled:opacity-50">
+                        {isLoading ? <Loader className="w-5 h-5 animate-spin mx-auto" /> : "Sign In"}
+                    </button>
                 </form>
             </div>
         </div>
