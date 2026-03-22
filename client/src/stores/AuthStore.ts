@@ -24,12 +24,40 @@ export class AuthStore {
     user: User | null = JSON.parse(localStorage.getItem("user") || "null");
     isAuthenticated: boolean = !!this.token;
     needsSetup: boolean = false;
+    initialized: boolean = false;
     rootStore: RootStore;
 
     constructor(rootStore: RootStore) {
         makeAutoObservable(this);
         this.rootStore = rootStore;
     }
+
+    /** Called once on app startup. Checks setup status and validates any cached token. */
+    initialize = async () => {
+        try {
+            const res = await api.get("/auth/setup-status");
+            this.needsSetup = res.data.needs_setup;
+            if (this.needsSetup) {
+                // No users exist — any cached token is invalid
+                this.setToken(null);
+                this.setUser(null);
+            } else if (this.token) {
+                // Validate the cached token by hitting an authenticated endpoint
+                try {
+                    await api.get("/users");
+                } catch (err) {
+                    if (axios.isAxiosError(err) && err.response?.status === 401) {
+                        this.setToken(null);
+                        this.setUser(null);
+                    }
+                }
+            }
+        } catch {
+            this.needsSetup = false;
+        } finally {
+            this.initialized = true;
+        }
+    };
 
     checkSetupStatus = async () => {
         try {
