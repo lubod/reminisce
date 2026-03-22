@@ -40,7 +40,6 @@ pub mod services {
     pub mod system_stats;
     pub mod label;
     pub mod ingest;
-    pub mod p2p_ingest;
     pub mod import_dir;
     pub mod p2p_status;
     pub mod proxy_manager;
@@ -90,7 +89,7 @@ pub use crate::services::pool_stats::get_pool_stats;
 pub use crate::services::geodb_stats::get_geodb_stats;
 pub use crate::services::geocoding::search_places;
 pub use crate::services::ai_settings::{get_ai_settings, update_ai_settings};
-pub use crate::services::import_dir::import_directory;
+pub use crate::services::import_dir::{import_directory, get_import_status};
 
 #[derive(OpenApi)]
 #[openapi(
@@ -147,6 +146,7 @@ pub use crate::services::import_dir::import_directory;
         crate::services::label::add_image_label,
         crate::services::label::remove_image_label,
         crate::services::import_dir::import_directory,
+        crate::services::import_dir::get_import_status,
         crate::services::p2p_status::get_p2p_backup_status,
         crate::services::p2p_status::verify_p2p_backup,
         crate::services::p2p_status::list_p2p_backups,
@@ -223,6 +223,9 @@ pub use crate::services::import_dir::import_directory;
             crate::services::label::MediaLabelsResponse,
             crate::services::import_dir::ImportDirectoryRequest,
             crate::services::import_dir::ImportDirectoryResponse,
+            crate::services::import_dir::StartImportResponse,
+            crate::services::import_dir::ImportJob,
+            crate::services::import_dir::JobStatus,
             Claims,
             crate::services::duplicates::DuplicateImage,
             crate::services::duplicates::DuplicateGroup,
@@ -324,6 +327,8 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
     let geo_pool = db::GeotaggingDbPool(geotagging_pool.clone());
 
     let config_data = web::Data::new(config.clone());
+    let import_job_store: web::Data<services::import_dir::ImportJobStore> =
+        web::Data::new(std::sync::Mutex::new(std::collections::HashMap::new()));
 
     // --- P2P Identity & Service ---
     let p2p_data_path = std::path::Path::new(&config.p2p_data_dir);
@@ -451,11 +456,8 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
         let p2p_service_data = web::Data::new(p2p_service.clone());
 
     // --- Start P2P Accept Loop ---
-    let accept_pool = main_pool.0.clone();
-    let accept_config = Arc::new(config.clone());
     let accept_service = p2p_service.clone();
-    let ingest_handler = Arc::new(services::p2p_ingest::IngestHandler::new(accept_pool, accept_config));
-    
+
     let shard_storage_path = p2p_data_path.join("shards");
     if !shard_storage_path.exists() {
         std::fs::create_dir_all(&shard_storage_path).ok();
@@ -469,13 +471,11 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
             if let Some(incoming) = accept_service.node().accept().await {
                 let storage = shard_storage.clone();
                 let identity = accept_service.identity().clone();
-                let handler_impl = ingest_handler.clone();
-                
+
                 tokio::spawn(async move {
                     match incoming.await {
                         Ok(conn) => {
-                            let handler = np2p::network::ConnectionHandler::new(conn, storage, identity)
-                                .with_custom_handler(handler_impl);
+                            let handler = np2p::network::ConnectionHandler::new(conn, storage, identity);
                             handler.run().await;
                         }
                         Err(e) => error!("Incoming P2P connection failed: {}", e),
@@ -510,6 +510,7 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
             .app_data(web::Data::new(geo_pool.clone()))
             .app_data(config_data.clone())
             .app_data(p2p_service_data.clone())
+            .app_data(import_job_store.clone())
             .service(
                 SwaggerUi::new("/swagger-ui/{_:.*}").url("/api-doc/openapi.json", ApiDoc::openapi())
             )
@@ -578,6 +579,7 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
                     .service(services::label::add_video_label)
                     .service(services::label::remove_video_label)
                     .service(import_directory)
+                    .service(get_import_status)
                     .service(services::p2p_status::get_p2p_backup_status)
                     .service(services::p2p_status::verify_p2p_backup)
                     .service(services::p2p_status::list_p2p_backups)

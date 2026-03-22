@@ -6,21 +6,6 @@ pub enum Message {
     Handshake { node_id: [u8; 32], version: String },
     HandshakeAck { node_id: [u8; 32] },
 
-    /// Token-based authentication (Mobile -> Home Server).
-    Authenticate { token: String },
-    AuthenticateResponse { success: bool, message: String },
-
-    /// Password-based login (Mobile -> Home Server via P2P).
-    LoginRequest {
-        username: String,
-        password_hash: String,
-    },
-    LoginResponse {
-        success: bool,
-        token: Option<String>,
-        message: String,
-    },
-
     /// Request to store an encrypted shard.
     StoreShardRequest { shard_hash: [u8; 32], data: Vec<u8> },
     StoreShardResponse { shard_hash: [u8; 32], success: bool },
@@ -28,16 +13,6 @@ pub enum Message {
     /// Request to retrieve an encrypted shard.
     RetrieveShardRequest { shard_hash: [u8; 32] },
     RetrieveShardResponse { shard_hash: [u8; 32], data: Option<Vec<u8>> },
-
-    /// Request to upload a full media file (Mobile -> Home Server).
-    UploadMediaRequest {
-        device_id: String,
-        file_hash: String,
-        file_name: String,
-        file_ext: String,
-        data: Vec<u8>,
-    },
-    UploadMediaResponse { success: bool, message: String },
 
     /// Periodic heartbeat to maintain NAT mappings and report status.
     Heartbeat { available_space_bytes: u64 },

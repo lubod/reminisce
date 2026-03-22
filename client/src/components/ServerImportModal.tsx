@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { observer } from "mobx-react-lite";
 import { X, Upload, Folder, CheckCircle, AlertCircle, Loader } from "lucide-react";
 import axios from "../api/axiosConfig";
 
-interface ImportResponse {
+interface ImportJob {
+    status: "running" | "done" | "failed";
     scanned: number;
     imported: number;
     failed: number;
@@ -13,27 +14,50 @@ interface ImportResponse {
 export const ServerImportModal = observer(({ onClose }: { onClose: () => void }) => {
     const [path, setPath] = useState<string>("");
     const [recursive, setRecursive] = useState<boolean>(true);
+    const [addLabels, setAddLabels] = useState<boolean>(false);
+    const [labelMode, setLabelMode] = useState<"root" | "subdir">("root");
     const [isLoading, setIsLoading] = useState<boolean>(false);
-    const [result, setResult] = useState<ImportResponse | null>(null);
+    const [job, setJob] = useState<ImportJob | null>(null);
     const [error, setError] = useState<string | null>(null);
+    const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+    useEffect(() => {
+        return () => { if (pollRef.current) clearInterval(pollRef.current); };
+    }, []);
 
     const handleImport = async () => {
         if (!path.trim()) return;
 
         setIsLoading(true);
         setError(null);
-        setResult(null);
+        setJob(null);
 
         try {
-            const response = await axios.post<ImportResponse>('/import_directory', {
+            const response = await axios.post<{ job_id: string }>('/import_directory', {
                 path: path.trim(),
-                recursive
+                recursive,
+                label_mode: addLabels ? labelMode : "none",
             });
-            setResult(response.data);
+
+            const jobId = response.data.job_id;
+            pollRef.current = setInterval(async () => {
+                try {
+                    const status = await axios.get<ImportJob>(`/import_directory/status/${jobId}`);
+                    setJob(status.data);
+                    if (status.data.status !== "running") {
+                        clearInterval(pollRef.current!);
+                        pollRef.current = null;
+                        setIsLoading(false);
+                    }
+                } catch {
+                    clearInterval(pollRef.current!);
+                    pollRef.current = null;
+                    setIsLoading(false);
+                }
+            }, 2000);
         } catch (err: any) {
             console.error("Import failed:", err);
             setError(err.response?.data?.error || err.message || "An error occurred during import.");
-        } finally {
             setIsLoading(false);
         }
     };
@@ -92,11 +116,66 @@ export const ServerImportModal = observer(({ onClose }: { onClose: () => void })
                         </label>
                     </div>
 
-                    {/* Result / Status */}
+                    <div className="space-y-2">
+                        <div className="flex items-center">
+                            <input
+                                type="checkbox"
+                                id="addLabels"
+                                checked={addLabels}
+                                onChange={(e) => setAddLabels(e.target.checked)}
+                                disabled={isLoading}
+                                className="w-4 h-4 text-blue-600 bg-gray-700 border-gray-600 rounded focus:ring-blue-500"
+                            />
+                            <label htmlFor="addLabels" className="ml-2 text-sm text-gray-300">
+                                Add labels from directory names
+                            </label>
+                        </div>
+                        {addLabels && (
+                            <div className="ml-6 flex flex-col gap-1">
+                                <label className="flex items-center gap-2 text-sm text-gray-400 cursor-pointer">
+                                    <input
+                                        type="radio"
+                                        name="labelMode"
+                                        value="root"
+                                        checked={labelMode === "root"}
+                                        onChange={() => setLabelMode("root")}
+                                        disabled={isLoading}
+                                        className="text-blue-600"
+                                    />
+                                    Root directory name
+                                </label>
+                                <label className="flex items-center gap-2 text-sm text-gray-400 cursor-pointer">
+                                    <input
+                                        type="radio"
+                                        name="labelMode"
+                                        value="subdir"
+                                        checked={labelMode === "subdir"}
+                                        onChange={() => setLabelMode("subdir")}
+                                        disabled={isLoading}
+                                        className="text-blue-600"
+                                    />
+                                    Each subdirectory name
+                                </label>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Status */}
                     {isLoading && (
-                        <div className="flex items-center justify-center py-4 text-blue-400">
-                            <Loader className="w-6 h-6 animate-spin mr-2" />
-                            <span>Scanning and importing... This may take a while.</span>
+                        <div className="space-y-2">
+                            <div className="flex items-center text-blue-400">
+                                <Loader className="w-5 h-5 animate-spin mr-2 flex-shrink-0" />
+                                <span className="text-sm">
+                                    {job ? "Importing..." : "Starting import..."}
+                                </span>
+                            </div>
+                            {job && job.scanned > 0 && (
+                                <div className="bg-gray-700 rounded-lg p-3 text-sm text-gray-300 space-y-1">
+                                    <div>Scanned: {job.scanned} files</div>
+                                    <div>Imported: {job.imported}</div>
+                                    {job.failed > 0 && <div className="text-red-400">Failed: {job.failed}</div>}
+                                </div>
+                            )}
                         </div>
                     )}
 
@@ -107,31 +186,34 @@ export const ServerImportModal = observer(({ onClose }: { onClose: () => void })
                         </div>
                     )}
 
-                    {result && (
+                    {job && job.status !== "running" && (
                         <div className="bg-gray-700 rounded-lg p-4 space-y-2">
                             <h3 className="text-sm font-semibold text-gray-200 mb-2 flex items-center">
-                                <CheckCircle className="w-5 h-5 text-green-500 mr-2" />
-                                Import Completed
+                                {job.status === "done"
+                                    ? <CheckCircle className="w-5 h-5 text-green-500 mr-2" />
+                                    : <AlertCircle className="w-5 h-5 text-red-500 mr-2" />
+                                }
+                                Import {job.status === "done" ? "Completed" : "Failed"}
                             </h3>
                             <div className="grid grid-cols-3 gap-2 text-center">
                                 <div className="bg-gray-800 p-2 rounded">
-                                    <div className="text-lg font-bold text-gray-100">{result.scanned}</div>
+                                    <div className="text-lg font-bold text-gray-100">{job.scanned}</div>
                                     <div className="text-xs text-gray-400">Scanned</div>
                                 </div>
                                 <div className="bg-gray-800 p-2 rounded">
-                                    <div className="text-lg font-bold text-green-400">{result.imported}</div>
+                                    <div className="text-lg font-bold text-green-400">{job.imported}</div>
                                     <div className="text-xs text-gray-400">Imported</div>
                                 </div>
                                 <div className="bg-gray-800 p-2 rounded">
-                                    <div className="text-lg font-bold text-red-400">{result.failed}</div>
+                                    <div className="text-lg font-bold text-red-400">{job.failed}</div>
                                     <div className="text-xs text-gray-400">Failed</div>
                                 </div>
                             </div>
-                            {result.errors.length > 0 && (
+                            {job.errors.length > 0 && (
                                 <div className="mt-2">
                                     <p className="text-xs text-red-400 font-semibold mb-1">Errors:</p>
                                     <ul className="text-xs text-red-300 list-disc list-inside max-h-24 overflow-y-auto">
-                                        {result.errors.map((e, i) => <li key={i}>{e}</li>)}
+                                        {job.errors.map((e, i) => <li key={i}>{e}</li>)}
                                     </ul>
                                 </div>
                             )}
