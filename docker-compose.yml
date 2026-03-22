@@ -45,8 +45,8 @@ services:
     volumes:
       - ai_model_cache:/root/.cache/huggingface
       - face_model_cache:/root/.insightface
-    devices:
-      - /dev/dri:/dev/dri
+    #GPU# devices:
+    #GPU#   - /dev/dri:/dev/dri
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8081/health || exit 1"]
@@ -69,7 +69,6 @@ services:
       - ./config.yaml:/app/config.yaml:ro
     environment:
       - RUST_LOG=info
-      - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
       - APP_VERSION=0.1.0
       - ENVIRONMENT=production
     command: ["/app/config.yaml"]

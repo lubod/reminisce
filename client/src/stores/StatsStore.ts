@@ -122,6 +122,14 @@ export interface VerificationResult {
     files: FileVerifyResult[];
 }
 
+export interface ServiceHealth {
+    status: string;
+    database: string;
+    geotagging_database: string;
+    ai_service: string;
+    timestamp: string;
+}
+
 export class StatsStore {
     rootStore: RootStore;
     stats: DashboardStats | null = null;
@@ -129,6 +137,7 @@ export class StatsStore {
     geoDbStats: GeoDbStats | null = null;
     aiSettings: AiSettings | null = null;
     systemStats: SystemStats | null = null;
+    serviceHealth: ServiceHealth | null = null;
     p2pBackupStatus: P2PBackupStatus | null = null;
     p2pDaemonStatus: P2PDaemonStatus | null = null;
     discoveredPeers: DiscoveredPeer[] = [];
@@ -341,6 +350,19 @@ export class StatsStore {
         this.rootStore.uiStore.setSuccess('Rebalance triggered — shards will redistribute in the background.');
     };
 
+    fetchServiceHealth = async () => {
+        try {
+            // /health is proxied directly by nginx (not under /api)
+            const response = await axios.get<ServiceHealth>("/health", {
+                baseURL: "",
+                validateStatus: () => true,
+            });
+            runInAction(() => { this.serviceHealth = response.data; });
+        } catch {
+            // network error — leave serviceHealth as-is
+        }
+    };
+
     fetchAllStats = async () => {
         await Promise.all([
             this.fetchStats(),
@@ -348,6 +370,7 @@ export class StatsStore {
             this.fetchGeoDbStats(),
             this.fetchAiSettings(),
             this.fetchSystemStats(),
+            this.fetchServiceHealth(),
             this.fetchP2PDaemonStatus(),
             this.fetchDiscoveredPeers(),
             this.fetchP2PBackupStatus(),

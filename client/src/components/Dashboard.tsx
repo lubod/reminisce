@@ -380,6 +380,74 @@ export const Dashboard = observer(() => {
                                 </div>
 
                                 <div className="bg-gray-800 shadow-xl rounded-xl p-8 border border-gray-700">
+                                    <h2 className="text-xl font-bold text-gray-100 mb-8 flex items-center"><Database className="w-6 h-6 text-green-400 mr-3" /> Services</h2>
+                                    {(() => {
+                                        const h = statsStore.serviceHealth;
+                                        const dot = (status: string) => status === "connected"
+                                            ? <span className="inline-block w-2.5 h-2.5 rounded-full bg-green-400 mr-2" />
+                                            : <span className="inline-block w-2.5 h-2.5 rounded-full bg-red-500 mr-2" />;
+                                        return (
+                                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                                <div className="flex items-center p-4 bg-gray-900/50 rounded-xl border border-gray-700">
+                                                    {h ? dot(h.database) : <span className="inline-block w-2.5 h-2.5 rounded-full bg-gray-500 mr-2" />}
+                                                    <span className="text-sm font-semibold text-gray-300">Main Database</span>
+                                                    <span className="ml-auto text-xs text-gray-500">{h?.database ?? '—'}</span>
+                                                </div>
+                                                <div className="flex items-center p-4 bg-gray-900/50 rounded-xl border border-gray-700">
+                                                    {h ? dot(h.geotagging_database) : <span className="inline-block w-2.5 h-2.5 rounded-full bg-gray-500 mr-2" />}
+                                                    <span className="text-sm font-semibold text-gray-300">Geotagging DB</span>
+                                                    <span className="ml-auto text-xs text-gray-500">{h?.geotagging_database ?? '—'}</span>
+                                                </div>
+                                                <div className="flex items-center p-4 bg-gray-900/50 rounded-xl border border-gray-700">
+                                                    {h ? dot(h.ai_service) : <span className="inline-block w-2.5 h-2.5 rounded-full bg-gray-500 mr-2" />}
+                                                    <span className="text-sm font-semibold text-gray-300">AI Service</span>
+                                                    <span className="ml-auto text-xs text-gray-500">{h?.ai_service ?? '—'}</span>
+                                                </div>
+                                            </div>
+                                        );
+                                    })()}
+                                </div>
+
+                                <div className="bg-gray-800 shadow-xl rounded-xl p-8 border border-gray-700">
+                                    <h2 className="text-xl font-bold text-gray-100 mb-6 flex items-center"><Database className="w-6 h-6 text-teal-400 mr-3" /> Geo Database</h2>
+                                    {statsStore.geoDbStats ? (() => {
+                                        const g = statsStore.geoDbStats;
+                                        return (
+                                            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-4">
+                                                <div className="p-4 bg-gray-900/50 rounded-xl border border-gray-700 text-center">
+                                                    <div className="text-[10px] text-gray-500 uppercase font-bold mb-1">Total</div>
+                                                    <div className="text-2xl font-black text-white">{g.total_boundaries.toLocaleString()}</div>
+                                                </div>
+                                                <div className="p-4 bg-gray-900/50 rounded-xl border border-gray-700 text-center">
+                                                    <div className="text-[10px] text-gray-500 uppercase font-bold mb-1">Countries</div>
+                                                    <div className="text-2xl font-black text-blue-400">{g.countries.toLocaleString()}</div>
+                                                </div>
+                                                <div className="p-4 bg-gray-900/50 rounded-xl border border-gray-700 text-center">
+                                                    <div className="text-[10px] text-gray-500 uppercase font-bold mb-1">States</div>
+                                                    <div className="text-2xl font-black text-purple-400">{g.states_provinces.toLocaleString()}</div>
+                                                </div>
+                                                <div className="p-4 bg-gray-900/50 rounded-xl border border-gray-700 text-center">
+                                                    <div className="text-[10px] text-gray-500 uppercase font-bold mb-1">Counties</div>
+                                                    <div className="text-2xl font-black text-indigo-400">{g.counties.toLocaleString()}</div>
+                                                </div>
+                                                <div className="p-4 bg-gray-900/50 rounded-xl border border-gray-700 text-center">
+                                                    <div className="text-[10px] text-gray-500 uppercase font-bold mb-1">Cities</div>
+                                                    <div className="text-2xl font-black text-teal-400">{g.cities.toLocaleString()}</div>
+                                                </div>
+                                                <div className="p-4 bg-gray-900/50 rounded-xl border border-gray-700 text-center">
+                                                    <div className="text-[10px] text-gray-500 uppercase font-bold mb-1">Other</div>
+                                                    <div className="text-2xl font-black text-gray-400">{g.other_boundaries.toLocaleString()}</div>
+                                                </div>
+                                                <div className="p-4 bg-gray-900/50 rounded-xl border border-gray-700 text-center">
+                                                    <div className="text-[10px] text-gray-500 uppercase font-bold mb-1">Unique Countries</div>
+                                                    <div className="text-2xl font-black text-green-400">{g.unique_countries.toLocaleString()}</div>
+                                                </div>
+                                            </div>
+                                        );
+                                    })() : <div className="text-gray-500 italic">Loading geo database stats...</div>}
+                                </div>
+
+                                <div className="bg-gray-800 shadow-xl rounded-xl p-8 border border-gray-700">
                                     <h2 className="text-xl font-bold text-gray-100 mb-8 flex items-center"><Database className="w-6 h-6 text-indigo-400 mr-3" /> Database Pool</h2>
                                     {poolStats ? (
                                         <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
