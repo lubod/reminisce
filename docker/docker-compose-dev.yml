@@ -104,7 +104,7 @@ services:
       - reminisce_dev_p2p_data:/app/data/p2p
     environment:
       - RUST_LOG=info
-    command: ["config.yaml"]
+    command: ["/app/config.yaml"]
     restart: unless-stopped
 
   # === P2P STORAGE NODES ===

@@ -47,6 +47,10 @@ services:
       - face_model_cache:/root/.insightface
     #GPU#devices:
     #GPU#  - /dev/dri:/dev/dri
+    #GPU#environment:
+    #GPU#  - HSA_OVERRIDE_GFX_VERSION=11.5.0
+    #GPU#  - TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1
+    #GPU#  - ROCBLAS_USE_HIPBLASLT=1
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8081/health || exit 1"]
