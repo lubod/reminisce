@@ -56,8 +56,8 @@ services:
       test: ["CMD-SHELL", "curl -f http://localhost:8081/health || exit 1"]
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 120s
+      retries: 5
+      start_period: 600s
 
   reminisce:
     image: lubod/reminisce:latest
@@ -83,7 +83,7 @@ services:
       geotagging-db:
         condition: service_healthy
       ai-server:
-        condition: service_healthy
+        condition: service_started
 
   client:
     image: lubod/reminisce-client:latest
