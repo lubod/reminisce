@@ -220,8 +220,10 @@ echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━
 echo -e "${GREEN}  Reminisce is running!${NC}"
 echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
-echo -e "  UI (HTTPS):  ${BLUE}https://$(hostname -I | awk '{print $1}'):28443${NC}"
-echo -e "  UI (HTTP):   ${BLUE}http://$(hostname -I | awk '{print $1}'):28080${NC}"
+HOST_IP=$(hostname -I | tr ' ' '\n' | grep -v '^127\.' | grep -v '^172\.' | grep -v '^::1' | head -1)
+HOST_IP="${HOST_IP:-$(hostname -I | awk '{print $1}')}"
+echo -e "  UI (HTTPS):  ${BLUE}https://${HOST_IP}:28443${NC}"
+echo -e "  UI (HTTP):   ${BLUE}http://${HOST_IP}:28080${NC}"
 echo ""
 echo -e "  On first visit, go through the setup wizard to create your admin account."
 echo ""
