@@ -69,6 +69,7 @@ mkdir -p uploaded_images uploaded_videos data/p2p
 success "Directories created"
 
 # ─── 5. Generate .env ─────────────────────────────────────────────────────────
+ENV_IS_NEW=false
 if [ -f .env ]; then
     warn ".env already exists — skipping (delete it to regenerate)"
 else
@@ -79,6 +80,7 @@ POSTGRES_USER=postgres
 POSTGRES_PASSWORD=${DB_PASS}
 EOF
     chmod 600 .env
+    ENV_IS_NEW=true
     success ".env created (password auto-generated, permissions: 600)"
 fi
 
@@ -131,6 +133,18 @@ EOF
     success "config.yaml created (permissions: 600)"
 fi
 
+# ─── 6b. Remove stale DB volumes if .env was newly generated ─────────────────
+# If .env is new but old volumes exist (from a failed previous install), the
+# DB was initialized with a different password — remove to avoid auth failures.
+if [ "$ENV_IS_NEW" = "true" ]; then
+    for vol in reminisce_postgres_data reminisce_geotagging_data; do
+        if docker volume ls --format '{{.Name}}' | grep -q "^${vol}$"; then
+            warn "Removing stale volume '$vol' (new password generated — volume had old credentials)"
+            docker volume rm "$vol" 2>/dev/null || true
+        fi
+    done
+fi
+
 # ─── 7. Pull images ───────────────────────────────────────────────────────────
 info "Pulling Docker images (this may take a while on first run)..."
 docker compose pull
@@ -139,6 +153,23 @@ success "Images pulled"
 # ─── 8. Start stack ───────────────────────────────────────────────────────────
 info "Starting Reminisce..."
 docker compose up -d
+
+# ─── 8b. Set geotagging DB password ──────────────────────────────────────────
+# The geodb image ships with a pre-loaded database where the postgres user has
+# no password. POSTGRES_PASSWORD env var is ignored (initdb is skipped).
+# We set it here via local socket which uses trust auth.
+info "Configuring geotagging database credentials..."
+GEODB_RETRIES=20
+for i in $(seq 1 $GEODB_RETRIES); do
+    if docker exec reminisce-geotagging psql -U postgres -c "ALTER USER postgres WITH PASSWORD '$DB_PASS';" 2>/dev/null; then
+        success "Geotagging database password configured"
+        break
+    fi
+    if [ "$i" = "$GEODB_RETRIES" ]; then
+        warn "Could not set geotagging DB password after ${GEODB_RETRIES} attempts — check logs"
+    fi
+    sleep 3
+done
 
 # ─── 9. Wait for health ───────────────────────────────────────────────────────
 info "Waiting for services to become healthy..."
