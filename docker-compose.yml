@@ -71,6 +71,7 @@ services:
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
       - APP_VERSION=0.1.0
       - ENVIRONMENT=production
+    command: ["/app/config.yaml"]
     restart: unless-stopped
     depends_on:
       postgres:
