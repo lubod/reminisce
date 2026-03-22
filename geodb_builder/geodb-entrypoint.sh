@@ -1,23 +1,23 @@
 #!/bin/bash
-# Custom entrypoint wrapper for geotagging database
-# Ensures pg_hba.conf allows external connections on every container start
+# Custom entrypoint for geotagging database
+# Fixes pg_hba.conf and listen_addresses before postgres starts,
+# since the data directory is pre-baked into the image.
 
 set -e
 
-# Function to fix pg_hba.conf after postgres is ready
-fix_pg_hba() {
-    sleep 5  # Wait for postgres to initialize
-    if [ -f /var/lib/postgresql/data/pg_hba.conf ]; then
-        if ! grep -q "host all all 0.0.0.0/0 trust" /var/lib/postgresql/data/pg_hba.conf; then
-            echo "host all all 0.0.0.0/0 trust" >> /var/lib/postgresql/data/pg_hba.conf
-            # Reload postgres configuration
-            psql -U postgres -c "SELECT pg_reload_conf();" >/dev/null 2>&1 || true
-        fi
+PGDATA="${PGDATA:-/var/lib/postgresql/data}"
+
+if [ -f "$PGDATA/pg_hba.conf" ]; then
+    # Allow connections from all Docker network addresses
+    if ! grep -q "host all all 0.0.0.0/0" "$PGDATA/pg_hba.conf"; then
+        echo "host all all 0.0.0.0/0 md5" >> "$PGDATA/pg_hba.conf"
+        echo "host all all ::/0 md5"       >> "$PGDATA/pg_hba.conf"
     fi
-}
+fi
 
-# Run pg_hba fix in background
-fix_pg_hba &
+if [ -f "$PGDATA/postgresql.conf" ]; then
+    # Listen on all interfaces, not just localhost
+    sed -i "s|^#*\s*listen_addresses\s*=.*|listen_addresses = '*'|" "$PGDATA/postgresql.conf"
+fi
 
-# Execute the original postgres entrypoint
 exec docker-entrypoint.sh "$@"

@@ -1,0 +1,14 @@
+# Patches the pre-built geodb image to allow Docker network connections.
+# Run from repo root: docker build -f geodb_builder/Dockerfile.patch -t lubod/reminisce-geodb:latest .
+FROM lubod/reminisce-geodb:latest
+
+USER root
+
+# Fix pg_hba.conf — allow connections from any Docker network address
+RUN grep -q "0.0.0.0/0" /var/lib/postgresql/data/pg_hba.conf || \
+    { echo "host all all 0.0.0.0/0 md5" >> /var/lib/postgresql/data/pg_hba.conf && \
+      echo "host all all ::/0 md5"       >> /var/lib/postgresql/data/pg_hba.conf; }
+
+# Fix postgresql.conf — listen on all interfaces
+RUN sed -i "s|^#*\s*listen_addresses\s*=.*|listen_addresses = '*'|" \
+        /var/lib/postgresql/data/postgresql.conf

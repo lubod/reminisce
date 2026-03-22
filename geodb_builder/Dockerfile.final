@@ -9,6 +9,18 @@ COPY --chown=postgres:postgres pgdata /var/lib/postgresql/data
 # Ensure permissions are correct
 RUN chmod 700 /var/lib/postgresql/data
 
+# Allow connections from Docker networks and listen on all interfaces
+RUN grep -q "0.0.0.0/0" /var/lib/postgresql/data/pg_hba.conf || \
+    { echo "host all all 0.0.0.0/0 md5" >> /var/lib/postgresql/data/pg_hba.conf && \
+      echo "host all all ::/0 md5"       >> /var/lib/postgresql/data/pg_hba.conf; }
+RUN sed -i "s|^#*\s*listen_addresses\s*=.*|listen_addresses = '*'|" \
+        /var/lib/postgresql/data/postgresql.conf
+
+COPY geodb-entrypoint.sh /usr/local/bin/custom-entrypoint.sh
+RUN chmod +x /usr/local/bin/custom-entrypoint.sh
+
 ENV POSTGRES_DB=geotagging_db
 ENV POSTGRES_USER=postgres
 ENV POSTGRES_PASSWORD=postgres
+
+ENTRYPOINT ["/bin/bash", "/usr/local/bin/custom-entrypoint.sh"]
