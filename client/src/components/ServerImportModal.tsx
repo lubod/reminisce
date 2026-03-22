@@ -15,7 +15,7 @@ export const ServerImportModal = observer(({ onClose }: { onClose: () => void })
     const [path, setPath] = useState<string>("");
     const [recursive, setRecursive] = useState<boolean>(true);
     const [addLabels, setAddLabels] = useState<boolean>(false);
-    const [labelMode, setLabelMode] = useState<"root" | "subdir">("root");
+    const [labelMode, setLabelMode] = useState<"root" | "subdir" | "path" | "components">("subdir");
     const [isLoading, setIsLoading] = useState<boolean>(false);
     const [job, setJob] = useState<ImportJob | null>(null);
     const [error, setError] = useState<string | null>(null);
@@ -131,31 +131,31 @@ export const ServerImportModal = observer(({ onClose }: { onClose: () => void })
                             </label>
                         </div>
                         {addLabels && (
-                            <div className="ml-6 flex flex-col gap-1">
-                                <label className="flex items-center gap-2 text-sm text-gray-400 cursor-pointer">
-                                    <input
-                                        type="radio"
-                                        name="labelMode"
-                                        value="root"
-                                        checked={labelMode === "root"}
-                                        onChange={() => setLabelMode("root")}
-                                        disabled={isLoading}
-                                        className="text-blue-600"
-                                    />
-                                    Root directory name
-                                </label>
-                                <label className="flex items-center gap-2 text-sm text-gray-400 cursor-pointer">
-                                    <input
-                                        type="radio"
-                                        name="labelMode"
-                                        value="subdir"
-                                        checked={labelMode === "subdir"}
-                                        onChange={() => setLabelMode("subdir")}
-                                        disabled={isLoading}
-                                        className="text-blue-600"
-                                    />
-                                    Each subdirectory name
-                                </label>
+                            <div className="ml-6 flex flex-col gap-2 mt-1">
+                                {(
+                                    [
+                                        { value: "root",       label: "Root directory",        example: 'e.g. "photos"' },
+                                        { value: "subdir",     label: "Immediate parent folder", example: 'e.g. "beach"' },
+                                        { value: "path",       label: "Full relative path",     example: 'e.g. "2023/vacation/beach"' },
+                                        { value: "components", label: "Each folder level",      example: 'e.g. "2023" + "vacation" + "beach"' },
+                                    ] as const
+                                ).map(({ value, label, example }) => (
+                                    <label key={value} className="flex items-start gap-2 cursor-pointer">
+                                        <input
+                                            type="radio"
+                                            name="labelMode"
+                                            value={value}
+                                            checked={labelMode === value}
+                                            onChange={() => setLabelMode(value)}
+                                            disabled={isLoading}
+                                            className="mt-0.5 text-blue-600"
+                                        />
+                                        <span>
+                                            <span className="text-sm text-gray-300">{label}</span>
+                                            <span className="ml-2 text-xs text-gray-500">{example}</span>
+                                        </span>
+                                    </label>
+                                ))}
                             </div>
                         )}
                     </div>

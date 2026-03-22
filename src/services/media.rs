@@ -525,8 +525,9 @@ pub struct RandomImageResponse {
 pub struct RandomImageQuery {
     #[serde(default)]
     pub starred_only: bool,
+    /// Comma-separated label IDs to filter by (OR semantics)
     #[serde(default)]
-    pub label_id: Option<i32>,
+    pub label_ids: Option<String>,
 }
 
 #[utoipa::path(
@@ -555,6 +556,12 @@ pub async fn get_random_image(
     let user_uuid = utils::parse_user_uuid(&claims.user_id)?;
     let client = utils::get_db_client(&pool.0).await?;
 
+    let label_ids_vec: Vec<i32> = query.label_ids.as_deref()
+        .unwrap_or("")
+        .split(',')
+        .filter_map(|s| s.trim().parse::<i32>().ok())
+        .collect();
+
     let mut sql = "SELECT i.hash, i.name, i.created_at, i.place FROM images i".to_string();
     let mut conditions = vec!["i.deleted_at IS NULL".to_string()];
     let mut params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = Vec::new();
@@ -564,10 +571,12 @@ pub async fn get_random_image(
         params.push(&user_uuid as &(dyn tokio_postgres::types::ToSql + Sync));
     }
 
-    if let Some(label_id) = &query.label_id {
-        sql.push_str(" INNER JOIN image_labels il ON i.hash = il.image_hash AND il.label_id = $");
-        sql.push_str(&(params.len() + 1).to_string());
-        params.push(label_id as &(dyn tokio_postgres::types::ToSql + Sync));
+    if !label_ids_vec.is_empty() {
+        sql.push_str(&format!(
+            " INNER JOIN image_labels il ON i.hash = il.image_hash AND il.label_id = ANY(${})",
+            params.len() + 1
+        ));
+        params.push(&label_ids_vec as &(dyn tokio_postgres::types::ToSql + Sync));
     }
 
     if claims.role != "admin" {

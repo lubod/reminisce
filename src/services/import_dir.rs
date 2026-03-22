@@ -180,17 +180,7 @@ async fn run_import(
 
     update_job(&job_store, &job_id, |job| { job.scanned = total_scanned; });
 
-    // Pre-create root label if label_mode == "root"
-    let root_label_id: Option<i32> = if label_mode == "root" {
-        let name = root_path.file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| "imported".to_string());
-        get_or_create_label(&pool, &user_uuid, &name).await
-    } else {
-        None
-    };
-
-    // Cache label ids by dir name to avoid redundant inserts in "subdir" mode
+    // label_cache: name → id, shared across all modes to avoid redundant DB hits
     let mut label_cache: std::collections::HashMap<String, i32> = std::collections::HashMap::new();
 
     for chunk in files_to_process.chunks(100) {
@@ -304,32 +294,20 @@ async fn run_import(
                 }
             }
 
-            // Attach label for both newly imported and already-existing files
+            // Attach labels for both newly imported and already-existing files
             imported += 1;
-            let label_id: Option<i32> = if label_mode == "root" {
-                root_label_id
-            } else if label_mode == "subdir" {
-                let dir_name = path.parent()
-                    .and_then(|p| p.file_name())
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_default();
-                if !dir_name.is_empty() {
-                    if let Some(&id) = label_cache.get(&dir_name) {
-                        Some(id)
-                    } else {
-                        let id = get_or_create_label(&pool, &user_uuid, &dir_name).await;
-                        if let Some(id) = id { label_cache.insert(dir_name, id); }
-                        id
-                    }
+            let label_names = labels_for_file(&path, &root_path, &label_mode);
+            for name in label_names {
+                let lid = if let Some(&id) = label_cache.get(&name) {
+                    Some(id)
                 } else {
-                    None
+                    let id = get_or_create_label(&pool, &user_uuid, &name).await;
+                    if let Some(id) = id { label_cache.insert(name, id); }
+                    id
+                };
+                if let Some(lid) = lid {
+                    attach_label(&pool, &hash, &device_id, lid, is_image).await;
                 }
-            } else {
-                None
-            };
-
-            if let Some(lid) = label_id {
-                attach_label(&pool, &hash, &device_id, lid, is_image).await;
             }
         }
 
@@ -344,11 +322,54 @@ async fn run_import(
 
     update_job(&job_store, &job_id, move |job| {
         job.status = JobStatus::Done;
-        job.scanned = job.scanned; // already set
         job.imported = imported;
         job.failed = failed;
         job.errors = errors.into_iter().take(20).collect();
     });
+}
+
+/// Returns the label name(s) to apply to a file based on label_mode.
+///
+/// - "root"       → [root dir name]                           e.g. "photos"
+/// - "subdir"     → [immediate parent dir name]               e.g. "beach"
+/// - "path"       → [relative path root→parent as one label]  e.g. "2023/vacation/beach"
+/// - "components" → [one label per path component]            e.g. ["2023","vacation","beach"]
+fn labels_for_file(path: &PathBuf, root_path: &PathBuf, label_mode: &str) -> Vec<String> {
+    match label_mode {
+        "root" => root_path
+            .file_name()
+            .map(|n| vec![n.to_string_lossy().to_string()])
+            .unwrap_or_default(),
+
+        "subdir" => path
+            .parent()
+            .and_then(|p| p.file_name())
+            .map(|n| vec![n.to_string_lossy().to_string()])
+            .unwrap_or_default(),
+
+        "path" => {
+            let rel = path.parent()
+                .and_then(|p| p.strip_prefix(root_path).ok())
+                .map(|p| p.to_string_lossy().replace('\\', "/"))
+                .unwrap_or_default();
+            if rel.is_empty() { vec![] } else { vec![rel] }
+        }
+
+        "components" => path
+            .parent()
+            .and_then(|p| p.strip_prefix(root_path).ok())
+            .map(|rel| {
+                rel.components()
+                    .filter_map(|c| match c {
+                        std::path::Component::Normal(s) => Some(s.to_string_lossy().to_string()),
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+
+        _ => vec![],
+    }
 }
 
 async fn get_or_create_label(pool: &web::Data<MainDbPool>, user_id: &Uuid, name: &str) -> Option<i32> {

@@ -15,14 +15,26 @@ export const PresentationMode = observer(() => {
     const [orientation, setOrientation] = useState<'landscape' | 'portrait'>('landscape');
     const [currentTime, setCurrentTime] = useState(new Date());
     
-    // Presentation Settings
-    const [starredOnly, setStarredOnly] = useState(false);
-    const [selectedLabelId, setSelectedLabelId] = useState<number | null>(null);
+    // Presentation Settings — persisted in localStorage
+    const [starredOnly, setStarredOnly] = useState<boolean>(() => {
+        try { return JSON.parse(localStorage.getItem("present.starredOnly") ?? "false"); } catch { return false; }
+    });
+    const [selectedLabelIds, setSelectedLabelIds] = useState<number[]>(() => {
+        try { return JSON.parse(localStorage.getItem("present.labelIds") ?? "[]"); } catch { return []; }
+    });
+    const [showInfo, setShowInfo] = useState<boolean>(() => {
+        try { return JSON.parse(localStorage.getItem("present.showInfo") ?? "true"); } catch { return true; }
+    });
+    const [labelSearch, setLabelSearch] = useState("");
     const [isPaused, setIsPaused] = useState(false);
     const [showSettings, setShowSettings] = useState(false);
-    const [showInfo, setShowInfo] = useState(true);
     
     const settingsRef = useRef<HTMLDivElement>(null);
+
+    // Persist settings to localStorage
+    useEffect(() => { localStorage.setItem("present.starredOnly", JSON.stringify(starredOnly)); }, [starredOnly]);
+    useEffect(() => { localStorage.setItem("present.labelIds", JSON.stringify(selectedLabelIds)); }, [selectedLabelIds]);
+    useEffect(() => { localStorage.setItem("present.showInfo", JSON.stringify(showInfo)); }, [showInfo]);
 
     // Update clock every second
     useEffect(() => {
@@ -39,7 +51,7 @@ export const PresentationMode = observer(() => {
 
     // Fetch a new random image
     const fetchNext = useCallback(async () => {
-        const image = await mediaStore.fetchRandomImage(starredOnly, selectedLabelId);
+        const image = await mediaStore.fetchRandomImage(starredOnly, selectedLabelIds);
         if (image) {
             setNextImage(image);
             setError(false);
@@ -47,7 +59,7 @@ export const PresentationMode = observer(() => {
             // If we can't find a next image, but have a current one, just stay on current
             if (!currentImage) setError(true);
         }
-    }, [mediaStore, starredOnly, selectedLabelId, currentImage]);
+    }, [mediaStore, starredOnly, selectedLabelIds, currentImage]);
 
     // Initial load and reset on settings change
     useEffect(() => {
@@ -56,16 +68,16 @@ export const PresentationMode = observer(() => {
             setNextImage(null);
             setError(false);
             setOpacity(0);
-            
-            const first = await mediaStore.fetchRandomImage(starredOnly, selectedLabelId);
+
+            const first = await mediaStore.fetchRandomImage(starredOnly, selectedLabelIds);
             if (first) {
                 setCurrentImage(first);
                 setZoomDirection(Math.random() > 0.5 ? 'in' : 'out');
                 setOpacity(1);
                 setTimeLeft(15);
-                
+
                 // Pre-fetch the next one
-                const next = await mediaStore.fetchRandomImage(starredOnly, selectedLabelId);
+                const next = await mediaStore.fetchRandomImage(starredOnly, selectedLabelIds);
                 if (next) setNextImage(next);
             } else {
                 setError(true);
@@ -81,7 +93,7 @@ export const PresentationMode = observer(() => {
             uiStore.setIsFullscreen(false);
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [starredOnly, selectedLabelId]);
+    }, [starredOnly, selectedLabelIds]);
 
     // Timer logic
     useEffect(() => {
@@ -164,8 +176,8 @@ export const PresentationMode = observer(() => {
                     <p className="text-sm mb-8">Try adjusting your filters or upload some new photos.</p>
                     
                     <div className="flex flex-col gap-4">
-                        <button 
-                            onClick={() => { setStarredOnly(false); setSelectedLabelId(null); }}
+                        <button
+                            onClick={() => { setStarredOnly(false); setSelectedLabelIds([]); }}
                             className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-md transition-colors"
                         >
                             Clear All Filters
@@ -324,22 +336,83 @@ export const PresentationMode = observer(() => {
 
                         {/* Label Filter */}
                         <div className="space-y-2">
-                            <label className="text-sm font-medium text-gray-300 block">Filter by Label</label>
-                            <div className="relative">
-                                <select 
-                                    value={selectedLabelId || ""} 
-                                    onChange={(e) => setSelectedLabelId(e.target.value ? parseInt(e.target.value) : null)}
-                                    className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all appearance-none"
-                                >
-                                    <option value="">All Labels</option>
-                                    {labelStore.labels.map(label => (
-                                        <option key={label.id} value={label.id}>{label.name}</option>
-                                    ))}
-                                </select>
-                                <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-gray-500">
-                                    <Tag size={14} />
-                                </div>
+                            <div className="flex items-center justify-between">
+                                <label className="text-sm font-medium text-gray-300 flex items-center gap-1.5">
+                                    <Tag size={13} className="text-gray-400" />
+                                    Filter by Labels
+                                    {selectedLabelIds.length > 0 && (
+                                        <span className="ml-1 px-1.5 py-0.5 rounded-full bg-blue-600 text-[10px] font-bold text-white">
+                                            {selectedLabelIds.length}
+                                        </span>
+                                    )}
+                                </label>
+                                {selectedLabelIds.length > 0 && (
+                                    <button
+                                        onClick={() => setSelectedLabelIds([])}
+                                        className="text-xs text-gray-500 hover:text-gray-300 transition-colors"
+                                    >
+                                        Clear
+                                    </button>
+                                )}
                             </div>
+                            {labelStore.labels.length === 0 ? (
+                                <p className="text-xs text-gray-500 italic">No labels yet</p>
+                            ) : (
+                                <>
+                                    <input
+                                        type="text"
+                                        placeholder="Search labels..."
+                                        value={labelSearch}
+                                        onChange={e => setLabelSearch(e.target.value)}
+                                        className="w-full bg-gray-800 border border-gray-700 rounded-md px-2.5 py-1.5 text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                                    />
+                                    <div className="max-h-40 overflow-y-auto space-y-0.5 pr-1">
+                                        {/* Selected labels always on top */}
+                                        {labelStore.labels
+                                            .filter(l => selectedLabelIds.includes(l.id))
+                                            .filter(l => l.name.toLowerCase().includes(labelSearch.toLowerCase()))
+                                            .map(label => (
+                                                <label
+                                                    key={label.id}
+                                                    className="flex items-center gap-2 cursor-pointer rounded-md px-2 py-1 bg-blue-900/20 hover:bg-blue-900/30 transition-colors"
+                                                >
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={true}
+                                                        onChange={() => setSelectedLabelIds(prev => prev.filter(id => id !== label.id))}
+                                                        className="w-3.5 h-3.5 rounded text-blue-600 bg-gray-700 border-gray-600 focus:ring-blue-500"
+                                                    />
+                                                    <span className="text-sm text-blue-300 truncate">{label.name}</span>
+                                                </label>
+                                            ))
+                                        }
+                                        {/* Unselected labels */}
+                                        {labelStore.labels
+                                            .filter(l => !selectedLabelIds.includes(l.id))
+                                            .filter(l => l.name.toLowerCase().includes(labelSearch.toLowerCase()))
+                                            .map(label => (
+                                                <label
+                                                    key={label.id}
+                                                    className="flex items-center gap-2 cursor-pointer group rounded-md px-2 py-1 hover:bg-gray-800 transition-colors"
+                                                >
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={false}
+                                                        onChange={() => setSelectedLabelIds(prev => [...prev, label.id])}
+                                                        className="w-3.5 h-3.5 rounded text-blue-600 bg-gray-700 border-gray-600 focus:ring-blue-500"
+                                                    />
+                                                    <span className="text-sm text-gray-300 group-hover:text-white transition-colors truncate">
+                                                        {label.name}
+                                                    </span>
+                                                </label>
+                                            ))
+                                        }
+                                        {labelStore.labels.filter(l => l.name.toLowerCase().includes(labelSearch.toLowerCase())).length === 0 && (
+                                            <p className="text-xs text-gray-500 italic px-2 py-1">No labels match</p>
+                                        )}
+                                    </div>
+                                </>
+                            )}
                         </div>
 
                         <div className="pt-4 border-t border-gray-800">
@@ -350,11 +423,11 @@ export const PresentationMode = observer(() => {
                                 <span className={`px-2 py-1 rounded text-[10px] font-bold border ${starredOnly ? 'bg-yellow-900/20 border-yellow-700/50 text-yellow-500' : 'bg-gray-800 border-gray-700 text-gray-400'}`}>
                                     {starredOnly ? 'STARRED ONLY' : 'ALL IMAGES'}
                                 </span>
-                                {selectedLabelId && (
-                                    <span className="px-2 py-1 rounded text-[10px] font-bold border bg-blue-900/20 border-blue-700/50 text-blue-400 uppercase">
-                                        {labelStore.labels.find(l => l.id === selectedLabelId)?.name}
+                                {selectedLabelIds.map(id => (
+                                    <span key={id} className="px-2 py-1 rounded text-[10px] font-bold border bg-blue-900/20 border-blue-700/50 text-blue-400 uppercase">
+                                        {labelStore.labels.find(l => l.id === id)?.name}
                                     </span>
-                                )}
+                                ))}
                             </div>
                         </div>
                     </div>

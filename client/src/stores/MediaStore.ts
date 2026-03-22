@@ -732,11 +732,11 @@ export class MediaStore {
         });
     };
 
-    fetchRandomImage = async (starredOnly: boolean = false, labelId: number | null = null): Promise<MediaItem | null> => {
+    fetchRandomImage = async (starredOnly: boolean = false, labelIds: number[] = []): Promise<MediaItem | null> => {
         try {
             const params = new URLSearchParams();
             if (starredOnly) params.append('starred_only', 'true');
-            if (labelId !== null) params.append('label_id', labelId.toString());
+            if (labelIds.length > 0) params.append('label_ids', labelIds.join(','));
             const response = await axios.get<{hash: string, name: string, created_at: string, place?: string}>(`/image/random?${params.toString()}`);
             const item = response.data;
             const imageResponse = await axios.get(`/image/${item.hash}`, { responseType: 'blob' });
