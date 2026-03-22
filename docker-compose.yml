@@ -45,8 +45,8 @@ services:
     volumes:
       - ai_model_cache:/root/.cache/huggingface
       - face_model_cache:/root/.insightface
-    #GPU# devices:
-    #GPU#   - /dev/dri:/dev/dri
+    #GPU#devices:
+    #GPU#  - /dev/dri:/dev/dri
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8081/health || exit 1"]

@@ -56,7 +56,7 @@ success "Downloaded compose file and schema"
 # ─── 3b. Patch docker-compose.yml based on hardware ──────────────────────────
 if [ -d /dev/dri ]; then
     info "AMD GPU detected (/dev/dri) — enabling hardware acceleration for AI server"
-    sed -i 's|^    #GPU# ||g' docker-compose.yml
+    sed -i 's|#GPU#||g' docker-compose.yml
     success "GPU acceleration enabled in docker-compose.yml"
 else
     info "No GPU detected — AI server will run in CPU mode (slower but functional)"
