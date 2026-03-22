@@ -58,12 +58,13 @@ pub fn start_coordinator_client(
     node_id: String,
     quic_port: Option<u16>,
     registry: PeerRegistry,
+    namespace: String,
 ) {
     tokio::spawn(async move {
-        info!("[COORDINATOR] Client started for {}", coordinator_addr);
+        info!("[COORDINATOR] Client started for {} (namespace={})", coordinator_addr, namespace);
 
         loop {
-            match run_once(&node, coordinator_addr, &node_id, quic_port, &registry).await {
+            match run_once(&node, coordinator_addr, &node_id, quic_port, &registry, &namespace).await {
                 Ok(n) => {
                     if n > 0 {
                         info!("[COORDINATOR] Merged {} peers from coordinator", n);
@@ -83,6 +84,7 @@ async fn run_once(
     node_id: &str,
     quic_port: Option<u16>,
     registry: &PeerRegistry,
+    namespace: &str,
 ) -> crate::error::Result<usize> {
     let conn = tokio::time::timeout(
         std::time::Duration::from_secs(10),
@@ -97,9 +99,10 @@ async fn run_once(
         Message::RegisterNode {
             node_id: node_id.to_string(),
             quic_port: port,
+            namespace: namespace.to_string(),
         }
     } else {
-        Message::GetPeers
+        Message::GetPeers { namespace: namespace.to_string() }
     };
 
     Protocol::send(&mut send, &msg).await?;

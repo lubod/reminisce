@@ -101,6 +101,8 @@ p2p_data_dir: "/app/data/p2p"
 p2p_discovery_port: 5060
 # Coordinator for cross-network peer discovery and relay
 p2p_coordinator_addr: "dnet.openreminisce.org:5055"
+# Namespace isolates this instance's storage nodes from other environments on the shared coordinator
+p2p_namespace: "production"
 # Reverse tunnel — lets Android reach this server via the VPS
 p2p_tunnel_local_port: 8080
 p2p_tunnel_public_url: "https://dnet.openreminisce.org:8443"

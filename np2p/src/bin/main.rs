@@ -32,6 +32,10 @@ struct Args {
     /// Coordinator QUIC address for cross-network discovery and relay (e.g. 1.2.3.4:5055)
     #[arg(long)]
     coordinator_addr: Option<SocketAddr>,
+
+    /// Namespace for coordinator peer isolation (e.g. "production", "dev")
+    #[arg(long, default_value = "default")]
+    namespace: String,
 }
 
 #[tokio::main]
@@ -88,6 +92,7 @@ async fn main() -> anyhow::Result<()> {
             node_id_hex.clone(),
             Some(quic_port),
             service.registry.clone(),
+            args.namespace.clone(),
         );
 
         // Reverse channel — so coordinator can relay messages to us even when behind NAT

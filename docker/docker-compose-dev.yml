@@ -119,6 +119,7 @@ services:
             --data-dir /data
             --discovery-port 5060
             --coordinator-addr 127.0.0.1:5055
+            --namespace dev
     volumes:
       - p2p_dev_data_1:/data
     restart: unless-stopped
@@ -132,6 +133,7 @@ services:
             --data-dir /data
             --discovery-port 5060
             --coordinator-addr 127.0.0.1:5055
+            --namespace dev
     volumes:
       - p2p_dev_data_2:/data
     restart: unless-stopped
@@ -145,6 +147,7 @@ services:
             --data-dir /data
             --discovery-port 5060
             --coordinator-addr 127.0.0.1:5055
+            --namespace dev
     volumes:
       - p2p_dev_data_3:/data
     restart: unless-stopped
@@ -158,6 +161,7 @@ services:
             --data-dir /data
             --discovery-port 5060
             --coordinator-addr 127.0.0.1:5055
+            --namespace dev
     volumes:
       - p2p_dev_data_4:/data
     restart: unless-stopped
@@ -171,6 +175,7 @@ services:
             --data-dir /data
             --discovery-port 5060
             --coordinator-addr 127.0.0.1:5055
+            --namespace dev
     volumes:
       - p2p_dev_data_5:/data
     restart: unless-stopped

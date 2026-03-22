@@ -53,15 +53,16 @@ struct PeerEntry {
     last_seen: Instant,
 }
 
-type PeerMap = Arc<RwLock<HashMap<String, PeerEntry>>>;
+/// Key: (namespace, node_id)
+type PeerMap = Arc<RwLock<HashMap<(String, String), PeerEntry>>>;
 
-fn current_peer_list(peers: &PeerMap, ttl: u64) -> Vec<(String, String)> {
+fn current_peer_list(peers: &PeerMap, namespace: &str, ttl: u64) -> Vec<(String, String)> {
     peers
         .read()
         .unwrap()
-        .values()
-        .filter(|p| p.last_seen.elapsed().as_secs() < ttl)
-        .map(|p| (p.node_id.clone(), format!("{}:{}", p.ip, p.quic_port)))
+        .iter()
+        .filter(|((ns, _), p)| ns == namespace && p.last_seen.elapsed().as_secs() < ttl)
+        .map(|(_, p)| (p.node_id.clone(), format!("{}:{}", p.ip, p.quic_port)))
         .collect()
 }
 
@@ -87,18 +88,18 @@ async fn handle_stream(
     channels: ChannelMap,
 ) {
     let response = match msg {
-        Message::RegisterNode { node_id, quic_port } => {
-            info!("[COORD] Register: node_id={} ip={} quic_port={}", node_id, remote_ip, quic_port);
+        Message::RegisterNode { node_id, quic_port, namespace } => {
+            info!("[COORD] Register: node_id={} ns={} ip={} quic_port={}", node_id, namespace, remote_ip, quic_port);
             peers.write().unwrap().insert(
-                node_id.clone(),
+                (namespace.clone(), node_id.clone()),
                 PeerEntry { node_id, ip: remote_ip, quic_port, last_seen: Instant::now() },
             );
-            Message::PeerList { peers: current_peer_list(&peers, peer_ttl_secs) }
+            Message::PeerList { peers: current_peer_list(&peers, &namespace, peer_ttl_secs) }
         }
 
-        Message::GetPeers => {
-            info!("[COORD] GetPeers from {}", remote_ip);
-            Message::PeerList { peers: current_peer_list(&peers, peer_ttl_secs) }
+        Message::GetPeers { namespace } => {
+            info!("[COORD] GetPeers ns={} from {}", namespace, remote_ip);
+            Message::PeerList { peers: current_peer_list(&peers, &namespace, peer_ttl_secs) }
         }
 
         Message::RelayRequest { target_node_id, payload } => {
@@ -158,8 +159,8 @@ async fn relay(
     // Fall back to direct connection
     let target_addr = {
         let map = peers.read().unwrap();
-        map.get(target_node_id)
-            .filter(|e| e.last_seen.elapsed().as_secs() < peer_ttl_secs)
+        map.values()
+            .find(|e| e.node_id == target_node_id && e.last_seen.elapsed().as_secs() < peer_ttl_secs)
             .map(|e| SocketAddr::new(e.ip, e.quic_port))
     };
     let target_addr = match target_addr {
@@ -339,7 +340,7 @@ async fn main() -> anyhow::Result<()> {
                 tokio::time::sleep(std::time::Duration::from_secs(30)).await;
                 let mut map = peers.write().unwrap();
                 let before = map.len();
-                map.retain(|_, p| p.last_seen.elapsed().as_secs() < ttl);
+                map.retain(|_key, p| p.last_seen.elapsed().as_secs() < ttl);
                 let removed = before - map.len();
                 if removed > 0 {
                     info!("[COORD] Cleaned {} stale peers, {} active", removed, map.len());

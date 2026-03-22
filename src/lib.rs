@@ -410,6 +410,7 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
                             node_id.clone(),
                             None, // home server doesn't expose a storage port
                             p2p_service.registry.clone(),
+                            config.p2p_namespace.clone(),
                         );
 
                         // Reverse tunnel — lets Android reach this home server via VPS

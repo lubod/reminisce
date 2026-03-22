@@ -43,10 +43,10 @@ pub enum Message {
     Heartbeat { available_space_bytes: u64 },
 
     /// Coordinator: register this node. Coordinator replies with PeerList.
-    RegisterNode { node_id: String, quic_port: u16 },
+    RegisterNode { node_id: String, quic_port: u16, namespace: String },
 
     /// Coordinator: request the current peer list. Coordinator replies with PeerList.
-    GetPeers,
+    GetPeers { namespace: String },
 
     /// Coordinator: list of known peers as ("node_id", "ip:port") pairs.
     PeerList { peers: Vec<(String, String)> },

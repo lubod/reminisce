@@ -100,6 +100,11 @@ pub struct Config {
     /// (e.g. https://vps-ip:8443). Included in the QR code.
     #[serde(default)]
     pub p2p_tunnel_public_url: Option<String>,
+
+    /// Namespace used when registering with / querying the coordinator.
+    /// Use different values for dev and production to avoid cross-contamination.
+    #[serde(default = "default_p2p_namespace")]
+    pub p2p_namespace: String,
 }
 
 fn default_port() -> u16 {
@@ -144,6 +149,10 @@ fn default_p2p_data_dir() -> String {
 
 fn default_p2p_discovery_port() -> u16 {
     5060
+}
+
+fn default_p2p_namespace() -> String {
+    "default".to_string()
 }
 
 impl Config {
