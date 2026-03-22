@@ -12,10 +12,14 @@ async fn test_health_check_healthy() {
     common::init_log();
     let (pool, _test_db) = setup_test_database_with_instance().await;
     let main_pool = common::utils::wrap_main_pool(pool.clone());
+    let geotagging_pool = common::utils::create_geotagging_pool().await;
+    let config = common::utils::create_test_config();
 
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(main_pool))
+            .app_data(web::Data::new(geotagging_pool))
+            .app_data(web::Data::new(config))
             .service(health_check)
     ).await;
 
@@ -39,10 +43,14 @@ async fn test_health_check_response_structure() {
     common::init_log();
     let (pool, _test_db) = setup_test_database_with_instance().await;
     let main_pool = common::utils::wrap_main_pool(pool.clone());
+    let geotagging_pool = common::utils::create_geotagging_pool().await;
+    let config = common::utils::create_test_config();
 
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(main_pool))
+            .app_data(web::Data::new(geotagging_pool))
+            .app_data(web::Data::new(config))
             .service(health_check)
     ).await;
 
