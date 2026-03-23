@@ -15,6 +15,7 @@ export interface DashboardStats {
     total_faces: number;
     total_persons: number;
     images_with_faces: number;
+    images_face_pending: number;
     total_p2p_synced_images: number;
     total_p2p_synced_videos: number;
     thumbnail_count: number;

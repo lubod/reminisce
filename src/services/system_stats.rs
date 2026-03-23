@@ -2,11 +2,32 @@ use actix_web::{get, web, HttpRequest, HttpResponse};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use sysinfo::{System, SystemExt, CpuExt, DiskExt};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use crate::config::Config;
 use crate::utils;
 use crate::db::MainDbPool;
 use np2p::network::P2PService;
+
+pub type SharedSystem = Arc<Mutex<System>>;
+
+/// Spawn a background task that refreshes CPU stats every second.
+/// `sysinfo` requires two measurements separated by time for accurate CPU %.
+pub fn start_system_monitor() -> SharedSystem {
+    let sys = Arc::new(Mutex::new(System::new_all()));
+    let sys_bg = sys.clone();
+    tokio::spawn(async move {
+        loop {
+            {
+                let mut s = sys_bg.lock().unwrap();
+                s.refresh_cpu();
+                s.refresh_memory();
+                s.refresh_disks();
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+        }
+    });
+    sys
+}
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct SystemStatsResponse {
@@ -50,37 +71,51 @@ pub struct P2PDaemonStatus {
 pub async fn get_system_stats(
     req: HttpRequest,
     config: web::Data<Config>,
+    shared_sys: web::Data<SharedSystem>,
 ) -> Result<HttpResponse, actix_web::Error> {
     let _claims = match utils::authenticate_request(&req, "get_system_stats", config.get_api_key()) {
         Ok(claims) => claims,
         Err(response) => return Ok(response),
     };
 
-    let mut sys = System::new_all();
-    sys.refresh_all();
+    let cpu_usage;
+    let total_mem;
+    let used_mem;
+    let total_disk;
+    let used_disk;
+    let available_disk;
+    let uptime_seconds;
+    {
+        let sys = shared_sys.lock().unwrap();
 
-    // CPU Usage
-    let cpu_usage = sys.global_cpu_info().cpu_usage();
+        // CPU — accurate because background task refreshes every second
+        cpu_usage = sys.global_cpu_info().cpu_usage();
 
-    // Memory usage in GB
-    let total_mem = sys.total_memory() as f32 / (1024.0 * 1024.0 * 1024.0);
-    let used_mem = sys.used_memory() as f32 / (1024.0 * 1024.0 * 1024.0);
-    let mem_percent = (used_mem / total_mem) * 100.0;
+        // Memory in GB
+        total_mem = sys.total_memory() as f32 / (1024.0 * 1024.0 * 1024.0);
+        used_mem = sys.used_memory() as f32 / (1024.0 * 1024.0 * 1024.0);
 
-    // Disk usage (root partition)
-    let mut total_disk = 0.0;
-    let mut used_disk = 0.0;
-    let mut available_disk = 0.0;
-
-    for disk in sys.disks() {
-        if disk.mount_point() == std::path::Path::new("/") || disk.mount_point().to_str().unwrap_or("").contains("data") {
-            total_disk = disk.total_space() as f32 / (1024.0 * 1024.0 * 1024.0);
-            available_disk = disk.available_space() as f32 / (1024.0 * 1024.0 * 1024.0);
-            used_disk = total_disk - available_disk;
-            break;
+        // Disk usage (root partition)
+        let mut td = 0.0f32;
+        let mut ud = 0.0f32;
+        let mut ad = 0.0f32;
+        for disk in sys.disks() {
+            if disk.mount_point() == std::path::Path::new("/")
+                || disk.mount_point().to_str().unwrap_or("").contains("data")
+            {
+                td = disk.total_space() as f32 / (1024.0 * 1024.0 * 1024.0);
+                ad = disk.available_space() as f32 / (1024.0 * 1024.0 * 1024.0);
+                ud = td - ad;
+                break;
+            }
         }
+        total_disk = td;
+        used_disk = ud;
+        available_disk = ad;
+        uptime_seconds = sys.uptime();
     }
-    
+
+    let mem_percent = (used_mem / total_mem) * 100.0;
     let disk_percent = if total_disk > 0.0 { (used_disk / total_disk) * 100.0 } else { 0.0 };
 
     // GPU Load (AMD ROCm)
@@ -105,7 +140,7 @@ pub async fn get_system_stats(
         disk_total_gb: total_disk,
         disk_usage_percent: disk_percent,
         disk_available_gb: available_disk,
-        uptime_seconds: sys.uptime(),
+        uptime_seconds,
         gpu_info: Some("AMD ROCm".to_string()),
         gpu_usage_percent: Some(gpu_load as f32),
         gpu_memory_used_mb: if gpu_vram_total > 0.0 { Some(gpu_vram_used) } else { None },

@@ -500,6 +500,8 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
         .build()
         .unwrap();
 
+    let shared_system = web::Data::new(services::system_stats::start_system_monitor());
+
     HttpServer::new(move || {
         let cors = actix_cors::Cors::permissive();
 
@@ -512,6 +514,7 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
             .app_data(config_data.clone())
             .app_data(p2p_service_data.clone())
             .app_data(import_job_store.clone())
+            .app_data(shared_system.clone())
             .service(
                 SwaggerUi::new("/swagger-ui/{_:.*}").url("/api-doc/openapi.json", ApiDoc::openapi())
             )

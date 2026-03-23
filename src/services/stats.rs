@@ -23,6 +23,7 @@ pub struct StatsResponse {
     pub total_faces: i64,
     pub total_persons: i64,
     pub images_with_faces: i64,
+    pub images_face_pending: i64,
     pub total_p2p_synced_images: i64,
     pub total_p2p_synced_videos: i64,
     pub thumbnail_count: i64,
@@ -70,6 +71,7 @@ pub async fn get_stats(
             (SELECT COUNT(*) FROM faces WHERE (image_deviceid, image_hash) IN (SELECT deviceid, hash FROM images WHERE deleted_at IS NULL)) as total_faces,
             (SELECT COUNT(*) FROM persons) as total_persons,
             (SELECT COUNT(*) FROM (SELECT DISTINCT image_hash, image_deviceid FROM faces WHERE (image_deviceid, image_hash) IN (SELECT deviceid, hash FROM images WHERE deleted_at IS NULL)) AS distinct_images) as images_with_faces,
+            (SELECT COUNT(*) FROM images WHERE face_detection_completed_at IS NULL AND deleted_at IS NULL) as images_face_pending,
             (SELECT COUNT(*) FROM images WHERE p2p_synced_at IS NOT NULL AND deleted_at IS NULL) as total_p2p_synced_images,
             (SELECT COUNT(*) FROM videos WHERE p2p_synced_at IS NOT NULL AND deleted_at IS NULL) as total_p2p_synced_videos,
             ((SELECT COUNT(*) FROM images WHERE has_thumbnail = true AND deleted_at IS NULL) + (SELECT COUNT(*) FROM videos WHERE has_thumbnail = true AND deleted_at IS NULL)) as thumbnail_count
@@ -96,9 +98,10 @@ pub async fn get_stats(
         total_faces: row.get(9),
         total_persons: row.get(10),
         images_with_faces: row.get(11),
-        total_p2p_synced_images: row.get(12),
-        total_p2p_synced_videos: row.get(13),
-        thumbnail_count: row.get(14),
+        images_face_pending: row.get(12),
+        total_p2p_synced_images: row.get(13),
+        total_p2p_synced_videos: row.get(14),
+        thumbnail_count: row.get(15),
     };
 
     Ok(HttpResponse::Ok().json(stats))

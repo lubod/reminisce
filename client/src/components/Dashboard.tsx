@@ -169,16 +169,52 @@ export const Dashboard = observer(() => {
                     <>
                         {/* --- Overview Tab --- */}
                         {activeTab === 'overview' && (
-                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                                {statCards.map((card, index) => (
-                                    <div key={index} className="bg-gray-800 shadow-lg rounded-xl border border-gray-700 p-5 flex items-center transition-transform hover:scale-[1.02]">
-                                        <div className="p-3 bg-gray-900/50 rounded-lg">{card.icon}</div>
-                                        <div className="ml-5">
-                                            <dt className="text-xs font-medium text-gray-500 uppercase tracking-wider">{card.title}</dt>
-                                            <dd className="text-2xl font-bold text-gray-100">{card.value?.toLocaleString() ?? '...'}</dd>
+                            <div className="space-y-6">
+                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                                    {statCards.map((card, index) => (
+                                        <div key={index} className="bg-gray-800 shadow-lg rounded-xl border border-gray-700 p-5 flex items-center transition-transform hover:scale-[1.02]">
+                                            <div className="p-3 bg-gray-900/50 rounded-lg">{card.icon}</div>
+                                            <div className="ml-5">
+                                                <dt className="text-xs font-medium text-gray-500 uppercase tracking-wider">{card.title}</dt>
+                                                <dd className="text-2xl font-bold text-gray-100">{card.value?.toLocaleString() ?? '...'}</dd>
+                                            </div>
                                         </div>
-                                    </div>
-                                ))}
+                                    ))}
+                                </div>
+                                {/* Face Detection Progress */}
+                                {stats && stats.images_face_pending > 0 && (() => {
+                                    const total = stats.total_images;
+                                    const done = total - stats.images_face_pending;
+                                    const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+                                    const etaSec = Math.round(stats.images_face_pending * 0.63);
+                                    const etaStr = etaSec < 60 ? `~${etaSec}s`
+                                        : etaSec < 3600 ? `~${Math.round(etaSec / 60)}m`
+                                        : `~${(etaSec / 3600).toFixed(1)}h`;
+                                    return (
+                                        <div className="bg-gray-800 border border-yellow-700/50 rounded-xl p-5">
+                                            <div className="flex items-center justify-between mb-3">
+                                                <div className="flex items-center gap-2 text-yellow-300 font-semibold text-sm">
+                                                    <Clock className="w-4 h-4" />
+                                                    Face Detection In Progress
+                                                </div>
+                                                <span className="text-xs text-gray-400">
+                                                    {stats.images_face_pending.toLocaleString()} pending · ETA {etaStr}
+                                                </span>
+                                            </div>
+                                            <div className="w-full bg-gray-700 rounded-full h-2.5 mb-2">
+                                                <div
+                                                    className="bg-yellow-500 h-2.5 rounded-full transition-all duration-500"
+                                                    style={{ width: `${pct}%` }}
+                                                />
+                                            </div>
+                                            <div className="flex justify-between text-xs text-gray-500">
+                                                <span>{done.toLocaleString()} processed</span>
+                                                <span>{pct}%</span>
+                                                <span>{total.toLocaleString()} total</span>
+                                            </div>
+                                        </div>
+                                    );
+                                })()}
                             </div>
                         )}
 
