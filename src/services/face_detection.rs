@@ -182,14 +182,19 @@ pub async fn cluster_faces_for_user(
             .await
             .map_err(|e| format!("Failed to assign face: {}", e))?;
 
-        // Update person stats and representative embedding
-        // Recalculate representative embedding as average of all faces
+        // Update person stats, representative embedding, and pick the face
+        // closest to the centroid as the thumbnail (most "typical" face)
         client
             .execute(
                 "UPDATE persons SET
                     face_count = (SELECT COUNT(*) FROM faces WHERE person_id = $1),
                     representative_embedding = (
                         SELECT AVG(embedding) FROM faces WHERE person_id = $1
+                    ),
+                    representative_face_id = (
+                        SELECT id FROM faces WHERE person_id = $1
+                        ORDER BY embedding <=> (SELECT AVG(embedding) FROM faces WHERE person_id = $1)
+                        LIMIT 1
                     ),
                     updated_at = NOW()
                  WHERE id = $1",

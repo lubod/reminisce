@@ -136,6 +136,7 @@ pub use crate::services::import_dir::{import_directory, get_import_status};
         crate::services::person::get_person,
         crate::services::person::get_person_images,
         crate::services::person::update_person_name,
+        crate::services::person::set_representative_face,
         crate::services::person::merge_persons,
         crate::services::system_stats::get_system_stats,
         crate::services::system_stats::get_p2p_daemon_status,
@@ -566,6 +567,7 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
                     .service(services::person::get_person)
                     .service(services::person::get_person_images)
                     .service(services::person::update_person_name)
+                    .service(services::person::set_representative_face)
                     .service(services::person::merge_persons)
                     .service(services::system_stats::get_system_stats)
                     .service(services::system_stats::get_p2p_daemon_status)

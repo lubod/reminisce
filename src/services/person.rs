@@ -426,6 +426,74 @@ pub async fn update_person_name(
     })))
 }
 
+/// Set the representative (thumbnail) face for a person
+#[derive(Deserialize, ToSchema)]
+pub struct SetRepresentativeFaceRequest {
+    pub face_id: i64,
+}
+
+#[utoipa::path(
+    put,
+    path = "/api/persons/{id}/representative_face",
+    params(("id" = i64, Path, description = "Person ID")),
+    request_body = SetRepresentativeFaceRequest,
+    responses(
+        (status = 200, description = "Representative face updated"),
+        (status = 401, description = "Unauthorized"),
+        (status = 404, description = "Person or face not found"),
+        (status = 500, description = "Internal server error")
+    ),
+    tag = "Persons"
+)]
+#[put("/persons/{id}/representative_face")]
+pub async fn set_representative_face(
+    req: HttpRequest,
+    path: web::Path<i64>,
+    body: web::Json<SetRepresentativeFaceRequest>,
+    pool: web::Data<MainDbPool>,
+    config: web::Data<Config>,
+) -> Result<HttpResponse, actix_web::Error> {
+    let claims = match utils::authenticate_request(&req, "set_representative_face", config.get_api_key()) {
+        Ok(claims) => claims,
+        Err(response) => return Ok(response),
+    };
+
+    let user_uuid = utils::parse_user_uuid(&claims.user_id)?;
+    let person_id = path.into_inner();
+    let client = utils::get_db_client(&pool.0).await?;
+
+    // Verify the face belongs to this person and the person belongs to this user
+    let face_ok = client
+        .query_opt(
+            "SELECT 1 FROM faces f JOIN persons p ON f.person_id = p.id
+             WHERE f.id = $1 AND p.id = $2 AND p.user_id = $3",
+            &[&body.face_id, &person_id, &user_uuid],
+        )
+        .await
+        .map_err(|e| { error!("Failed to verify face ownership: {}", e); actix_web::error::ErrorInternalServerError("Query failed") })?;
+
+    if face_ok.is_none() {
+        return Ok(HttpResponse::NotFound().json(serde_json::json!({
+            "error": "Face not found for this person"
+        })));
+    }
+
+    let rows = client
+        .execute(
+            "UPDATE persons SET representative_face_id = $1, updated_at = NOW() WHERE id = $2 AND user_id = $3",
+            &[&body.face_id, &person_id, &user_uuid],
+        )
+        .await
+        .map_err(|e| { error!("Failed to set representative face: {}", e); actix_web::error::ErrorInternalServerError("Update failed") })?;
+
+    if rows == 0 {
+        return Ok(HttpResponse::NotFound().json(serde_json::json!({"error": "Person not found"})));
+    }
+
+    info!("Set representative face {} for person {}", body.face_id, person_id);
+    Ok(HttpResponse::Ok().json(serde_json::json!({"success": true})))
+}
+
 /// Merge two person clusters
 #[utoipa::path(
     post,
@@ -492,12 +560,17 @@ pub async fn merge_persons(
             actix_web::error::ErrorInternalServerError("Merge failed")
         })?;
 
-    // Update target person stats
+    // Update target person stats and pick the most central face as thumbnail
     client
         .execute(
             "UPDATE persons SET
                 face_count = (SELECT COUNT(*) FROM faces WHERE person_id = $1),
                 representative_embedding = (SELECT AVG(embedding) FROM faces WHERE person_id = $1),
+                representative_face_id = (
+                    SELECT id FROM faces WHERE person_id = $1
+                    ORDER BY embedding <=> (SELECT AVG(embedding) FROM faces WHERE person_id = $1)
+                    LIMIT 1
+                ),
                 updated_at = NOW()
              WHERE id = $1",
             &[&body.target_person_id],

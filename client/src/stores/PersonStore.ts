@@ -23,7 +23,8 @@ export interface PersonImage {
     created_at: string;
     bbox: number[];
     confidence: number;
-    thumbnailUrl?: string;
+    thumbnailUrl?: string;      // face-cropped, used in the grid
+    fullThumbnailUrl?: string;  // full image, used in lightbox
     thumbnail_url?: string;
     face_id: number;
     place?: string;
@@ -142,7 +143,10 @@ export class PersonStore {
 
             const imagesWithThumbnails = response.data.images.map(image => ({
                 ...image,
-                thumbnailUrl: image.thumbnail_url ? this.getAuthenticatedUrl(image.thumbnail_url) : undefined
+                // Face-cropped thumbnail for the grid
+                thumbnailUrl: this.getAuthenticatedUrl(`/api/face/${image.face_id}/thumbnail`),
+                // Full image thumbnail for the lightbox
+                fullThumbnailUrl: image.thumbnail_url ? this.getAuthenticatedUrl(image.thumbnail_url) : undefined,
             }));
 
             runInAction(() => {
@@ -174,6 +178,17 @@ export class PersonStore {
         } catch (error) {
             console.error("Failed to update person name", error);
             this.rootStore.uiStore.setError("Failed to update person name");
+        }
+    };
+
+    setRepresentativeFace = async (personId: number, faceId: number) => {
+        try {
+            await axios.put(`/persons/${personId}/representative_face`, { face_id: faceId });
+            // Refresh so thumbnail URL updates
+            await this.fetchPerson(personId);
+        } catch (error) {
+            console.error("Failed to set representative face", error);
+            this.rootStore.uiStore.setError("Failed to set representative face");
         }
     };
 

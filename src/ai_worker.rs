@@ -624,17 +624,110 @@ async fn process_face_detection(
         .map_err(|e| format!("Blocking task failed: {}", e))?
         .map_err(|e| format!("Failed to apply orientation: {}", e))?;
 
-    // Pre-resize to 2048px max for face detection — reduces data transfer to AI service
-    let oriented_image_data = resize_image_for_ai(oriented_image_data, 2048).await?;
+    // Get oriented image dimensions before resizing so we can scale bbox coords back later
+    let (orig_w, orig_h) = {
+        let data = oriented_image_data.clone();
+        actix_web::web::block(move || {
+            image::load_from_memory(&data)
+                .map(|img| (img.width(), img.height()))
+                .map_err(|e| format!("Failed to decode image dimensions: {}", e))
+        }).await
+            .map_err(|e| format!("Blocking task failed: {}", e))??
+    };
 
-    let faces = crate::services::face_detection::detect_faces(&oriented_image_data, config).await?;
+    // Pre-resize to 2048px max for face detection — reduces data transfer to AI service
+    const FACE_DET_MAX_DIM: u32 = 2048;
+    let resized_data = resize_image_for_ai(oriented_image_data, FACE_DET_MAX_DIM).await?;
+
+    let faces = crate::services::face_detection::detect_faces(&resized_data, config).await?;
 
     if faces.is_empty() {
         info!("No faces detected in image: {}", hash);
         return Ok(0);
     }
 
+    // Scale bbox coordinates back to original oriented image space.
+    // InsightFace returned coords relative to the resized image; we need them
+    // relative to the original so get_face_thumbnail can crop correctly.
+    let faces = scale_bboxes_to_original(faces, orig_w, orig_h, FACE_DET_MAX_DIM);
+
     crate::services::face_detection::store_faces(hash, deviceid, user_id, faces, client).await
+}
+
+/// Scale face bbox coordinates from detection-image space back to original image space.
+/// `resize_image_for_ai` fits the image within `max_dim x max_dim` maintaining aspect ratio,
+/// so the scale factor is `max(orig_w, orig_h) / max_dim` when downscaling occurred.
+fn scale_bboxes_to_original(
+    faces: Vec<(Vec<i32>, pgvector::Vector, f32)>,
+    orig_w: u32,
+    orig_h: u32,
+    max_dim: u32,
+) -> Vec<(Vec<i32>, pgvector::Vector, f32)> {
+    let max_orig = orig_w.max(orig_h);
+    if max_orig <= max_dim {
+        return faces; // Image was not downscaled, coords are already correct
+    }
+    let scale = max_orig as f64 / max_dim as f64;
+    faces.into_iter().map(|(bbox, embedding, confidence)| {
+        let scaled = bbox.iter().map(|&v| (v as f64 * scale).round() as i32).collect();
+        (scaled, embedding, confidence)
+    }).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dummy_faces(bboxes: &[[i32; 4]]) -> Vec<(Vec<i32>, pgvector::Vector, f32)> {
+        bboxes.iter().map(|b| {
+            (b.to_vec(), pgvector::Vector::from(vec![0.0f32; 512]), 0.99)
+        }).collect()
+    }
+
+    #[test]
+    fn no_scale_when_image_fits_in_max_dim() {
+        // 1000x800 image — no resize, coords unchanged
+        let faces = dummy_faces(&[[100, 50, 200, 200]]);
+        let result = scale_bboxes_to_original(faces, 1000, 800, 2048);
+        assert_eq!(result[0].0, vec![100, 50, 200, 200]);
+    }
+
+    #[test]
+    fn no_scale_when_image_exactly_max_dim() {
+        let faces = dummy_faces(&[[100, 50, 200, 200]]);
+        let result = scale_bboxes_to_original(faces, 2048, 1536, 2048);
+        assert_eq!(result[0].0, vec![100, 50, 200, 200]);
+    }
+
+    #[test]
+    fn scales_up_for_landscape_image() {
+        // 4096x3072 landscape → downscaled to 2048x1536 (scale = 2.0)
+        // Face at [200, 100, 300, 300] in detection space → [400, 200, 600, 600] in original
+        let faces = dummy_faces(&[[200, 100, 300, 300]]);
+        let result = scale_bboxes_to_original(faces, 4096, 3072, 2048);
+        assert_eq!(result[0].0, vec![400, 200, 600, 600]);
+    }
+
+    #[test]
+    fn scales_up_for_portrait_image() {
+        // 3000x4000 portrait → downscaled to 1536x2048 (scale = 4000/2048 ≈ 1.953)
+        // Face at [100, 200, 150, 150] → scaled
+        let faces = dummy_faces(&[[100, 200, 150, 150]]);
+        let result = scale_bboxes_to_original(faces, 3000, 4000, 2048);
+        let scale = 4000.0f64 / 2048.0;
+        let expected: Vec<i32> = [100, 200, 150, 150].iter()
+            .map(|&v| (v as f64 * scale).round() as i32)
+            .collect();
+        assert_eq!(result[0].0, expected);
+    }
+
+    #[test]
+    fn handles_multiple_faces() {
+        let faces = dummy_faces(&[[100, 100, 200, 200], [500, 400, 300, 300]]);
+        let result = scale_bboxes_to_original(faces, 4096, 3072, 2048);
+        assert_eq!(result[0].0, vec![200, 200, 400, 400]);
+        assert_eq!(result[1].0, vec![1000, 800, 600, 600]);
+    }
 }
 
 async fn update_status_metrics(client: &tokio_postgres::Client) -> Result<(), tokio_postgres::Error> {
