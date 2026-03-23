@@ -1,6 +1,6 @@
 use std::net::SocketAddr;
 use tokio::net::TcpStream;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use crate::crypto::NodeIdentity;
 use crate::network::protocol::{Message, Protocol};
 use crate::network::transport::Node;
@@ -27,11 +27,15 @@ pub fn start_tunnel_client(
             coordinator_addr, local_port
         );
         loop {
-            match run_tunnel(&node, coordinator_addr, &node_id, &identity, local_port).await {
-                Ok(_) => info!("[TUNNEL] Connection ended cleanly"),
-                Err(e) => warn!("[TUNNEL] Connection lost: {} — reconnecting in {}s", e, RECONNECT_DELAY_SECS),
-            }
-            tokio::time::sleep(std::time::Duration::from_secs(RECONNECT_DELAY_SECS)).await;
+            let delay = match run_tunnel(&node, coordinator_addr, &node_id, &identity, local_port).await {
+                Ok(_) => { info!("[TUNNEL] Connection ended cleanly"); RECONNECT_DELAY_SECS }
+                Err(crate::error::Np2pError::UnknownMessage(msg)) => {
+                    debug!("[TUNNEL] Protocol version mismatch with coordinator ({}), retrying in 60s", msg);
+                    60
+                }
+                Err(e) => { warn!("[TUNNEL] Connection lost: {} — reconnecting in {}s", e, RECONNECT_DELAY_SECS); RECONNECT_DELAY_SECS }
+            };
+            tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
         }
     });
 }

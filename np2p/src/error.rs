@@ -40,6 +40,11 @@ pub enum Np2pError {
 
     #[error("Internal error: {0}")]
     Internal(String),
+
+    /// Remote peer sent a message variant this build doesn't recognise —
+    /// indicates a protocol version mismatch (remote is newer).
+    #[error("Unknown protocol message from remote: {0}")]
+    UnknownMessage(String),
 }
 
 pub type Result<T> = std::result::Result<T, Np2pError>;

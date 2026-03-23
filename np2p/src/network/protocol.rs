@@ -85,7 +85,14 @@ impl Protocol {
         let mut buf = vec![0u8; len];
         recv.read_exact(&mut buf).await?;
         
-        let msg: Message = bincode::deserialize(&buf)?;
+        let msg: Message = bincode::deserialize(&buf).map_err(|e| {
+            // Distinguish unknown enum variant (version mismatch) from genuine corruption.
+            if e.to_string().contains("expected a variant index") {
+                crate::error::Np2pError::UnknownMessage(e.to_string())
+            } else {
+                crate::error::Np2pError::Serialization(e)
+            }
+        })?;
         Ok(msg)
     }
 }

@@ -3,7 +3,7 @@ use crate::error::Result;
 use crate::network::protocol::{Message, Protocol};
 use crate::storage::DiskStorage;
 use crate::crypto::NodeIdentity;
-use tracing::{info, warn, error};
+use tracing::{debug, info, warn, error};
 use std::sync::Arc;
 use async_trait::async_trait;
 use hex;
@@ -50,7 +50,11 @@ impl ConnectionHandler {
                     
                     tokio::spawn(async move {
                         if let Err(e) = Self::handle_stream(send, recv, storage, identity, custom).await {
-                            error!("[CONN] Stream error: {}", e);
+                            if matches!(e, crate::error::Np2pError::UnknownMessage(_)) {
+                                debug!("[CONN] Unknown message from peer (version mismatch): {}", e);
+                            } else {
+                                error!("[CONN] Stream error: {}", e);
+                            }
                         }
                     });
                 }

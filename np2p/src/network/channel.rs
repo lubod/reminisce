@@ -1,6 +1,6 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use crate::crypto::NodeIdentity;
 use crate::network::handler::ConnectionHandler;
 use crate::network::protocol::{Message, Protocol};
@@ -21,11 +21,15 @@ pub fn start_channel_client(
     tokio::spawn(async move {
         info!("[CHANNEL] Client starting — coordinator={}", coordinator_addr);
         loop {
-            match run_channel(&node, coordinator_addr, &node_id, &identity, &storage).await {
-                Ok(_) => info!("[CHANNEL] Connection ended cleanly"),
-                Err(e) => warn!("[CHANNEL] Connection lost: {} — reconnecting in {}s", e, RECONNECT_DELAY_SECS),
-            }
-            tokio::time::sleep(std::time::Duration::from_secs(RECONNECT_DELAY_SECS)).await;
+            let delay = match run_channel(&node, coordinator_addr, &node_id, &identity, &storage).await {
+                Ok(_) => { info!("[CHANNEL] Connection ended cleanly"); RECONNECT_DELAY_SECS }
+                Err(crate::error::Np2pError::UnknownMessage(msg)) => {
+                    debug!("[CHANNEL] Protocol version mismatch with coordinator ({}), retrying in 60s", msg);
+                    60
+                }
+                Err(e) => { warn!("[CHANNEL] Connection lost: {} — reconnecting in {}s", e, RECONNECT_DELAY_SECS); RECONNECT_DELAY_SECS }
+            };
+            tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
         }
     });
 }
