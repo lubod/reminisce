@@ -56,19 +56,13 @@ pub fn create_pool_with_options(
     Ok(pool)
 }
 
-/// Run init.sql against the pool at startup.
-/// All statements use IF NOT EXISTS / ADD COLUMN IF NOT EXISTS, so this is idempotent.
-pub async fn run_migrations(pool: &Pool) -> Result<(), Box<dyn std::error::Error>> {
-    let sql = include_str!("../db/init.sql");
-    let client = pool.get().await?;
-
-    // Split on semicolons while respecting $$-quoted blocks (PL/pgSQL DO blocks).
+/// Execute a SQL script, splitting on semicolons while respecting $$-quoted blocks.
+async fn exec_sql_script(client: &deadpool_postgres::Object, sql: &str, label: &str) -> (usize, usize) {
     let mut ok = 0usize;
     let mut errs = 0usize;
     let mut current = String::new();
     let mut in_dollar_quote = false;
     for line in sql.lines() {
-        // Toggle dollar-quote state on $$ markers
         let dollar_count = line.matches("$$").count();
         if dollar_count % 2 != 0 {
             in_dollar_quote = !in_dollar_quote;
@@ -76,25 +70,76 @@ pub async fn run_migrations(pool: &Pool) -> Result<(), Box<dyn std::error::Error
         current.push_str(line);
         current.push('\n');
         if !in_dollar_quote && line.trim_end().ends_with(';') {
-            let trimmed = current.trim();
-            if !trimmed.is_empty() && !trimmed.starts_with("--") {
-                match client.execute(trimmed, &[]).await {
-                    Ok(_) => ok += 1,
-                    Err(e) => {
-                        warn!("Migration statement warning: {}", e);
-                        errs += 1;
-                    }
+            let trimmed = current.trim().to_string();
+            current.clear();
+            if trimmed.is_empty() || trimmed.starts_with("--") {
+                continue;
+            }
+            match client.execute(trimmed.as_str(), &[]).await {
+                Ok(_) => ok += 1,
+                Err(e) => {
+                    warn!("[{}] statement warning: {}", label, e);
+                    errs += 1;
                 }
             }
-            current.clear();
         }
     }
+    (ok, errs)
+}
 
+/// Run init.sql against the pool at startup.
+/// All statements use IF NOT EXISTS / ADD COLUMN IF NOT EXISTS, so this is idempotent.
+/// Then applies any numbered migrations from db/migrations/ that haven't run yet.
+pub async fn run_migrations(pool: &Pool) -> Result<(), Box<dyn std::error::Error>> {
+    let client = pool.get().await?;
+
+    // --- Base schema (idempotent, runs every startup) ---
+    let init_sql = include_str!("../db/init.sql");
+    let (ok, errs) = exec_sql_script(&client, init_sql, "init.sql").await;
     if errs > 0 {
-        warn!("DB migrations: {} ok, {} warnings (check above)", ok, errs);
+        warn!("DB init.sql: {} ok, {} warnings", ok, errs);
     } else {
-        info!("DB migrations: {} statements applied successfully", ok);
+        info!("DB init.sql: {} statements applied", ok);
     }
+
+    // --- Versioned migrations (each runs exactly once) ---
+    client.execute(
+        "CREATE TABLE IF NOT EXISTS schema_migrations (
+            version VARCHAR(255) PRIMARY KEY,
+            applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )",
+        &[],
+    ).await?;
+
+    // Migrations embedded at compile time: (version, sql)
+    let migrations: &[(&str, &str)] = &[
+        ("001", include_str!("../db/migrations/001_fix_partial_indexes_deleted_at.sql")),
+    ];
+
+    for (version, sql) in migrations {
+        let already_applied = client
+            .query_opt("SELECT 1 FROM schema_migrations WHERE version = $1", &[version])
+            .await?
+            .is_some();
+
+        if already_applied {
+            continue;
+        }
+
+        info!("Applying migration {}...", version);
+        let (ok, errs) = exec_sql_script(&client, sql, version).await;
+        if errs > 0 {
+            warn!("Migration {}: {} ok, {} warnings", version, ok, errs);
+        } else {
+            info!("Migration {}: {} statements applied", version, ok);
+        }
+
+        client.execute(
+            "INSERT INTO schema_migrations (version) VALUES ($1)",
+            &[version],
+        ).await?;
+    }
+
     Ok(())
 }
 
