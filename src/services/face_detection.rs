@@ -140,14 +140,14 @@ pub async fn cluster_faces_for_user(
         let face_id: i64 = row.get(0);
         let embedding: Vector = row.get(1);
 
-        // Find similar existing person (cosine similarity > threshold)
-        // Using 1 - cosine_distance for similarity score
+        // Find similar existing person by searching real face embeddings directly.
+        // This handles merged persons correctly — no synthetic average that can drift.
         let similar_person = client
             .query_opt(
-                "SELECT id FROM persons
-                 WHERE user_id = $1 AND representative_embedding IS NOT NULL
-                 AND (1 - (representative_embedding <=> $2)) > $3
-                 ORDER BY representative_embedding <=> $2
+                "SELECT person_id FROM faces
+                 WHERE user_id = $1 AND person_id IS NOT NULL
+                 AND (1 - (embedding <=> $2)) > $3
+                 ORDER BY embedding <=> $2
                  LIMIT 1",
                 &[user_id, &embedding, &threshold],
             )
@@ -161,10 +161,10 @@ pub async fn cluster_faces_for_user(
             // Create new person cluster
             let row = client
                 .query_one(
-                    "INSERT INTO persons (user_id, representative_embedding, representative_face_id, face_count)
-                     VALUES ($1, $2, $3, 1)
+                    "INSERT INTO persons (user_id, representative_face_id, face_count)
+                     VALUES ($1, $2, 1)
                      RETURNING id",
-                    &[user_id, &embedding, &face_id],
+                    &[user_id, &face_id],
                 )
                 .await
                 .map_err(|e| format!("Failed to create person: {}", e))?;
