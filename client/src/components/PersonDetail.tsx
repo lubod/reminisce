@@ -12,7 +12,7 @@ export const PersonDetail = observer(() => {
 
     const [showMergePanel, setShowMergePanel] = useState(false);
     const [mergeSearch, setMergeSearch] = useState("");
-    const [mergeTargetId, setMergeTargetId] = useState<number | null>(null);
+    const [mergeSourceIds, setMergeSourceIds] = useState<Set<number>>(new Set());
     const [isMerging, setIsMerging] = useState(false);
     const [settingCoverId, setSettingCoverId] = useState<number | null>(null);
 
@@ -43,12 +43,22 @@ export const PersonDetail = observer(() => {
     };
 
     const handleMerge = async () => {
-        if (!mergeTargetId || mergeTargetId === person.id) return;
+        if (mergeSourceIds.size === 0) return;
         setIsMerging(true);
-        // merge source=current into target (target keeps its id and name)
-        await personStore.mergePersons(person.id, mergeTargetId);
+        // current person is the target (survives); selected persons are sources (get deleted)
+        await personStore.mergePersons(Array.from(mergeSourceIds), person.id);
         setIsMerging(false);
-        navigate("/people");
+        setMergeSourceIds(new Set());
+        setShowMergePanel(false);
+    };
+
+    const toggleMergeSource = (id: number) => {
+        setMergeSourceIds(prev => {
+            const next = new Set(prev);
+            if (next.has(id)) next.delete(id);
+            else next.add(id);
+            return next;
+        });
     };
 
     const otherPersons = personStore.persons.filter(p => p.id !== person.id);
@@ -78,7 +88,7 @@ export const PersonDetail = observer(() => {
                     </p>
                 </div>
                 <button
-                    onClick={() => { setShowMergePanel(!showMergePanel); setMergeTargetId(null); setMergeSearch(""); }}
+                    onClick={() => { setShowMergePanel(!showMergePanel); setMergeSourceIds(new Set()); setMergeSearch(""); }}
                     className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${showMergePanel ? 'bg-purple-600 text-white' : 'bg-gray-700 hover:bg-gray-600 text-gray-300'}`}
                     title="Merge with another person"
                 >
@@ -93,14 +103,14 @@ export const PersonDetail = observer(() => {
                     <div className="flex items-center justify-between mb-4">
                         <h3 className="text-sm font-semibold text-purple-300 flex items-center gap-2">
                             <Merge size={15} />
-                            Merge "{person.name || `Person ${person.id}`}" into another person
+                            Merge persons into "{person.name || `Person ${person.id}`}"
                         </h3>
                         <button onClick={() => setShowMergePanel(false)} className="text-gray-500 hover:text-gray-300">
                             <X size={18} />
                         </button>
                     </div>
                     <p className="text-xs text-gray-400 mb-4">
-                        All faces from this person will be moved to the selected person. This person will be deleted.
+                        Select one or more persons to merge into this one. Their faces will be moved here and they will be deleted.
                     </p>
 
                     {/* Search */}
@@ -120,9 +130,9 @@ export const PersonDetail = observer(() => {
                         {filteredPersons.map(p => (
                             <button
                                 key={p.id}
-                                onClick={() => setMergeTargetId(mergeTargetId === p.id ? null : p.id)}
+                                onClick={() => toggleMergeSource(p.id)}
                                 className={`relative rounded-lg overflow-hidden border-2 transition-all ${
-                                    mergeTargetId === p.id
+                                    mergeSourceIds.has(p.id)
                                         ? 'border-purple-500 ring-2 ring-purple-500/50'
                                         : 'border-transparent hover:border-gray-500'
                                 }`}
@@ -139,7 +149,7 @@ export const PersonDetail = observer(() => {
                                 <div className="px-1 py-1 bg-gray-800 text-[10px] text-gray-300 truncate text-center">
                                     {p.name || `Person ${p.id}`}
                                 </div>
-                                {mergeTargetId === p.id && (
+                                {mergeSourceIds.has(p.id) && (
                                     <div className="absolute top-1 right-1 bg-purple-600 rounded-full p-0.5">
                                         <Check size={10} className="text-white" />
                                     </div>
@@ -153,12 +163,12 @@ export const PersonDetail = observer(() => {
 
                     <button
                         onClick={handleMerge}
-                        disabled={!mergeTargetId || isMerging}
+                        disabled={mergeSourceIds.size === 0 || isMerging}
                         className="w-full py-2 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg transition-colors"
                     >
-                        {isMerging ? "Merging..." : mergeTargetId
-                            ? `Merge into "${personStore.persons.find(p => p.id === mergeTargetId)?.name || `Person ${mergeTargetId}`}"`
-                            : "Select a person to merge into"}
+                        {isMerging ? "Merging..." : mergeSourceIds.size > 0
+                            ? `Merge ${mergeSourceIds.size} person${mergeSourceIds.size > 1 ? 's' : ''} into this one`
+                            : "Select persons to merge in"}
                     </button>
                 </div>
             )}

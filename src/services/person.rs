@@ -71,7 +71,7 @@ pub struct UpdatePersonNameRequest {
 
 #[derive(Deserialize, ToSchema)]
 pub struct MergePersonsRequest {
-    pub source_person_id: i64,
+    pub source_person_ids: Vec<i64>,
     pub target_person_id: i64,
 }
 
@@ -521,19 +521,34 @@ pub async fn merge_persons(
 
     let user_uuid = utils::parse_user_uuid(&claims.user_id)?;
 
-    if body.source_person_id == body.target_person_id {
+    if body.source_person_ids.is_empty() {
         return Ok(HttpResponse::BadRequest().json(serde_json::json!({
-            "error": "Cannot merge person with itself"
+            "error": "No source persons provided"
         })));
     }
 
-    let client = utils::get_db_client(&pool.0).await?;
+    // Deduplicate and ensure no source equals target
+    let source_ids: Vec<i64> = {
+        let mut ids = body.source_person_ids.clone();
+        ids.sort_unstable();
+        ids.dedup();
+        ids
+    };
 
-    // Verify both persons belong to user
+    if source_ids.contains(&body.target_person_id) {
+        return Ok(HttpResponse::BadRequest().json(serde_json::json!({
+            "error": "Source and target persons must be different"
+        })));
+    }
+
+    let mut client = utils::get_db_client(&pool.0).await?;
+
+    // Verify all persons belong to user
+    let all_ids: Vec<i64> = source_ids.iter().copied().chain(std::iter::once(body.target_person_id)).collect();
     let count = client
         .query_one(
-            "SELECT COUNT(*) FROM persons WHERE id IN ($1, $2) AND user_id = $3",
-            &[&body.source_person_id, &body.target_person_id, &user_uuid],
+            "SELECT COUNT(*) FROM persons WHERE id = ANY($1) AND user_id = $2",
+            &[&all_ids, &user_uuid],
         )
         .await
         .map_err(|e| {
@@ -542,17 +557,22 @@ pub async fn merge_persons(
         })?;
 
     let count: i64 = count.get(0);
-    if count != 2 {
+    if count != all_ids.len() as i64 {
         return Ok(HttpResponse::BadRequest().json(serde_json::json!({
             "error": "Invalid person IDs"
         })));
     }
 
-    // Move all faces from source to target
-    client
+    let transaction = client.transaction().await.map_err(|e| {
+        error!("Failed to start transaction: {}", e);
+        actix_web::error::ErrorInternalServerError("Database error")
+    })?;
+
+    // Move all faces from all sources to target
+    transaction
         .execute(
-            "UPDATE faces SET person_id = $1 WHERE person_id = $2",
-            &[&body.target_person_id, &body.source_person_id],
+            "UPDATE faces SET person_id = $1 WHERE person_id = ANY($2)",
+            &[&body.target_person_id, &source_ids],
         )
         .await
         .map_err(|e| {
@@ -561,7 +581,7 @@ pub async fn merge_persons(
         })?;
 
     // Update target person stats and pick the most central face as thumbnail
-    client
+    transaction
         .execute(
             "UPDATE persons SET
                 face_count = (SELECT COUNT(*) FROM faces WHERE person_id = $1),
@@ -581,19 +601,24 @@ pub async fn merge_persons(
             actix_web::error::ErrorInternalServerError("Update failed")
         })?;
 
-    // Delete source person
-    client
+    // Delete all source persons
+    transaction
         .execute(
-            "DELETE FROM persons WHERE id = $1",
-            &[&body.source_person_id],
+            "DELETE FROM persons WHERE id = ANY($1)",
+            &[&source_ids],
         )
         .await
         .map_err(|e| {
-            error!("Failed to delete source person: {}", e);
+            error!("Failed to delete source persons: {}", e);
             actix_web::error::ErrorInternalServerError("Delete failed")
         })?;
 
-    info!("Merged person {} into {}", body.source_person_id, body.target_person_id);
+    transaction.commit().await.map_err(|e| {
+        error!("Failed to commit merge transaction: {}", e);
+        actix_web::error::ErrorInternalServerError("Commit failed")
+    })?;
+
+    info!("Merged {:?} into person {}", source_ids, body.target_person_id);
 
     Ok(HttpResponse::Ok().json(serde_json::json!({
         "success": true

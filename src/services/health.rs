@@ -58,7 +58,7 @@ pub async fn health_check(
 
     let ai_url = format!("{}/health", config.embedding_service_url.trim_end_matches('/'));
     let ai_service = match tokio::time::timeout(
-        std::time::Duration::from_secs(3),
+        std::time::Duration::from_secs(10),
         reqwest::get(&ai_url),
     ).await {
         Ok(Ok(r)) if r.status().is_success() => "connected".to_string(),

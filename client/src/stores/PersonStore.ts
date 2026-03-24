@@ -192,15 +192,15 @@ export class PersonStore {
         }
     };
 
-    mergePersons = async (sourceId: number, targetId: number) => {
+    mergePersons = async (sourceIds: number[], targetId: number) => {
         try {
             await axios.post('/persons/merge', {
-                source_person_id: sourceId,
+                source_person_ids: sourceIds,
                 target_person_id: targetId
             });
 
-            // Refresh persons list
-            await this.fetchPersons();
+            // Refresh persons list and the surviving target person
+            await Promise.all([this.fetchPersons(), this.fetchPerson(targetId)]);
         } catch (error) {
             console.error("Failed to merge persons", error);
             this.rootStore.uiStore.setError("Failed to merge persons");
