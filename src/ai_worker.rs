@@ -135,7 +135,7 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
         let embedding_rows = client
             .query(
                 "SELECT hash, ext, name, deviceid, 'image' as file_type, created_at FROM images
-                 WHERE verification_status = 1 AND embedding IS NULL AND embedding_generated_at IS NULL
+                 WHERE verification_status = 1 AND deleted_at IS NULL AND embedding IS NULL AND embedding_generated_at IS NULL
                  LIMIT $1",
                 &[&(total_batch_limit as i64)],
             )
@@ -162,6 +162,7 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
                 "SELECT i.hash, i.ext, i.name, i.deviceid, i.user_id, 'image' as file_type, i.created_at
                  FROM images i
                  WHERE i.verification_status = 1
+                   AND i.deleted_at IS NULL
                    AND i.face_detection_completed_at IS NULL
                  LIMIT $1",
                 &[&(room_left as i64)],
@@ -194,7 +195,7 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
         let description_rows = client
             .query(
                 "SELECT hash, ext, name, deviceid, 'image' as file_type, created_at FROM images
-                 WHERE verification_status = 1 AND description IS NULL
+                 WHERE verification_status = 1 AND deleted_at IS NULL AND description IS NULL
                  LIMIT $1",
                 &[&(room_left as i64)],
             )
@@ -223,6 +224,7 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
             .query(
                 "SELECT hash, ext, name, deviceid, 'image' as file_type, created_at FROM images
                  WHERE verification_status = 1
+                   AND deleted_at IS NULL
                    AND embedding IS NOT NULL
                    AND quality_score_generated_at IS NULL
                  LIMIT $1",

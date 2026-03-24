@@ -61,6 +61,8 @@ CREATE INDEX IF NOT EXISTS idx_deviceid_type_created_at ON images(deviceid, type
 CREATE INDEX IF NOT EXISTS idx_images_deleted_at ON images(deleted_at) WHERE deleted_at IS NULL;
 -- Index for verification status
 CREATE INDEX IF NOT EXISTS idx_images_verification_status ON images(verification_status);
+-- Composite for verification worker: WHERE deleted_at IS NULL AND (verification_status = 0/1/-1 ...)
+CREATE INDEX IF NOT EXISTS idx_images_verification_pending ON images(verification_status, last_verified_at) WHERE deleted_at IS NULL;
 -- Spatial index for location-based queries (e.g., find images near a location)
 CREATE INDEX IF NOT EXISTS idx_images_location ON images USING GIST(location);
 -- Index for user_id queries
@@ -71,9 +73,9 @@ CREATE INDEX IF NOT EXISTS idx_images_user_id ON images(user_id);
 CREATE INDEX IF NOT EXISTS idx_images_embedding_hnsw ON images
 USING hnsw (embedding vector_cosine_ops)
 WITH (m = 16, ef_construction = 64);
--- Index to track images without embeddings for backfill worker
+-- Index to track images without embeddings for backfill worker (excludes soft-deleted)
 CREATE INDEX IF NOT EXISTS idx_images_embedding_status ON images(embedding_generated_at)
-WHERE embedding_generated_at IS NULL;
+WHERE embedding_generated_at IS NULL AND deleted_at IS NULL;
 -- Index for fast hash lookups (used in get_image, toggle_star, metadata queries)
 CREATE INDEX IF NOT EXISTS idx_images_hash ON images(hash);
 -- Partial index for thumbnail queries (only index rows with thumbnails)
@@ -85,16 +87,18 @@ CREATE INDEX IF NOT EXISTS idx_images_description_fts ON images
 USING GIN (to_tsvector('english', COALESCE(description, '') || ' ' || COALESCE(name, '')));
 -- Partial index for existence checks (indexes hash, not the text value, to avoid btree row size limits)
 CREATE INDEX IF NOT EXISTS idx_images_description_exists ON images(hash) WHERE description IS NOT NULL AND description != '';
--- Index to find images that haven't had face detection run yet
-CREATE INDEX IF NOT EXISTS idx_images_face_detection_pending ON images(face_detection_completed_at) WHERE face_detection_completed_at IS NULL;
+-- Index to find images needing AI description (excludes soft-deleted)
+CREATE INDEX IF NOT EXISTS idx_images_description_pending ON images(created_at) WHERE description IS NULL AND deleted_at IS NULL;
+-- Index to find images that haven't had face detection run yet (excludes soft-deleted)
+CREATE INDEX IF NOT EXISTS idx_images_face_detection_pending ON images(face_detection_completed_at) WHERE face_detection_completed_at IS NULL AND deleted_at IS NULL;
 -- Index for finding unsynced images efficiently (P2P media replication)
 CREATE INDEX IF NOT EXISTS idx_images_need_sync ON images(created_at) WHERE p2p_synced_at IS NULL;
 -- Index for looking up P2P synced status
 CREATE INDEX IF NOT EXISTS idx_images_p2p_synced ON images(p2p_synced_at);
 -- Composite index for main gallery query: WHERE user_id = $N AND deleted_at IS NULL ORDER BY created_at DESC
 CREATE INDEX IF NOT EXISTS idx_images_user_created ON images(user_id, created_at DESC) WHERE deleted_at IS NULL;
--- Index to find images that haven't had quality scoring run yet
-CREATE INDEX IF NOT EXISTS idx_images_quality_pending ON images(quality_score_generated_at) WHERE quality_score_generated_at IS NULL;
+-- Index to find images that haven't had quality scoring run yet (excludes soft-deleted)
+CREATE INDEX IF NOT EXISTS idx_images_quality_pending ON images(quality_score_generated_at) WHERE quality_score_generated_at IS NULL AND deleted_at IS NULL;
 
 -- Idempotent migrations for existing databases
 ALTER TABLE images ADD COLUMN IF NOT EXISTS aesthetic_score REAL;
@@ -154,6 +158,8 @@ CREATE INDEX IF NOT EXISTS idx_video_deviceid_type_created_at ON videos(deviceid
 CREATE INDEX IF NOT EXISTS idx_videos_deleted_at ON videos(deleted_at) WHERE deleted_at IS NULL;
 -- Index for verification status
 CREATE INDEX IF NOT EXISTS idx_videos_verification_status ON videos(verification_status);
+-- Composite for verification worker: WHERE deleted_at IS NULL AND (verification_status = 0/1/-1 ...)
+CREATE INDEX IF NOT EXISTS idx_videos_verification_pending ON videos(verification_status, last_verified_at) WHERE deleted_at IS NULL;
 -- Index for user_id queries
 CREATE INDEX IF NOT EXISTS idx_videos_user_id ON videos(user_id);
 -- Index for fast hash lookups (used in get_video, existence checks)
@@ -352,3 +358,26 @@ CREATE TABLE IF NOT EXISTS p2p_shards (
 
 CREATE INDEX IF NOT EXISTS idx_p2p_shards_file_hash ON p2p_shards(file_hash);
 CREATE INDEX IF NOT EXISTS idx_p2p_shards_node_id ON p2p_shards(node_id);
+
+-- Idempotent index migrations: recreate partial indexes to exclude soft-deleted rows.
+-- IF NOT EXISTS won't update an existing index whose WHERE condition changed, so we drop+recreate.
+DROP INDEX IF EXISTS idx_images_embedding_status;
+CREATE INDEX IF NOT EXISTS idx_images_embedding_status ON images(embedding_generated_at)
+WHERE embedding_generated_at IS NULL AND deleted_at IS NULL;
+
+DROP INDEX IF EXISTS idx_images_face_detection_pending;
+CREATE INDEX IF NOT EXISTS idx_images_face_detection_pending ON images(face_detection_completed_at)
+WHERE face_detection_completed_at IS NULL AND deleted_at IS NULL;
+
+DROP INDEX IF EXISTS idx_images_quality_pending;
+CREATE INDEX IF NOT EXISTS idx_images_quality_pending ON images(quality_score_generated_at)
+WHERE quality_score_generated_at IS NULL AND deleted_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_images_description_pending ON images(created_at)
+WHERE description IS NULL AND deleted_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_images_verification_pending ON images(verification_status, last_verified_at)
+WHERE deleted_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_videos_verification_pending ON videos(verification_status, last_verified_at)
+WHERE deleted_at IS NULL;
