@@ -387,6 +387,7 @@ export const Dashboard = observer(() => {
                                             <div className="p-4 bg-gray-900/50 rounded-xl border border-gray-700">
                                                 <dt className="text-xs font-black text-gray-500 uppercase mb-3 flex items-center gap-2"><Cpu className="w-4 h-4 text-blue-400" /> CPU</dt>
                                                 <dd className="text-3xl font-black text-white">{systemStats.cpu_usage_percent.toFixed(1)}%</dd>
+                                                {systemStats.cpu_temp_celsius !== null && <dd className="text-[10px] text-gray-500 mt-1 font-bold">{systemStats.cpu_temp_celsius.toFixed(0)}°C</dd>}
                                             </div>
                                             <div className="p-4 bg-gray-900/50 rounded-xl border border-gray-700">
                                                 <dt className="text-xs font-black text-gray-500 uppercase mb-3 flex items-center gap-2"><MemoryStick className="w-4 h-4 text-purple-400" /> RAM</dt>
@@ -402,10 +403,11 @@ export const Dashboard = observer(() => {
                                                 <dt className="text-xs font-black text-gray-500 uppercase mb-3 flex items-center gap-2"><Zap className="w-4 h-4 text-yellow-400" /> GPU</dt>
                                                 <dd className="text-3xl font-black text-white">{systemStats.gpu_usage_percent !== null ? `${systemStats.gpu_usage_percent.toFixed(1)}%` : 'N/A'}</dd>
                                                 <dd className="text-[10px] text-gray-500 mt-1 font-bold">
-                                                    {systemStats.gpu_memory_used_mb !== null && systemStats.gpu_memory_total_mb !== null 
+                                                    {systemStats.gpu_memory_used_mb !== null && systemStats.gpu_memory_total_mb !== null
                                                         ? `${(systemStats.gpu_memory_used_mb / 1024).toFixed(1)} / ${(systemStats.gpu_memory_total_mb / 1024).toFixed(0)} GB VRAM`
                                                         : systemStats.gpu_info || 'No GPU detected'}
                                                 </dd>
+                                                {systemStats.gpu_temp_celsius !== null && <dd className="text-[10px] text-gray-500 mt-1 font-bold">{systemStats.gpu_temp_celsius.toFixed(0)}°C</dd>}
                                             </div>
                                             <div className="p-4 bg-gray-900/50 rounded-xl border border-gray-700">
                                                 <dt className="text-xs font-black text-gray-500 uppercase mb-3 flex items-center gap-2"><Clock className="w-4 h-4 text-orange-400" /> Uptime</dt>

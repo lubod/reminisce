@@ -44,6 +44,8 @@ pub struct SystemStatsResponse {
     pub gpu_usage_percent: Option<f32>,
     pub gpu_memory_used_mb: Option<f32>,
     pub gpu_memory_total_mb: Option<f32>,
+    pub cpu_temp_celsius: Option<f32>,
+    pub gpu_temp_celsius: Option<f32>,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
@@ -56,6 +58,24 @@ pub struct P2PDaemonStatus {
     pub bytes_uploaded: i64,
     pub files_uploaded: i64,
     pub p2p_peer_count: usize,
+}
+
+/// Find a hwmon sensor by its `name` file and return `temp1_input` in °C.
+async fn read_hwmon_temp(sensor_name: &str) -> Option<f32> {
+    let mut dir = tokio::fs::read_dir("/sys/class/hwmon").await.ok()?;
+    while let Ok(Some(entry)) = dir.next_entry().await {
+        let path = entry.path();
+        if let Ok(name) = tokio::fs::read_to_string(path.join("name")).await {
+            if name.trim() == sensor_name {
+                if let Ok(raw) = tokio::fs::read_to_string(path.join("temp1_input")).await {
+                    if let Ok(millideg) = raw.trim().parse::<f32>() {
+                        return Some(millideg / 1000.0);
+                    }
+                }
+            }
+        }
+    }
+    None
 }
 
 #[utoipa::path(
@@ -120,6 +140,8 @@ pub async fn get_system_stats(
 
     // GPU Load (AMD ROCm)
     let gpu_load = utils::get_gpu_load().await;
+    let cpu_temp = read_hwmon_temp("k10temp").await;
+    let gpu_temp = read_hwmon_temp("amdgpu").await;
     
     let gpu_vram_total = match tokio::fs::read_to_string("/sys/class/drm/card0/device/mem_info_vram_total").await {
         Ok(s) => s.trim().parse::<f32>().unwrap_or(0.0) / (1024.0 * 1024.0), // Convert to MB
@@ -145,6 +167,8 @@ pub async fn get_system_stats(
         gpu_usage_percent: Some(gpu_load as f32),
         gpu_memory_used_mb: if gpu_vram_total > 0.0 { Some(gpu_vram_used) } else { None },
         gpu_memory_total_mb: if gpu_vram_total > 0.0 { Some(gpu_vram_total) } else { None },
+        cpu_temp_celsius: cpu_temp,
+        gpu_temp_celsius: gpu_temp,
     };
 
     Ok(HttpResponse::Ok().json(response))

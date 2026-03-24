@@ -73,6 +73,8 @@ export interface SystemStats {
     gpu_usage_percent: number | null;
     gpu_memory_used_mb: number | null;
     gpu_memory_total_mb: number | null;
+    cpu_temp_celsius: number | null;
+    gpu_temp_celsius: number | null;
     uptime_seconds: number;
 }
 
