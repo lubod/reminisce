@@ -540,6 +540,118 @@ def detect_faces():
         return jsonify({'error': str(e)}), 500
 
 
+# ==================== ENHANCE ENDPOINT ====================
+
+@app.route('/enhance', methods=['POST'])
+def enhance_image_endpoint():
+    """Enhance an image: fix exposure, denoise, sharpen, restore faded colors.
+
+    Request JSON:
+      image  - base64-encoded image
+      mode   - "auto" (default), "exposure", "restore", "all"
+
+    Response JSON:
+      image      - base64-encoded JPEG of the enhanced result
+      operations - list of applied operations
+      analysis   - detected brightness / sharpness before enhancement
+    """
+    try:
+        data = request.json
+        if not data or 'image' not in data:
+            return jsonify({'error': 'Missing image field'}), 400
+
+        mode = data.get('mode', 'auto')
+        if mode not in ('auto', 'exposure', 'restore', 'all'):
+            return jsonify({'error': f'Invalid mode "{mode}". Use auto, exposure, restore, or all'}), 400
+
+        try:
+            img = decode_image_to_pil(data['image'])
+        except Exception:
+            return jsonify({'error': 'Invalid image data'}), 400
+
+        if img.mode != 'RGB':
+            img = img.convert('RGB')
+        if img.width < 3 or img.height < 3:
+            return jsonify({'error': f'Image too small ({img.width}x{img.height})'}), 400
+
+        result = np.array(img)
+        operations = []
+
+        # ── Analysis ──────────────────────────────────────────────────────────
+        gray = cv2.cvtColor(result, cv2.COLOR_RGB2GRAY)
+        mean_brightness = float(gray.mean())
+        sharpness = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+
+        do_exposure = mode in ('exposure', 'all') or (
+            mode == 'auto' and (mean_brightness < 80 or mean_brightness > 190)
+        )
+        do_denoise = mode in ('restore', 'all') or (mode == 'auto' and sharpness < 50)
+        do_restore = mode in ('restore', 'all')
+        do_sharpen = mode in ('restore', 'exposure', 'all') or (mode == 'auto' and sharpness < 150)
+
+        logger.info(
+            f"Enhance request: {img.width}x{img.height} mode={mode} "
+            f"brightness={mean_brightness:.1f} sharpness={sharpness:.1f} "
+            f"→ exposure={do_exposure} denoise={do_denoise} restore={do_restore} sharpen={do_sharpen}"
+        )
+
+        # ── 1. Denoise (before sharpening) ────────────────────────────────────
+        # fastNlMeansDenoisingColored expects BGR; h/hColor tuned for moderate noise removal
+        if do_denoise:
+            bgr = cv2.cvtColor(result, cv2.COLOR_RGB2BGR)
+            bgr = cv2.fastNlMeansDenoisingColored(
+                bgr, None, h=8, hColor=8, templateWindowSize=7, searchWindowSize=21
+            )
+            result = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+            operations.append('denoised')
+
+        # ── 2. Exposure correction via CLAHE on L channel ─────────────────────
+        # Works in LAB so luminance is adjusted without shifting hue/saturation
+        if do_exposure:
+            lab = cv2.cvtColor(result, cv2.COLOR_RGB2LAB)
+            l_ch, a_ch, b_ch = cv2.split(lab)
+            clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+            l_ch = clahe.apply(l_ch)
+            result = cv2.cvtColor(cv2.merge([l_ch, a_ch, b_ch]), cv2.COLOR_LAB2RGB)
+            operations.append('exposure_corrected')
+
+        # ── 3. Per-channel histogram stretch for faded / old photos ───────────
+        # Stretches each channel independently between its 2nd and 98th percentile
+        if do_restore:
+            for i in range(3):
+                lo = float(np.percentile(result[:, :, i], 2))
+                hi = float(np.percentile(result[:, :, i], 98))
+                if hi > lo:
+                    result[:, :, i] = np.clip(
+                        (result[:, :, i].astype(np.float32) - lo) * 255.0 / (hi - lo),
+                        0, 255
+                    ).astype(np.uint8)
+            operations.append('color_restored')
+
+        # ── 4. Unsharp mask ───────────────────────────────────────────────────
+        if do_sharpen:
+            blurred = cv2.GaussianBlur(result, (0, 0), sigmaX=2.0)
+            result = cv2.addWeighted(result, 1.4, blurred, -0.4, 0)
+            result = np.clip(result, 0, 255).astype(np.uint8)
+            operations.append('sharpened')
+
+        # ── Encode result ─────────────────────────────────────────────────────
+        buf = io.BytesIO()
+        Image.fromarray(result).save(buf, format='JPEG', quality=92)
+        enhanced_b64 = base64.b64encode(buf.getvalue()).decode('utf-8')
+
+        logger.info(f"Enhancement done: ops={operations}")
+        return jsonify({
+            'image': enhanced_b64,
+            'operations': operations,
+            'analysis': {'brightness': mean_brightness, 'sharpness': sharpness},
+        })
+
+    except Exception as e:
+        logger.error(f"Error in enhance: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
 # ==================== HEALTH & INFO ENDPOINTS ====================
 
 @app.route('/health', methods=['GET'])
@@ -574,6 +686,7 @@ def index():
             '/describe': 'POST - Generate image description (SmolVLM-500M, ~5.6s)',
             '/describe/qwen': 'POST - Generate image description (Qwen2.5-VL-3B, ~29s, higher quality)',
             '/detect': 'POST - Detect faces and get embeddings (512-dim)',
+            '/enhance': 'POST - Enhance image: fix exposure, denoise, restore old photos',
             '/health': 'GET - Health check'
         }
     })

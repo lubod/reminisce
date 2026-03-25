@@ -82,7 +82,7 @@ pub use crate::services::health::{ping, health_check, HealthCheckResponse};
 pub use crate::services::existence_check::{check_image_exists, check_video_exists};
 pub use crate::services::upload::{upload_image, upload_video, upload_image_metadata, upload_video_metadata, batch_upload_image, check_images_exist_batch, check_videos_exist_batch, batch_check_images, batch_check_videos};
 pub use crate::services::thumbnail::{list_image_thumbnails, list_video_thumbnails, list_all_media_thumbnails, get_thumbnail, get_face_thumbnail};
-pub use crate::services::media::{get_image, get_video, get_image_metadata, toggle_image_star, toggle_video_star, delete_image, delete_video, get_device_ids, get_random_image, restore_image, restore_video, get_trash};
+pub use crate::services::media::{get_image, get_video, get_image_metadata, toggle_image_star, toggle_video_star, delete_image, delete_video, get_device_ids, get_random_image, restore_image, restore_video, get_trash, enhance_image, save_enhanced_image};
 pub use crate::services::embedding::search_images;
 pub use crate::services::stats::get_stats;
 pub use crate::services::pool_stats::get_pool_stats;
@@ -125,6 +125,7 @@ pub use crate::services::import_dir::{import_directory, get_import_status};
         crate::services::media::get_trash,
         crate::services::media::get_device_ids,
         crate::services::media::get_random_image,
+        crate::services::media::enhance_image,
         crate::services::embedding::search_images,
         crate::services::stats::get_stats,
         crate::services::pool_stats::get_pool_stats,
@@ -595,6 +596,8 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
                     .service(services::p2p_status::remove_p2p_node)
                     .service(services::p2p_status::trigger_rebalance)
                     .service(services::duplicates::get_duplicates)
+                    .service(enhance_image)
+                    .service(save_enhanced_image)
             )
     })
     .bind(format!("0.0.0.0:{}", config.port))?

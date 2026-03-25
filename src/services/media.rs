@@ -1,14 +1,17 @@
 use actix_files;
 use actix_web::{ get, post, web, HttpRequest, HttpResponse };
+use base64::{Engine as _, engine::general_purpose};
 use log::{ error, info, warn };
 use serde::{Serialize, Deserialize};
 use serde_json;
 use utoipa::{ToSchema, IntoParams};
 use std::collections::HashSet;
+use std::path::Path;
 
 use crate::config::Config;
 use crate::utils;
-use crate::db::MainDbPool;
+use crate::db::{MainDbPool, GeotaggingDbPool};
+use crate::services::ingest;
 
 #[utoipa::path(
     get,
@@ -867,4 +870,234 @@ pub async fn delete_video(
 
     let hash = path.into_inner();
     soft_delete_media(&pool.0, "videos", &hash).await
+}
+
+// ── Image enhancement ─────────────────────────────────────────────────────────
+
+#[derive(Deserialize, IntoParams)]
+pub struct EnhanceQuery {
+    /// Enhancement mode: auto (default), exposure, restore, all
+    mode: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct EnhanceAiResponse {
+    image: String,
+    operations: Vec<String>,
+}
+
+#[utoipa::path(
+    post,
+    path = "/image/{hash}/enhance",
+    params(EnhanceQuery),
+    responses(
+        (status = 200, description = "Enhanced JPEG image", content_type = "image/jpeg"),
+        (status = 401, description = "Unauthorized"),
+        (status = 404, description = "Image not found"),
+        (status = 503, description = "AI service unavailable"),
+    )
+)]
+#[post("/image/{hash}/enhance")]
+pub async fn enhance_image(
+    req: HttpRequest,
+    path: web::Path<String>,
+    query: web::Query<EnhanceQuery>,
+    pool: web::Data<MainDbPool>,
+    config: web::Data<Config>,
+) -> Result<HttpResponse, actix_web::Error> {
+    let claims = match utils::authenticate_request(&req, "enhance_image", config.get_api_key()) {
+        Ok(c) => c,
+        Err(r) => return Ok(r),
+    };
+
+    let hash = path.into_inner();
+    let client = utils::get_db_client(&pool.0).await?;
+    let user_uuid = utils::parse_user_uuid(&claims.user_id)?;
+
+    let row = if claims.role == "admin" {
+        client.query_opt(
+            "SELECT ext FROM images WHERE hash = $1 AND deleted_at IS NULL",
+            &[&hash],
+        ).await
+    } else {
+        client.query_opt(
+            "SELECT ext FROM images WHERE user_id = $1 AND hash = $2 AND deleted_at IS NULL",
+            &[&user_uuid, &hash],
+        ).await
+    }.map_err(|e| {
+        error!("DB error in enhance_image: {}", e);
+        actix_web::error::ErrorInternalServerError("Database error")
+    })?;
+
+    let ext: String = match row {
+        Some(r) => r.get(0),
+        None => return Ok(HttpResponse::NotFound().json(
+            serde_json::json!({"error": "Image not found"})
+        )),
+    };
+
+    let image_path = utils::get_subdirectory_path(config.get_images_dir(), &hash)
+        .join(format!("{}.{}", hash, ext));
+
+    let image_data = tokio::fs::read(&image_path).await.map_err(|e| {
+        error!("Failed to read image {:?}: {}", image_path, e);
+        actix_web::error::ErrorInternalServerError("Failed to read image file")
+    })?;
+
+    let base64_image = general_purpose::STANDARD.encode(&image_data);
+    let mode = query.mode.clone().unwrap_or_else(|| "auto".to_string());
+
+    let http_client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
+
+    let ai_url = format!("{}/enhance", config.embedding_service_url);
+    let ai_resp = http_client
+        .post(&ai_url)
+        .json(&serde_json::json!({"image": base64_image, "mode": mode}))
+        .send()
+        .await
+        .map_err(|e| {
+            error!("AI service unreachable for enhance: {}", e);
+            actix_web::error::ErrorServiceUnavailable("AI service unavailable")
+        })?;
+
+    if !ai_resp.status().is_success() {
+        let body = ai_resp.text().await.unwrap_or_default();
+        return Ok(HttpResponse::InternalServerError().json(
+            serde_json::json!({"error": format!("Enhancement failed: {}", body)})
+        ));
+    }
+
+    let enhance_resp: EnhanceAiResponse = ai_resp.json().await.map_err(|e| {
+        error!("Failed to parse enhance response: {}", e);
+        actix_web::error::ErrorInternalServerError("Failed to parse AI response")
+    })?;
+
+    let enhanced_bytes = general_purpose::STANDARD.decode(&enhance_resp.image).map_err(|e| {
+        error!("Failed to decode enhanced image bytes: {}", e);
+        actix_web::error::ErrorInternalServerError("Failed to decode enhanced image")
+    })?;
+
+    info!("Enhanced image {}: ops={:?}", hash, enhance_resp.operations);
+    Ok(HttpResponse::Ok()
+        .content_type("image/jpeg")
+        .insert_header(("X-Enhance-Operations", enhance_resp.operations.join(",")))
+        .body(enhanced_bytes))
+}
+
+// ── Save enhanced image to library ───────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct SaveEnhancedRequest {
+    /// Base64-encoded JPEG of the enhanced image (from the /enhance endpoint)
+    image: String,
+}
+
+#[utoipa::path(
+    post,
+    path = "/image/{hash}/save-enhanced",
+    responses(
+        (status = 201, description = "Enhanced image saved to library"),
+        (status = 400, description = "Invalid image data"),
+        (status = 401, description = "Unauthorized"),
+        (status = 404, description = "Original image not found"),
+    )
+)]
+#[post("/image/{hash}/save-enhanced")]
+pub async fn save_enhanced_image(
+    req: HttpRequest,
+    path: web::Path<String>,
+    body: web::Json<SaveEnhancedRequest>,
+    pool: web::Data<MainDbPool>,
+    geotagging_pool: web::Data<GeotaggingDbPool>,
+    config: web::Data<Config>,
+) -> Result<HttpResponse, actix_web::Error> {
+    let claims = match utils::authenticate_request(&req, "save_enhanced_image", config.get_api_key()) {
+        Ok(c) => c,
+        Err(r) => return Ok(r),
+    };
+
+    let original_hash = path.into_inner();
+    let client = utils::get_db_client(&pool.0).await?;
+    let user_uuid = utils::parse_user_uuid(&claims.user_id)?;
+
+    // Fetch the original image name and date so we can preserve them
+    let row = if claims.role == "admin" {
+        client.query_opt(
+            "SELECT name, created_at FROM images WHERE hash = $1 AND deleted_at IS NULL",
+            &[&original_hash],
+        ).await
+    } else {
+        client.query_opt(
+            "SELECT name, created_at FROM images WHERE user_id = $1 AND hash = $2 AND deleted_at IS NULL",
+            &[&user_uuid, &original_hash],
+        ).await
+    }.map_err(|e| {
+        error!("DB error in save_enhanced_image: {}", e);
+        actix_web::error::ErrorInternalServerError("Database error")
+    })?;
+
+    let (original_name, original_created_at): (String, chrono::DateTime<chrono::Utc>) = match row {
+        Some(r) => (r.get(0), r.get(1)),
+        None => return Ok(HttpResponse::NotFound().json(
+            serde_json::json!({"error": "Original image not found"})
+        )),
+    };
+
+    // Decode the base64 JPEG sent by the browser
+    let image_bytes = general_purpose::STANDARD.decode(&body.image).map_err(|_| {
+        actix_web::error::ErrorBadRequest("Invalid base64 image data")
+    })?;
+
+    // Hash the bytes (blake3) — this becomes the new image's identifier
+    let new_hash = blake3::hash(&image_bytes).to_hex().to_string();
+
+    // Derive name: strip original extension, append _enhanced.jpg
+    let base_stem = Path::new(&original_name)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("enhanced");
+    let enhanced_name = format!("{}_enhanced.jpg", base_stem);
+
+    // Write bytes to a temp file for ingest
+    let temp_dir = Path::new(config.get_images_dir()).join(".tmp");
+    tokio::fs::create_dir_all(&temp_dir).await.map_err(|_| {
+        actix_web::error::ErrorInternalServerError("Failed to create temp dir")
+    })?;
+    let temp_path = temp_dir.join(format!("{}.tmp", uuid::Uuid::new_v4()));
+    tokio::fs::write(&temp_path, &image_bytes).await.map_err(|e| {
+        error!("Failed to write temp file: {}", e);
+        actix_web::error::ErrorInternalServerError("Failed to write temp file")
+    })?;
+
+    // Run through the normal ingest pipeline (moves file, inserts DB row, extracts EXIF, geo)
+    match ingest::process_image_file(
+        &temp_path,
+        &enhanced_name,
+        &new_hash,
+        "web-enhanced",
+        &user_uuid,
+        &pool,
+        &geotagging_pool,
+        &config,
+        true,                        // move (not copy) the temp file
+        Some(original_created_at),   // preserve the original photo's date
+    ).await {
+        Ok(result) => {
+            info!("Saved enhanced image: original={} new={}", original_hash, result.hash);
+            Ok(HttpResponse::Created().json(serde_json::json!({
+                "status": "success",
+                "hash": result.hash,
+                "name": result.name,
+            })))
+        }
+        Err(e) => {
+            error!("Failed to ingest enhanced image: {}", e);
+            Ok(HttpResponse::InternalServerError().json(
+                serde_json::json!({"error": format!("Failed to save: {}", e)})
+            ))
+        }
+    }
 }

@@ -1,9 +1,10 @@
 import { observer } from "mobx-react-lite";
 import { useStore } from "../stores/RootStore";
 import { useEffect, useState, useCallback, useRef } from "react";
+import axios from "../api/axiosConfig";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Star, Tag, X, Plus, Columns2, Trash2, Info } from "lucide-react";
+import { Star, Tag, X, Plus, Columns2, Trash2, Info, Wand2, Download, Save } from "lucide-react";
 import type { Label } from "../stores/LabelStore";
 
 export const MediaLightbox = observer(() => {
@@ -14,7 +15,15 @@ export const MediaLightbox = observer(() => {
     const [showNewLabelInput, setShowNewLabelInput] = useState(false);
     const [newLabelName, setNewLabelName] = useState("");
     const [showInfo, setShowInfo] = useState(true);
-    
+
+    // Enhance state
+    const [showEnhancePanel, setShowEnhancePanel] = useState(false);
+    const [enhancedUrl, setEnhancedUrl] = useState<string | null>(null);
+    const [enhanceLoading, setEnhanceLoading] = useState(false);
+    const [showEnhanced, setShowEnhanced] = useState(false);
+    const [enhanceOps, setEnhanceOps] = useState<string[]>([]);
+    const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved'>('idle');
+
     // For panning
     const isDragging = useRef(false);
     const lastMousePos = useRef({ x: 0, y: 0 });
@@ -95,12 +104,21 @@ export const MediaLightbox = observer(() => {
         }
     }, [activeTab, selectedMedia, mediaStore]);
 
-    // Clear metadata when media changes (but keep activeTab state)
+    // Clear metadata and enhance state when media changes
     useEffect(() => {
         mediaStore.clearImageMetadata();
         setShowNewLabelInput(false);
         setNewLabelName("");
         setMediaLabels([]);
+        setShowEnhancePanel(false);
+        setEnhanceLoading(false);
+        setShowEnhanced(false);
+        setEnhanceOps([]);
+        setSaveState('idle');
+        setEnhancedUrl(prev => {
+            if (prev) URL.revokeObjectURL(prev);
+            return null;
+        });
     }, [mediaStore.selectedMediaIndex, mediaStore]);
 
     const loadMediaLabels = useCallback(async () => {
@@ -156,6 +174,60 @@ export const MediaLightbox = observer(() => {
             await loadMediaLabels();
             setNewLabelName("");
             setShowNewLabelInput(false);
+        }
+    };
+
+    const handleEnhance = async (mode: string) => {
+        if (!selectedMedia) return;
+        setEnhanceLoading(true);
+        setShowEnhancePanel(false);
+        try {
+            const response = await axios.post(
+                `/image/${selectedMedia.hash}/enhance?mode=${mode}`,
+                null,
+                { responseType: 'blob' }
+            );
+            const ops = ((response.headers['x-enhance-operations'] as string) || '')
+                .split(',').filter(Boolean);
+            setEnhancedUrl(prev => { if (prev) URL.revokeObjectURL(prev); return null; });
+            setEnhancedUrl(URL.createObjectURL(response.data));
+            setEnhanceOps(ops);
+            setShowEnhanced(true);
+        } catch (e) {
+            console.error('Enhancement failed', e);
+        } finally {
+            setEnhanceLoading(false);
+        }
+    };
+
+    const handleDownloadEnhanced = () => {
+        if (!enhancedUrl || !selectedMedia) return;
+        const a = document.createElement('a');
+        a.href = enhancedUrl;
+        a.download = selectedMedia.name.replace(/\.[^.]+$/, '') + '_enhanced.jpg';
+        a.click();
+    };
+
+    const handleSaveToLibrary = async () => {
+        if (!enhancedUrl || !selectedMedia || saveState !== 'idle') return;
+        setSaveState('saving');
+        try {
+            // Fetch the blob and convert to base64
+            const blob = await fetch(enhancedUrl).then(r => r.blob());
+            const base64 = await new Promise<string>((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onloadend = () => {
+                    const result = reader.result as string;
+                    resolve(result.split(',')[1]); // strip data URI prefix
+                };
+                reader.onerror = reject;
+                reader.readAsDataURL(blob);
+            });
+            await axios.post(`/image/${selectedMedia.hash}/save-enhanced`, { image: base64 });
+            setSaveState('saved');
+        } catch (e) {
+            console.error('Save to library failed', e);
+            setSaveState('idle');
         }
     };
 
@@ -343,6 +415,25 @@ export const MediaLightbox = observer(() => {
                         className={selectedMedia.starred ? 'fill-yellow-400 text-yellow-400' : 'text-white'}
                     />
                 </button>
+                {!isVideo && (
+                    <button
+                        className={`p-2 bg-black bg-opacity-50 rounded hover:bg-opacity-70 transition-colors ${showEnhancePanel || enhancedUrl ? 'ring-2 ring-purple-500' : ''}`}
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            if (enhancedUrl) {
+                                setShowEnhanced(s => !s);
+                            } else {
+                                setShowEnhancePanel(p => !p);
+                            }
+                        }}
+                        title={enhancedUrl ? "Toggle original / enhanced" : "Enhance photo"}
+                    >
+                        <Wand2
+                            size={24}
+                            className={enhancedUrl || showEnhancePanel ? 'text-purple-400' : 'text-white'}
+                        />
+                    </button>
+                )}
                 <button
                     className="p-2 bg-black bg-opacity-50 rounded hover:bg-opacity-70 text-white text-3xl leading-none transition-colors"
                     onClick={() => mediaStore.closeMediaLightbox()}
@@ -350,6 +441,33 @@ export const MediaLightbox = observer(() => {
                     &times;
                 </button>
             </div>
+
+            {/* Enhance mode panel */}
+            {showEnhancePanel && !isVideo && (
+                <div
+                    className="absolute top-16 right-4 z-50 bg-gray-900 border border-gray-700 rounded-xl p-3 shadow-xl animate-in fade-in slide-in-from-top-2 duration-200"
+                    onClick={(e) => e.stopPropagation()}
+                >
+                    <div className="text-xs text-gray-400 mb-2 font-medium">Enhancement mode</div>
+                    <div className="grid grid-cols-2 gap-2">
+                        {([
+                            { mode: 'auto',     label: 'Auto',         desc: 'Smart detect' },
+                            { mode: 'exposure', label: 'Exposure',     desc: 'Fix brightness' },
+                            { mode: 'restore',  label: 'Restore',      desc: 'Old / faded' },
+                            { mode: 'all',      label: 'Full',         desc: 'Everything' },
+                        ] as const).map(({ mode, label, desc }) => (
+                            <button
+                                key={mode}
+                                onClick={() => handleEnhance(mode)}
+                                className="flex flex-col items-start px-3 py-2 bg-gray-800 hover:bg-purple-900/50 border border-gray-700 hover:border-purple-500 rounded-lg transition-colors text-left"
+                            >
+                                <span className="text-sm text-white font-medium">{label}</span>
+                                <span className="text-xs text-gray-400">{desc}</span>
+                            </button>
+                        ))}
+                    </div>
+                </div>
+            )}
 
             {/* Previous button */}
             {!isFirstMedia && (
@@ -399,7 +517,11 @@ export const MediaLightbox = observer(() => {
                                     {isVideo ? (
                                         <video src={mediaStore.fullMediaUrl} className="max-w-full max-h-full object-contain" controls autoPlay />
                                     ) : (
-                                        <img src={mediaStore.fullMediaUrl} alt={selectedMedia.name} className="max-w-full max-h-full object-contain" />
+                                        <img
+                                            src={showEnhanced && enhancedUrl ? enhancedUrl : mediaStore.fullMediaUrl ?? undefined}
+                                            alt={selectedMedia.name}
+                                            className="max-w-full max-h-full object-contain"
+                                        />
                                     )}
                                 </div>
                             ) : (
@@ -429,9 +551,87 @@ export const MediaLightbox = observer(() => {
                         )}
                     </div>
                     
+                    {/* Enhancement loading overlay */}
+                    {enhanceLoading && (
+                        <div className="absolute inset-0 flex flex-col items-center justify-center bg-black bg-opacity-60 z-40 rounded">
+                            <div className="w-10 h-10 border-4 border-purple-500 border-t-transparent rounded-full animate-spin mb-3" />
+                            <div className="text-purple-300 text-sm font-medium">Enhancing photo…</div>
+                        </div>
+                    )}
+
+                    {/* Enhance result bar */}
+                    {enhancedUrl && !enhanceLoading && (
+                        <div
+                            className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-gray-900/90 border border-gray-700 rounded-full px-2 py-1 shadow-xl z-50 animate-in fade-in duration-200"
+                            onClick={(e) => e.stopPropagation()}
+                        >
+                            {/* Original / Enhanced toggle */}
+                            <div className="flex rounded-full overflow-hidden border border-gray-600">
+                                <button
+                                    onClick={() => setShowEnhanced(false)}
+                                    className={`px-3 py-1 text-xs font-medium transition-colors ${!showEnhanced ? 'bg-gray-600 text-white' : 'text-gray-400 hover:text-gray-200'}`}
+                                >
+                                    Original
+                                </button>
+                                <button
+                                    onClick={() => setShowEnhanced(true)}
+                                    className={`px-3 py-1 text-xs font-medium transition-colors ${showEnhanced ? 'bg-purple-600 text-white' : 'text-gray-400 hover:text-gray-200'}`}
+                                >
+                                    Enhanced
+                                </button>
+                            </div>
+
+                            {/* Applied operations */}
+                            {enhanceOps.length > 0 && (
+                                <span className="text-xs text-gray-400 hidden sm:inline">
+                                    {enhanceOps.join(' · ')}
+                                </span>
+                            )}
+
+                            {/* Save to Library */}
+                            <button
+                                onClick={handleSaveToLibrary}
+                                disabled={saveState !== 'idle'}
+                                className={`flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium transition-colors ${
+                                    saveState === 'saved'
+                                        ? 'bg-green-700 text-white cursor-default'
+                                        : saveState === 'saving'
+                                        ? 'bg-gray-600 text-gray-300 cursor-wait'
+                                        : 'bg-gray-700 hover:bg-gray-600 text-white'
+                                }`}
+                                title="Save enhanced image to your library as a new photo"
+                            >
+                                <Save size={12} />
+                                {saveState === 'saved' ? 'Saved!' : saveState === 'saving' ? 'Saving…' : 'Save'}
+                            </button>
+
+                            {/* Download */}
+                            <button
+                                onClick={handleDownloadEnhanced}
+                                className="p-1.5 rounded-full bg-purple-700 hover:bg-purple-600 text-white transition-colors"
+                                title="Download enhanced image"
+                            >
+                                <Download size={14} />
+                            </button>
+
+                            {/* Dismiss */}
+                            <button
+                                onClick={() => {
+                                    setEnhancedUrl(prev => { if (prev) URL.revokeObjectURL(prev); return null; });
+                                    setShowEnhanced(false);
+                                    setEnhanceOps([]);
+                                }}
+                                className="p-1.5 rounded-full text-gray-400 hover:text-white transition-colors"
+                                title="Dismiss enhancement"
+                            >
+                                <X size={14} />
+                            </button>
+                        </div>
+                    )}
+
                     {/* Zoom reset indicator */}
                     {mediaStore.zoomScale > 1 && (
-                        <button 
+                        <button
                             onClick={() => mediaStore.resetZoom()}
                             className="absolute bottom-4 left-1/2 transform -translate-x-1/2 bg-blue-600 text-white px-4 py-1 rounded-full text-sm shadow-lg hover:bg-blue-500 transition-colors z-50"
                         >
