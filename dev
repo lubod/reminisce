@@ -54,7 +54,8 @@ function show_help {
     echo "  run                    Run Rust server locally"
     echo "  watch                  Auto-reload Rust server locally"
     echo "  client                 Start Vite dev server locally"
-    echo "  test [args...]         Run tests locally"
+    echo "  test [args...]         Run Rust integration tests"
+    echo "  e2e [args...]          Run Playwright e2e tests (requires dev stack running)"
     echo ""
     echo "Full Stack (Dockerized):"
     echo "  fullstack              Start everything in Docker"
@@ -159,6 +160,10 @@ case "$COMMAND" in
         check_tool "cargo"
         export PGHOST=localhost PGPORT=5432 PGUSER=postgres PGPASSWORD=postgres
         cargo test "$@"
+        ;;
+    e2e)
+        check_tool "npx"
+        cd e2e && npx playwright test "$@"
         ;;
     fullstack)
         info "Starting full application stack..."

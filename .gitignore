@@ -35,3 +35,7 @@ p2p/target/
 input.pbf
 scripts/install.sh
 scripts/install-with-observability.sh
+e2e/node_modules/
+e2e/playwright-report/
+e2e/test-results/
+e2e/.auth/

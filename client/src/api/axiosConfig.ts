@@ -25,8 +25,9 @@ instance.interceptors.response.use(
     return response;
   },
   (error) => {
-    // Check if the error is a 401 Unauthorized
-    if (error.response && error.response.status === 401) {
+    // Check if the error is a 401 Unauthorized — but not from the login endpoint itself
+    // (a 401 there means wrong credentials, not an expired session)
+    if (error.response && error.response.status === 401 && !error.config?.url?.includes("user-login")) {
       // Clear token and user from localStorage
       localStorage.removeItem("token");
       localStorage.removeItem("user");
