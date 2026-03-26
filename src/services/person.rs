@@ -264,12 +264,23 @@ pub async fn get_person(
     }
 }
 
+#[derive(Deserialize, IntoParams)]
+pub struct PersonImagesQuery {
+    #[serde(default = "default_person_images_limit")]
+    pub limit: i64,
+    #[serde(default)]
+    pub offset: i64,
+}
+
+fn default_person_images_limit() -> i64 { 60 }
+
 /// Get all images containing a specific person
 #[utoipa::path(
     get,
     path = "/api/persons/{id}/images",
     params(
-        ("id" = i64, Path, description = "Person ID")
+        ("id" = i64, Path, description = "Person ID"),
+        PersonImagesQuery,
     ),
     responses(
         (status = 200, description = "List of images", body = PersonImagesResponse),
@@ -283,6 +294,7 @@ pub async fn get_person(
 pub async fn get_person_images(
     req: HttpRequest,
     path: web::Path<i64>,
+    query: web::Query<PersonImagesQuery>,
     pool: web::Data<MainDbPool>,
     config: web::Data<Config>,
 ) -> Result<HttpResponse, actix_web::Error> {
@@ -324,8 +336,9 @@ pub async fn get_person_images(
              JOIN images i ON f.image_hash = i.hash AND f.image_deviceid = i.deviceid
              LEFT JOIN starred_images s ON i.hash = s.hash AND s.user_id = $2
              WHERE f.person_id = $1 AND i.deleted_at IS NULL
-             ORDER BY i.created_at DESC",
-            &[&person_id, &user_uuid],
+             ORDER BY i.created_at DESC
+             LIMIT $3 OFFSET $4",
+            &[&person_id, &user_uuid, &query.limit, &query.offset],
         )
         .await
         .map_err(|e| {
@@ -352,10 +365,22 @@ pub async fn get_person_images(
         })
         .collect();
 
-    info!("Retrieved {} images for person {}", images.len(), person_id);
+    // Get the real total (ignoring limit/offset) for pagination on the client
+    let total_row = client
+        .query_one(
+            "SELECT COUNT(*) FROM faces f
+             JOIN images i ON f.image_hash = i.hash AND f.image_deviceid = i.deviceid
+             WHERE f.person_id = $1 AND i.deleted_at IS NULL",
+            &[&person_id],
+        )
+        .await
+        .map_err(|e| { error!("Failed to count person images: {}", e); actix_web::error::ErrorInternalServerError("Query failed") })?;
+    let total: i64 = total_row.get(0);
+
+    info!("Retrieved {}/{} images for person {}", images.len(), total, person_id);
 
     Ok(HttpResponse::Ok().json(PersonImagesResponse {
-        total: images.len(),
+        total: total as usize,
         images,
     }))
 }

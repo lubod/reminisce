@@ -52,10 +52,16 @@ export class PersonStore {
     personImages: PersonImage[] = [];
     isLoading: boolean = false;
     isLoadingImages: boolean = false;
+    isLoadingMoreImages: boolean = false;
     page: number = 1;
     limit: number = 50;
     hasMore: boolean = true;
     total: number = 0;
+
+    imagesOffset: number = 0;
+    imagesLimit: number = 60;
+    imagesTotal: number = 0;
+    imagesHasMore: boolean = false;
 
     constructor(rootStore: RootStore) {
         makeAutoObservable(this);
@@ -136,21 +142,34 @@ export class PersonStore {
         await this.fetchPersonImages(person.id);
     };
 
-    fetchPersonImages = async (personId: number) => {
-        this.isLoadingImages = true;
+    fetchPersonImages = async (personId: number, reset: boolean = true) => {
+        if (reset) {
+            this.isLoadingImages = true;
+            this.imagesOffset = 0;
+        } else {
+            this.isLoadingMoreImages = true;
+        }
         try {
-            const response = await axios.get<PersonImagesResponse>(`/persons/${personId}/images`);
+            const offset = reset ? 0 : this.imagesOffset;
+            const response = await axios.get<PersonImagesResponse>(
+                `/persons/${personId}/images?limit=${this.imagesLimit}&offset=${offset}`
+            );
 
             const imagesWithThumbnails = response.data.images.map(image => ({
                 ...image,
-                // Face-cropped thumbnail for the grid
                 thumbnailUrl: this.getAuthenticatedUrl(`/api/face/${image.face_id}/thumbnail`),
-                // Full image thumbnail for the lightbox
                 fullThumbnailUrl: image.thumbnail_url ? this.getAuthenticatedUrl(image.thumbnail_url) : undefined,
             }));
 
             runInAction(() => {
-                this.personImages = imagesWithThumbnails;
+                if (reset) {
+                    this.personImages = imagesWithThumbnails;
+                } else {
+                    this.personImages = [...this.personImages, ...imagesWithThumbnails];
+                }
+                this.imagesTotal = response.data.total;
+                this.imagesOffset = offset + imagesWithThumbnails.length;
+                this.imagesHasMore = this.imagesOffset < response.data.total;
             });
         } catch (error) {
             console.error(`Failed to fetch images for person ${personId}`, error);
@@ -158,8 +177,14 @@ export class PersonStore {
         } finally {
             runInAction(() => {
                 this.isLoadingImages = false;
+                this.isLoadingMoreImages = false;
             });
         }
+    };
+
+    loadMorePersonImages = async () => {
+        if (!this.selectedPerson || !this.imagesHasMore || this.isLoadingMoreImages) return;
+        await this.fetchPersonImages(this.selectedPerson.id, false);
     };
 
     updatePersonName = async (personId: number, name: string) => {
@@ -217,6 +242,9 @@ export class PersonStore {
 
         this.selectedPerson = null;
         this.personImages = [];
+        this.imagesOffset = 0;
+        this.imagesTotal = 0;
+        this.imagesHasMore = false;
     };
 
     getAuthenticatedUrl = (baseUrl: string) => {

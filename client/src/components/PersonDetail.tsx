@@ -84,7 +84,9 @@ export const PersonDetail = observer(() => {
                         {person.name || `Person ${person.id}`}
                     </h2>
                     <p className="text-sm text-gray-400">
-                        {person.face_count} photo{person.face_count !== 1 ? 's' : ''}
+                        {personStore.personImages.length > 0 && personStore.imagesTotal > personStore.personImages.length
+                            ? `${personStore.personImages.length} of ${personStore.imagesTotal} photo${personStore.imagesTotal !== 1 ? 's' : ''}`
+                            : `${person.face_count} photo${person.face_count !== 1 ? 's' : ''}`}
                     </p>
                 </div>
                 <button
@@ -183,7 +185,7 @@ export const PersonDetail = observer(() => {
                     <p>No images found for this person</p>
                 </div>
             ) : (
-                <div className="grid grid-cols-3 xl:grid-cols-6 gap-2">
+                <div className="grid grid-cols-3 xl:grid-cols-6 gap-2 mb-4">
                     {personStore.personImages.map((image, index) => {
                         const isCurrentCover = image.face_id === person.representative_face_id;
                         return (
@@ -196,6 +198,7 @@ export const PersonDetail = observer(() => {
                                     <img
                                         src={image.thumbnailUrl}
                                         alt={image.name}
+                                        loading="lazy"
                                         className="object-cover w-full h-full group-hover:opacity-75 transition-opacity"
                                     />
                                 ) : (
@@ -244,6 +247,20 @@ export const PersonDetail = observer(() => {
                             </div>
                         );
                     })}
+                </div>
+            )}
+
+            {personStore.imagesHasMore && (
+                <div className="flex justify-center mt-4">
+                    <button
+                        onClick={() => personStore.loadMorePersonImages()}
+                        disabled={personStore.isLoadingMoreImages}
+                        className="px-6 py-2 bg-gray-700 hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed text-gray-300 text-sm rounded-lg transition-colors"
+                    >
+                        {personStore.isLoadingMoreImages
+                            ? "Loading..."
+                            : `Load more (${personStore.imagesTotal - personStore.personImages.length} remaining)`}
+                    </button>
                 </div>
             )}
 
