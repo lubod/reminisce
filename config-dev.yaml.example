@@ -14,22 +14,11 @@ api_secret_key: "CHANGE_ME_run_openssl_rand_base64_32"
 images_dir: "uploaded_images"
 videos_dir: "uploaded_videos"
 
-# P2P Configuration (Internal Engine)
-# Path to store node key and shards
+# P2P Configuration
 p2p_data_dir: "data/p2p"
-# Storage nodes (NetBird overlay IPs of your storage nodes)
-# Same-host example (all nodes on one machine, different ports):
-#   - "100.x.x.x:5050"
-#   - "100.x.x.x:5051"
-# Multi-host example (each node on separate machine):
-#   - "100.x.x.1:5050"
-#   - "100.x.x.2:5050"
-p2p_peers:
-  - "100.x.x.x:5050"
-  - "100.x.x.x:5051"
-  - "100.x.x.x:5052"
-  - "100.x.x.x:5053"
-  - "100.x.x.x:5054"
+# Coordinator address — storage nodes register here and are discovered automatically
+p2p_coordinator_addr: "127.0.0.1:5055"
+p2p_namespace: "dev"
 
 # Geocoding configuration
 enable_local_geocoding: true

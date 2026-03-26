@@ -33,7 +33,5 @@ storage_iroh_data/
 p2p/test_env/
 p2p/target/
 input.pbf
-netbird/.env
-netbird/keys/
 scripts/install.sh
 scripts/install-with-observability.sh

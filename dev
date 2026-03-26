@@ -18,7 +18,7 @@ DEV_CONFIG="config-dev.yaml"
 FULL_CONFIG="config-fullstack.yaml"
 
 # List of all possible container names to avoid naming conflicts
-ALL_CONTAINERS="reminisce-dev-db reminisce-dev-geotagging reminisce-dev-ai-server netbird-client reminisce-dev-server reminisce-dev-client p2p-dev-node-1 p2p-dev-node-2 p2p-dev-node-3 p2p-dev-node-4 p2p-dev-node-5"
+ALL_CONTAINERS="reminisce-dev-db reminisce-dev-geotagging reminisce-dev-ai-server reminisce-dev-server reminisce-dev-client p2p-dev-node-1 p2p-dev-node-2 p2p-dev-node-3 p2p-dev-node-4 p2p-dev-node-5"
 
 # --- HELPERS ---
 info() { echo -e "${BLUE}INFO:${NC} $1"; }

@@ -1,6 +1,5 @@
 #!/bin/sh
 # Generate self-signed SSL certificates for the fullstack dev environment.
-# Includes the NetBird overlay IP as a SAN so mobile clients can connect via HTTPS.
 
 set -e
 
@@ -17,15 +16,8 @@ fi
 
 echo "Generating self-signed SSL certificate for fullstack dev environment..."
 
-# Detect NetBird overlay IP (100.x.x.x on wt0 interface)
-NETBIRD_IP=$(ip addr show wt0 2>/dev/null | grep 'inet ' | awk '{print $2}' | cut -d/ -f1 || true)
-
 # Build SAN list
 SAN="DNS:localhost,DNS:*.localhost,IP:127.0.0.1"
-if [ -n "$NETBIRD_IP" ]; then
-    SAN="${SAN},IP:${NETBIRD_IP}"
-    echo "Including NetBird overlay IP: ${NETBIRD_IP}"
-fi
 
 # Also include any EXTRA_SAN_IPS passed via environment
 if [ -n "${EXTRA_SAN_IPS:-}" ]; then

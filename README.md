@@ -10,7 +10,7 @@ Reminisce lets you back up photos and videos from your phone to your own server,
 - **Automatic descriptions** — SmolVLM-500M generates text descriptions for every photo (~5s per image)
 - **Face recognition** — InsightFace clusters faces into people; name them and search by person
 - **Location tagging** — GPS reverse-geocoding (offline PostGIS database, no API key required)
-- **P2P distributed storage** — files are erasure-coded and distributed across your own storage nodes over a WireGuard mesh (NetBird), with no single point of failure
+- **P2P distributed storage** — files are erasure-coded and distributed across your own storage nodes, with no single point of failure
 - **Cross-device deduplication** — the same photo from multiple phones is stored once
 - **Android client** — automatic background backup from your phone
 - **AGPL v3** — fully open source, self-hostable, no telemetry
@@ -28,12 +28,11 @@ Android / Web client
    │     ├── SmolVLM-500M — image descriptions
    │     └── InsightFace — face detection (CPU)
    └── np2p storage nodes (QUIC/ChaCha20Poly1305)
-         connected via NetBird WireGuard mesh
 ```
 
 ## Quick Start (Docker)
 
-**Requirements:** Docker, Docker Compose, a NetBird account (free self-hosted)
+**Requirements:** Docker, Docker Compose
 
 ```bash
 # 1. Clone the repo
@@ -44,15 +43,10 @@ cd reminisce
 cp config-fullstack.yaml.example config-fullstack.yaml
 # Edit config-fullstack.yaml:
 #   - Set api_secret_key (generate: openssl rand -base64 32)
-#   - Set p2p_peers to your NetBird overlay IPs
-
-cp .env.example .env
-# Edit .env:
-#   - Set NETBIRD_SETUP_KEY from your NetBird management panel
-#   - Set NETBIRD_MANAGEMENT_URL to your NetBird server
+#   - Set p2p_coordinator_addr to your coordinator's address
 
 # 3. Pull and start
-docker compose -f docker-compose-dev.yml up -d
+docker compose up -d
 ```
 
 The web UI will be available at `https://localhost:28444` (self-signed cert).
@@ -82,21 +76,17 @@ Copy `config-fullstack.yaml.example` to `config-fullstack.yaml` and set:
 | Key | Description |
 |-----|-------------|
 | `api_secret_key` | JWT signing key — `openssl rand -base64 32` |
-| `p2p_peers` | List of `ip:port` for your storage nodes |
+| `p2p_coordinator_addr` | Address of the coordinator node (e.g. `127.0.0.1:5055`) |
+| `p2p_namespace` | Namespace to isolate peer groups (e.g. `production`) |
 | `database_url` | PostgreSQL connection string |
 | `embedding_service_url` | URL of the AI service (default `http://localhost:8081`) |
 
-## 🔒 Security & Best Practices
+## Security
 
-To protect your personal media, follow these essential security steps after installation:
-
-1.  **Generate a Unique Secret Key:** The `api_secret_key` is used to sign authentication tokens. Generate a random 32-character key and set it in your `config-fullstack.yaml`:
-    ```bash
-    openssl rand -base64 32
-    ```
-2.  **Change the Default Admin Password:** The default credentials are `admin` / `admin123`. **Log in immediately** and change your password in the User settings.
-3.  **Use a Private Mesh:** Run Reminisce behind a private mesh VPN like **NetBird** (default) or **Tailscale**. Avoid exposing the API port (8080) directly to the public internet.
-4.  **Hardware Encryption:** If your storage nodes are physically accessible to others, ensure their disks are encrypted (LUKS/FileVault).
+- **Generate a unique `api_secret_key`:** `openssl rand -base64 32`
+- **Change the default admin password** (`admin` / `admin123`) immediately after first login
+- **Don't expose port 8080** to the internet — run behind a VPN or firewall
+- **Encrypt storage node disks** (LUKS/FileVault) if physically accessible to others
 
 ## AI Service
 
@@ -114,23 +104,9 @@ GPU acceleration is supported for AMD ROCm and CUDA. InsightFace runs on CPU to 
 
 ## P2P Storage
 
-Files are split into shards using Reed-Solomon erasure coding (5-of-8 by default) and distributed to storage nodes over a WireGuard mesh network (NetBird). Each shard is encrypted with ChaCha20Poly1305. Any 5 of 8 nodes can reconstruct any file.
+Files are split into shards using Reed-Solomon erasure coding (5-of-8 by default) and distributed across storage nodes. Each shard is encrypted with ChaCha20Poly1305. Any 5 of 8 nodes can reconstruct any file.
 
 See [np2p/DESIGN.md](np2p/DESIGN.md) for the full design document.
-
-## NetBird Setup
-
-Reminisce uses [NetBird](https://netbird.io) for secure overlay networking between nodes. You can use the hosted NetBird service or run your own server:
-
-```bash
-# Deploy a self-hosted NetBird management server
-cd netbird
-export NETBIRD_MANAGEMENT_URL=https://your-netbird-server.example.com
-./manage.sh setup-server
-
-# Create a setup key for a new node
-./manage.sh create-key my-storage-node
-```
 
 ## License
 
