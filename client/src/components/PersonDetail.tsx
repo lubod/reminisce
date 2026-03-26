@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { observer } from "mobx-react-lite";
 import { useStore } from "../stores/RootStore";
 import { ArrowLeft, Star, Merge, X, Check, Search, User } from "lucide-react";
@@ -15,6 +15,18 @@ export const PersonDetail = observer(() => {
     const [mergeSourceIds, setMergeSourceIds] = useState<Set<number>>(new Set());
     const [isMerging, setIsMerging] = useState(false);
     const [settingCoverId, setSettingCoverId] = useState<number | null>(null);
+    const sentinelRef = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+        const sentinel = sentinelRef.current;
+        if (!sentinel) return;
+        const observer = new IntersectionObserver(
+            ([entry]) => { if (entry.isIntersecting) personStore.loadMorePersonImages(); },
+            { rootMargin: "200px" }
+        );
+        observer.observe(sentinel);
+        return () => observer.disconnect();
+    }, [personStore.imagesHasMore]);
 
     if (!personStore.selectedPerson) return null;
 
@@ -251,16 +263,10 @@ export const PersonDetail = observer(() => {
             )}
 
             {personStore.imagesHasMore && (
-                <div className="flex justify-center mt-4">
-                    <button
-                        onClick={() => personStore.loadMorePersonImages()}
-                        disabled={personStore.isLoadingMoreImages}
-                        className="px-6 py-2 bg-gray-700 hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed text-gray-300 text-sm rounded-lg transition-colors"
-                    >
-                        {personStore.isLoadingMoreImages
-                            ? "Loading..."
-                            : `Load more (${personStore.imagesTotal - personStore.personImages.length} remaining)`}
-                    </button>
+                <div ref={sentinelRef} className="flex justify-center py-6">
+                    {personStore.isLoadingMoreImages && (
+                        <div className="w-5 h-5 border-2 border-gray-500 border-t-transparent rounded-full animate-spin" />
+                    )}
                 </div>
             )}
 
