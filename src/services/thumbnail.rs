@@ -237,7 +237,26 @@ pub async fn generate_thumbnail_for_image(
     let start_time = Instant::now();
 
     let result = web::block(move || {
-        let mut img = image::open(&image_path)?;
+        let is_svg = image_path.extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.eq_ignore_ascii_case("svg"))
+            .unwrap_or(false);
+
+        let mut img = if is_svg {
+            let svg_data = std::fs::read(&image_path)?;
+            let opt = resvg::usvg::Options::default();
+            let tree = resvg::usvg::Tree::from_data(&svg_data, &opt)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
+            let size = tree.size().to_int_size();
+            let mut pixmap = resvg::tiny_skia::Pixmap::new(size.width(), size.height())
+                .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "SVG has zero size"))?;
+            resvg::render(&tree, resvg::tiny_skia::Transform::default(), &mut pixmap.as_mut());
+            let rgba = image::RgbaImage::from_raw(size.width(), size.height(), pixmap.take())
+                .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "SVG pixel buffer size mismatch"))?;
+            image::DynamicImage::ImageRgba8(rgba)
+        } else {
+            image::open(&image_path)?
+        };
 
         // EXIF Rotation
         let file = std::fs::File::open(&image_path)?;
