@@ -178,14 +178,14 @@ impl MediaQueryBuilder {
 
     /// Build SELECT clause for listing thumbnails
     /// If lon_param and lat_param are provided, includes distance calculation
-    pub fn build_select_query(&mut self, limit_param: usize, offset_param: usize, lon_param: Option<usize>, lat_param: Option<usize>) -> String {
+    pub fn build_select_query(&mut self, limit_param: usize, offset_param: usize, lon_param: Option<usize>, lat_param: Option<usize>, sort_by: Option<&str>) -> String {
         let body = self.build_select_body(lon_param, lat_param);
-        format!(
-            "{} ORDER BY t.created_at DESC, t.hash DESC LIMIT ${} OFFSET ${}",
-            body,
-            limit_param,
-            offset_param
-        )
+        let order = if sort_by == Some("size") {
+            "ORDER BY t.file_size_bytes DESC NULLS LAST, t.hash DESC"
+        } else {
+            "ORDER BY t.created_at DESC, t.hash DESC"
+        };
+        format!("{} {} LIMIT ${} OFFSET ${}", body, order, limit_param, offset_param)
     }
 
     /// Build COUNT query for total thumbnails

@@ -207,7 +207,7 @@ export class MediaStore {
 
     setGroupBy = (val: 'day' | 'place') => { this.groupBy = val; };
     setVideoGroupBy = (val: 'day' | 'place') => { this.videoGroupBy = val; };
-    setSortBy = (val: 'date' | 'size') => { this.sortBy = val; };
+    setSortBy = (val: 'date' | 'size') => { this.sortBy = val; this.applyFilters(); };
 
     // --- Data Fetching ---
 
@@ -324,6 +324,7 @@ export class MediaStore {
                 limit: limit.toString(),
                 starred_only: this.filters.starredOnly.toString()
             });
+            if (this.sortBy === 'size') params.append('sort_by', 'size');
 
             if (this.filters.startDate) params.append('start_date', this.filters.startDate);
             if (this.filters.endDate) params.append('end_date', this.filters.endDate);
@@ -362,6 +363,7 @@ export class MediaStore {
                 limit: limit.toString(),
                 starred_only: this.filters.starredOnly.toString()
             });
+            if (this.sortBy === 'size') params.append('sort_by', 'size');
 
             if (this.filters.startDate) params.append('start_date', this.filters.startDate);
             if (this.filters.endDate) params.append('end_date', this.filters.endDate);
@@ -400,6 +402,7 @@ export class MediaStore {
                 limit: limit.toString(),
                 starred_only: this.filters.starredOnly.toString()
             });
+            if (this.sortBy === 'size') params.append('sort_by', 'size');
 
             if (this.filters.startDate) params.append('start_date', this.filters.startDate);
             if (this.filters.endDate) params.append('end_date', this.filters.endDate);

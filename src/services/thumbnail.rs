@@ -412,6 +412,9 @@ pub struct PaginationQuery {
     /// Optional search radius in kilometers (default: 10)
     #[serde(default)]
     pub location_radius_km: Option<f64>,
+    /// Sort order: "date" (default) or "size"
+    #[serde(default)]
+    pub sort_by: Option<String>,
 }
 
 fn default_page() -> usize {
@@ -532,6 +535,7 @@ async fn list_media_thumbnails(
             query.location_radius_km,
             query.label_id,
             apply_user_id_filter,
+            query.sort_by.as_deref(),
             &pool
         ).await
         .map_err(|e| {

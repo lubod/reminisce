@@ -354,6 +354,7 @@ pub async fn list_thumbnails(
     location_radius_km: Option<f64>,
     label_id: Option<i32>,
     apply_user_id_filter: bool,
+    sort_by: Option<&str>,
     pool: &web::Data<MainDbPool>,
 ) -> Result<Vec<ThumbnailItem>, Box<dyn std::error::Error>> {
     let client = pool.0.get().await.map_err(|e| {
@@ -448,9 +449,14 @@ pub async fn list_thumbnails(
         let img_body = img_builder.build_select_body(lon_param_idx, lat_param_idx);
         let vid_body = vid_builder.build_select_body(None, None); // Videos don't support location sorting yet
 
+        let order_clause = if sort_by == Some("size") {
+            "ORDER BY file_size_bytes DESC NULLS LAST, hash DESC".to_string()
+        } else {
+            "ORDER BY created_at DESC, hash DESC".to_string()
+        };
         query_string = format!(
-            "{} UNION ALL {} ORDER BY created_at DESC, hash DESC LIMIT ${} OFFSET ${}",
-            img_body, vid_body, limit_param, offset_param
+            "{} UNION ALL {} {} LIMIT ${} OFFSET ${}",
+            img_body, vid_body, order_clause, limit_param, offset_param
         );
     } else {
         // Single table query
@@ -474,7 +480,7 @@ pub async fn list_thumbnails(
         limit_param = builder.param_count() + 1 + (if has_location_filter && table == "images" { 2 } else { 0 });
         offset_param = builder.param_count() + 2 + (if has_location_filter && table == "images" { 2 } else { 0 });
 
-        query_string = builder.build_select_query(limit_param, offset_param, lon_param_idx, lat_param_idx);
+        query_string = builder.build_select_query(limit_param, offset_param, lon_param_idx, lat_param_idx, sort_by);
     }
 
     // Convert limit and offset to i64
