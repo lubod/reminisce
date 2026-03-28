@@ -511,7 +511,7 @@ export class MediaStore {
             this.revokeIfBlob(this.fullMediaUrl);
 
             const url = this.getAuthenticatedUrl(
-                item.media_type === 'video' ? `/video/${item.hash}` : `/image/${item.hash}`
+                item.media_type === 'video' ? `/api/video/${item.hash}` : `/api/image/${item.hash}`
             );
             runInAction(() => {
                 this.fullMediaUrl = url;
@@ -529,7 +529,7 @@ export class MediaStore {
         try {
             this.revokeIfBlob(this.comparisonMediaUrl);
             const url = this.getAuthenticatedUrl(
-                item.media_type === 'video' ? `/video/${item.hash}` : `/image/${item.hash}`
+                item.media_type === 'video' ? `/api/video/${item.hash}` : `/api/image/${item.hash}`
             );
             runInAction(() => { this.comparisonMediaUrl = url; });
         } catch (error) { console.error("Failed to load comparison", error); }
