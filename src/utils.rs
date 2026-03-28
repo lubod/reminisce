@@ -569,6 +569,7 @@ pub async fn list_thumbnails(
                 distance_km: distance_km.map(|d| d as f32),
                 media_type: final_media_type,
                 thumbnail_url: format!("/api/thumbnail/{}", hash),
+                file_size_bytes: row.try_get("file_size_bytes").unwrap_or(None),
             }
         })
         .collect();

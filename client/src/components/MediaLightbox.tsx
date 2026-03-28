@@ -233,6 +233,13 @@ export const MediaLightbox = observer(() => {
 
     if (!selectedMedia) return null;
 
+    const formatFileSize = (bytes: number): string => {
+        if (bytes >= 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+        if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+        if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+        return `${bytes} B`;
+    };
+
     const formatDate = (dateString: string) => {
         const date = new Date(dateString);
         return date.toLocaleString('en-US', {
@@ -719,6 +726,12 @@ export const MediaLightbox = observer(() => {
                                         <div className="text-gray-400 text-xs mb-1">Type</div>
                                         <div className="capitalize">{selectedMedia.media_type || (isVideo ? 'Video' : 'Image')}</div>
                                     </div>
+                                    {selectedMedia.file_size_bytes != null && (
+                                        <div>
+                                            <div className="text-gray-400 text-xs mb-1">File Size</div>
+                                            <div>{formatFileSize(selectedMedia.file_size_bytes)}</div>
+                                        </div>
+                                    )}
                                 </div>
                             )}
 

@@ -447,6 +447,7 @@ pub struct ThumbnailItem {
     pub distance_km: Option<f32>,
     pub media_type: Option<String>,
     pub thumbnail_url: String,
+    pub file_size_bytes: Option<i64>,
 }
 
 #[derive(Serialize, Deserialize, ToSchema)]

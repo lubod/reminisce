@@ -118,20 +118,20 @@ impl MediaQueryBuilder {
                     "SELECT t.hash, t.name, t.created_at, t.place, t.deviceid, \
                      CASE WHEN s.hash IS NOT NULL THEN true ELSE false END as starred, \
                      ST_Distance(t.location, ST_MakePoint(${}, ${})::geography) / 1000.0 as distance_km, \
-                     'image' as media_type",
+                     'image' as media_type, t.file_size_bytes::bigint as file_size_bytes",
                     lon_p, lat_p
                 )
             } else {
                 "SELECT t.hash, t.name, t.created_at, t.place, t.deviceid, \
                  CASE WHEN s.hash IS NOT NULL THEN true ELSE false END as starred, \
                  NULL::double precision as distance_km, \
-                 'image' as media_type".to_string()
+                 'image' as media_type, t.file_size_bytes::bigint as file_size_bytes".to_string()
             }
         } else {
             "SELECT t.hash, t.name, t.created_at, NULL as place, t.deviceid, \
              CASE WHEN s.hash IS NOT NULL THEN true ELSE false END as starred, \
              NULL::double precision as distance_km, \
-             'video' as media_type".to_string()
+             'video' as media_type, t.file_size_bytes as file_size_bytes".to_string()
         };
 
         let where_clause = self.build_where_clause();

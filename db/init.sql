@@ -107,6 +107,7 @@ ALTER TABLE images ADD COLUMN IF NOT EXISTS width INTEGER;
 ALTER TABLE images ADD COLUMN IF NOT EXISTS height INTEGER;
 ALTER TABLE images ADD COLUMN IF NOT EXISTS file_size_bytes INTEGER;
 ALTER TABLE images ADD COLUMN IF NOT EXISTS quality_score_generated_at TIMESTAMPTZ;
+ALTER TABLE videos ADD COLUMN IF NOT EXISTS file_size_bytes BIGINT;
 
 -- Starred images table for per-user image starring (cross-device)
 CREATE TABLE IF NOT EXISTS starred_images (

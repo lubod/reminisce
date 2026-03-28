@@ -14,6 +14,7 @@ export interface MediaItem {
     distance_km?: number; // Distance from search location in kilometers
     media_type?: string; // "image" or "video"
     thumbnail_url?: string;
+    file_size_bytes?: number;
 }
 
 export interface LocationResult {
@@ -76,6 +77,7 @@ export class MediaStore {
     groupBy: 'day' | 'place' = 'day';
     videoGroupBy: 'day' | 'place' = 'day';
     allMediaGroupBy: 'day' | 'place' = 'day';
+    sortBy: 'date' | 'size' = 'date';
 
     // Centralized Filters
     filters = {
@@ -205,6 +207,7 @@ export class MediaStore {
 
     setGroupBy = (val: 'day' | 'place') => { this.groupBy = val; };
     setVideoGroupBy = (val: 'day' | 'place') => { this.videoGroupBy = val; };
+    setSortBy = (val: 'date' | 'size') => { this.sortBy = val; };
 
     // --- Data Fetching ---
 
@@ -686,11 +689,23 @@ export class MediaStore {
             groups.get(key)!.push(item);
         });
 
-        return Array.from(groups.entries()).map(([key, groupItems]) => ({
+        const sortBySize = this.sortBy === 'size';
+        const grouped = Array.from(groups.entries()).map(([key, groupItems]) => ({
             date: key,
             displayDate: mode === 'day' ? this.formatDisplayDate(key) : key,
-            items: groupItems.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-        })).sort((a, b) => mode === 'day' ? b.date.localeCompare(a.date) : a.displayDate.localeCompare(b.displayDate));
+            items: sortBySize
+                ? groupItems.sort((a, b) => (b.file_size_bytes ?? 0) - (a.file_size_bytes ?? 0))
+                : groupItems.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+        }));
+
+        if (sortBySize) {
+            return grouped.sort((a, b) => {
+                const maxA = Math.max(...a.items.map(i => i.file_size_bytes ?? 0));
+                const maxB = Math.max(...b.items.map(i => i.file_size_bytes ?? 0));
+                return maxB - maxA;
+            });
+        }
+        return grouped.sort((a, b) => mode === 'day' ? b.date.localeCompare(a.date) : a.displayDate.localeCompare(b.displayDate));
     }
 
     private formatDisplayDate(dateKey: string): string {

@@ -258,8 +258,21 @@ export const MediaBrowser = observer(() => {
 
                 <div className="flex justify-between items-center px-2">
                     <button onClick={() => mediaStore.clearAllFilters()} className="text-xs text-gray-500 hover:text-white underline">Reset Filters</button>
-                    <div className="text-[10px] text-gray-500 uppercase tracking-widest font-bold">
-                        Showing {mediaStore.allMedia.length} / {mediaStore.totalAllMedia} items
+                    <div className="flex items-center gap-3">
+                        <div className="flex items-center gap-1">
+                            <span className="text-[10px] text-gray-500 uppercase tracking-widest font-bold">Sort:</span>
+                            <button
+                                onClick={() => mediaStore.setSortBy('date')}
+                                className={`text-[10px] px-2 py-0.5 rounded transition-colors ${mediaStore.sortBy === 'date' ? 'bg-gray-600 text-white' : 'text-gray-500 hover:text-white'}`}
+                            >Date</button>
+                            <button
+                                onClick={() => mediaStore.setSortBy('size')}
+                                className={`text-[10px] px-2 py-0.5 rounded transition-colors ${mediaStore.sortBy === 'size' ? 'bg-gray-600 text-white' : 'text-gray-500 hover:text-white'}`}
+                            >Size</button>
+                        </div>
+                        <div className="text-[10px] text-gray-500 uppercase tracking-widest font-bold">
+                            Showing {mediaStore.allMedia.length} / {mediaStore.totalAllMedia} items
+                        </div>
                     </div>
                 </div>
             </div>

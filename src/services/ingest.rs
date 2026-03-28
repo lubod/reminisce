@@ -117,6 +117,15 @@ pub async fn process_image_file(
         &[&device_id, &hash, user_id, &name, &ext, &created_at]
     ).await?;
 
+    // Store file size
+    if let Ok(meta) = fs::metadata(&target_path) {
+        let file_size = meta.len().min(i32::MAX as u64) as i32;
+        let _ = client.execute(
+            "UPDATE images SET file_size_bytes = $1 WHERE deviceid = $2 AND hash = $3",
+            &[&file_size, &device_id, &hash],
+        ).await;
+    }
+
     // 4. Extract EXIF from the image file and update the DB
     let mut exif_date: Option<chrono::DateTime<Utc>> = None;
     let mut exif_json_opt: Option<serde_json::Value> = None;
@@ -221,6 +230,15 @@ pub async fn process_video_file(
          ON CONFLICT (deviceid, hash) DO UPDATE SET deleted_at = NULL",
         &[&device_id, &hash, user_id, &name, &ext]
     ).await?;
+
+    // Store file size
+    if let Ok(meta) = fs::metadata(&target_path) {
+        let file_size = meta.len() as i64;
+        let _ = client.execute(
+            "UPDATE videos SET file_size_bytes = $1 WHERE deviceid = $2 AND hash = $3",
+            &[&file_size, &device_id, &hash],
+        ).await;
+    }
 
     // Best date: filename > client (apply only if created_at is still upload time)
     let best_date = utils::parse_date_from_video_name(name)
