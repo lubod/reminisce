@@ -272,18 +272,25 @@ class BackupWorker(context: Context, params: WorkerParameters) : Worker(context,
         Log.d(TAG, "Base URL retrieved: $baseUrl")
         LogCollector.i(TAG, "Server URL: $baseUrl")
 
-        // Determine whether to backup images or videos
-        val backupType = inputData.getString("backup_type") ?: "image"
         val quickBackup = inputData.getBoolean("quick_backup", false)
-        Log.d(TAG, "Backup type: $backupType, Quick backup: $quickBackup")
-        LogCollector.i(TAG, "Backup type: $backupType, Quick: $quickBackup")
+        Log.d(TAG, "Quick backup: $quickBackup")
+        LogCollector.i(TAG, "Backup type: images+videos, Quick: $quickBackup")
 
-        // Perform the actual backup based on the type
-        val result = when (backupType) {
-            "video" -> performMediaBackup(baseUrl, token, quickBackup, true)
-            else -> performMediaBackup(baseUrl, token, quickBackup, false)
-        }
-        
+        val imageResult = performMediaBackup(baseUrl, token, quickBackup, false)
+        val imageStats = backupStats
+        val videoResult = performMediaBackup(baseUrl, token, quickBackup, true)
+        val videoStats = backupStats
+
+        // Combine stats from both runs
+        backupStats = BackupStats(
+            successfullyBackedUp = (imageStats?.successfullyBackedUp ?: 0) + (videoStats?.successfullyBackedUp ?: 0),
+            totalProcessed = (imageStats?.totalProcessed ?: 0) + (videoStats?.totalProcessed ?: 0),
+            skippedExisting = (imageStats?.skippedExisting ?: 0) + (videoStats?.skippedExisting ?: 0),
+            failedCount = (imageStats?.failedCount ?: 0) + (videoStats?.failedCount ?: 0),
+            failedFiles = (imageStats?.failedFiles ?: emptyList()) + (videoStats?.failedFiles ?: emptyList())
+        )
+
+        val result = imageResult && videoResult
         Log.d(TAG, "Backup operation completed with result: $result")
         return result
     }

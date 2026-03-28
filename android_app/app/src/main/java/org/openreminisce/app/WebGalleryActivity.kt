@@ -34,7 +34,6 @@ class WebGalleryActivity : AppCompatActivity() {
     private lateinit var progressDialogHelper: BackupProgressDialogHelper
     private var authToken: String? = null
     private var isBackingUp = false
-    private var currentBackupType = "image" // Track current backup type
 
     private val backupStatusReceiver = object : android.content.BroadcastReceiver() {
         override fun onReceive(context: android.content.Context?, intent: android.content.Intent?) {
@@ -124,9 +123,7 @@ class WebGalleryActivity : AppCompatActivity() {
             stopBackup()
         }
 
-        // Start backup service with intent - default to images
         val intent = Intent(this, BackupService::class.java).apply {
-            putExtra("backup_type", "image")
             putExtra("quick_backup", true)
         }
         startService(intent)
@@ -147,9 +144,7 @@ class WebGalleryActivity : AppCompatActivity() {
             stopBackup()
         }
 
-        // Start backup service with intent - default to images
         val intent = Intent(this, BackupService::class.java).apply {
-            putExtra("backup_type", "image")
             putExtra("quick_backup", false)
         }
         startService(intent)
@@ -191,7 +186,7 @@ class WebGalleryActivity : AppCompatActivity() {
                 totalProcessed = totalProcessed,
                 skippedExisting = skippedExisting,
                 failedCount = failedCount,
-                backupType = currentBackupType,
+                backupType = "all",
                 isQuickBackup = type == "quick"
             ) {
                 // On dismiss - nothing special needed for WebGalleryActivity

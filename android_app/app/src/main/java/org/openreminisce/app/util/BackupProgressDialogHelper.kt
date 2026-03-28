@@ -216,10 +216,10 @@ class BackupProgressDialogHelper(private val context: Context) {
         isQuickBackup: Boolean,
         onDismiss: () -> Unit
     ) {
-        val mediaTypeText = if (backupType == "video") {
-            context.getString(R.string.videos)
-        } else {
-            context.getString(R.string.photos)
+        val mediaTypeText = when (backupType) {
+            "video" -> context.getString(R.string.videos)
+            "all" -> "media files"
+            else -> context.getString(R.string.photos)
         }
 
         val message = when {

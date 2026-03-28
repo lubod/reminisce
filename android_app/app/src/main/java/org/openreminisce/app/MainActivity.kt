@@ -37,7 +37,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var databaseHelper: DatabaseHelper
     private lateinit var progressDialogHelper: BackupProgressDialogHelper
     private var isBackingUp = false
-    private var currentBackupType = "image" // Track current backup type
 
     private val backupStatusReceiver = object : android.content.BroadcastReceiver() {
         override fun onReceive(context: android.content.Context?, intent: android.content.Intent?) {
@@ -141,12 +140,10 @@ class MainActivity : AppCompatActivity() {
         val prefs = getSharedPreferences("BackupState", MODE_PRIVATE)
         prefs.edit().putBoolean("cancel_backup", false).apply()
 
-        // Get the last backup timestamp based on current backup type
-        val lastBackupTimestamp = if (currentBackupType == "video") {
-            databaseHelper.getLastVideoBackupTimestamp()
-        } else {
-            databaseHelper.getLastImageBackupTimestamp()
-        }
+        // Use the earlier of image/video timestamps so quick backup doesn't miss anything
+        val imageTs = databaseHelper.getLastImageBackupTimestamp()
+        val videoTs = databaseHelper.getLastVideoBackupTimestamp()
+        val lastBackupTimestamp = listOfNotNull(imageTs, videoTs).minOrNull()
 
         val timestampText = if (lastBackupTimestamp != null && lastBackupTimestamp > 0) {
             val date = Date(lastBackupTimestamp * 1000)
@@ -167,7 +164,6 @@ class MainActivity : AppCompatActivity() {
 
         // Start backup service with intent
         val intent = Intent(this, BackupService::class.java).apply {
-            putExtra("backup_type", currentBackupType)
             putExtra("quick_backup", true)
         }
         startService(intent)
@@ -194,7 +190,6 @@ class MainActivity : AppCompatActivity() {
 
         // Start backup service with intent
         val intent = Intent(this, BackupService::class.java).apply {
-            putExtra("backup_type", currentBackupType)
             putExtra("quick_backup", false)
         }
         startService(intent)
@@ -236,7 +231,7 @@ class MainActivity : AppCompatActivity() {
                 totalProcessed = totalProcessed,
                 skippedExisting = skippedExisting,
                 failedCount = failedCount,
-                backupType = currentBackupType,
+                backupType = "all",
                 isQuickBackup = type == "quick"
             ) {
                 // No specific action on dismiss needed for general MainActivity context
