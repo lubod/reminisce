@@ -252,7 +252,7 @@ mod tests {
     #[test]
     fn test_build_query_no_filters() {
         let mut builder = MediaQueryBuilder::new(tables::IMAGES);
-        let query = builder.build_select_query(1, 2, None, None);
+        let query = builder.build_select_query(1, 2, None, None, None);
 
         assert!(query.contains("LEFT JOIN starred_images"));
         assert!(query.contains("ORDER BY"));
@@ -264,7 +264,7 @@ mod tests {
     fn test_build_query_with_device_filter() {
         let mut builder = MediaQueryBuilder::new(tables::IMAGES);
         builder.with_device_id();
-        let query = builder.build_select_query(2, 3, None, None);
+        let query = builder.build_select_query(2, 3, None, None, None);
 
         assert!(query.contains("WHERE t.deleted_at IS NULL AND t.deviceid = $1"));
         assert!(query.contains("LIMIT $2 OFFSET $3"));
@@ -276,7 +276,7 @@ mod tests {
         builder.with_device_id();
         builder.with_media_type();
         builder.with_starred_only();
-        let query = builder.build_select_query(3, 4, None, None);
+        let query = builder.build_select_query(3, 4, None, None, None);
 
         assert!(query.contains("WHERE t.deleted_at IS NULL AND t.deviceid = $1 AND t.type = $2 AND s.hash IS NOT NULL"));
         assert!(query.contains("LIMIT $3 OFFSET $4"));

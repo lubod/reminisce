@@ -465,9 +465,13 @@ export class MediaStore {
         await this.loadFullMedia(index);
     };
 
+    private revokeIfBlob = (url: string | null) => {
+        if (url?.startsWith('blob:')) URL.revokeObjectURL(url);
+    };
+
     closeMediaLightbox = () => {
-        if (this.fullMediaUrl) URL.revokeObjectURL(this.fullMediaUrl);
-        if (this.comparisonMediaUrl) URL.revokeObjectURL(this.comparisonMediaUrl);
+        this.revokeIfBlob(this.fullMediaUrl);
+        this.revokeIfBlob(this.comparisonMediaUrl);
         this.selectedMediaIndex = null;
         this.fullMediaUrl = null;
         this.comparisonMediaUrl = null;
@@ -504,11 +508,11 @@ export class MediaStore {
         if (!item) return;
 
         try {
-            if (this.fullMediaUrl) URL.revokeObjectURL(this.fullMediaUrl);
-            const endpoint = item.media_type === 'video' ? 'video' : 'image';
-            const response = await axios.get(`/${endpoint}/${item.hash}`, { responseType: 'blob' });
-            const url = URL.createObjectURL(response.data);
+            this.revokeIfBlob(this.fullMediaUrl);
 
+            const url = this.getAuthenticatedUrl(
+                item.media_type === 'video' ? `/video/${item.hash}` : `/image/${item.hash}`
+            );
             runInAction(() => {
                 this.fullMediaUrl = url;
                 if (item.media_type !== 'video') this.loadImageMetadata(item.hash);
@@ -523,15 +527,17 @@ export class MediaStore {
         const item = this.activeLightboxItems[index];
         if (!item) return;
         try {
-            if (this.comparisonMediaUrl) URL.revokeObjectURL(this.comparisonMediaUrl);
-            const endpoint = item.media_type === 'video' ? 'video' : 'image';
-            const response = await axios.get(`/${endpoint}/${item.hash}`, { responseType: 'blob' });
-            runInAction(() => { this.comparisonMediaUrl = URL.createObjectURL(response.data); });
+            this.revokeIfBlob(this.comparisonMediaUrl);
+            const url = this.getAuthenticatedUrl(
+                item.media_type === 'video' ? `/video/${item.hash}` : `/image/${item.hash}`
+            );
+            runInAction(() => { this.comparisonMediaUrl = url; });
         } catch (error) { console.error("Failed to load comparison", error); }
     };
 
     clearComparisonMedia = () => {
-        if (this.comparisonMediaUrl) { URL.revokeObjectURL(this.comparisonMediaUrl); this.comparisonMediaUrl = null; }
+        this.revokeIfBlob(this.comparisonMediaUrl);
+        this.comparisonMediaUrl = null;
     };
 
     // --- Metadata Actions ---
