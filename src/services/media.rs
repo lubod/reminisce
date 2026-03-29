@@ -43,7 +43,7 @@ pub async fn get_image(
     let row = if claims.role == "admin" {
         client
             .query_opt(
-                "SELECT name, place, ext FROM images WHERE hash = $1 AND deleted_at IS NULL",
+                "SELECT name, place, ext FROM images WHERE hash = $1 AND deleted_at IS NULL LIMIT 1",
                 &[&hash_to_find]
             ).await
             .map_err(|e| {
@@ -53,7 +53,7 @@ pub async fn get_image(
     } else {
         client
             .query_opt(
-                "SELECT name, place, ext FROM images WHERE user_id = $1 AND hash = $2 AND deleted_at IS NULL",
+                "SELECT name, place, ext FROM images WHERE user_id = $1 AND hash = $2 AND deleted_at IS NULL LIMIT 1",
                 &[&user_uuid, &hash_to_find]
             ).await
             .map_err(|e| {
@@ -138,7 +138,7 @@ pub async fn get_video(
     let row = if claims.role == "admin" {
         client
             .query_opt(
-                "SELECT name, ext FROM videos WHERE hash = $1 AND deleted_at IS NULL",
+                "SELECT name, ext FROM videos WHERE hash = $1 AND deleted_at IS NULL LIMIT 1",
                 &[&hash_to_find]
             ).await
             .map_err(|e| {
@@ -148,7 +148,7 @@ pub async fn get_video(
     } else {
         client
             .query_opt(
-                "SELECT name, ext FROM videos WHERE user_id = $1 AND hash = $2 AND deleted_at IS NULL",
+                "SELECT name, ext FROM videos WHERE user_id = $1 AND hash = $2 AND deleted_at IS NULL LIMIT 1",
                 &[&user_uuid, &hash_to_find]
             ).await
             .map_err(|e| {
@@ -249,7 +249,7 @@ pub async fn get_image_metadata(
     let row = if claims.role == "admin" {
         client
             .query_opt(
-                "SELECT i.hash, i.name, i.description, i.place, i.created_at, i.exif, CASE WHEN s.hash IS NOT NULL THEN true ELSE false END as starred FROM images i LEFT JOIN starred_images s ON i.hash = s.hash AND s.user_id = $1 WHERE i.hash = $2 AND i.deleted_at IS NULL",
+                "SELECT i.hash, i.name, i.description, i.place, i.created_at, i.exif, CASE WHEN s.hash IS NOT NULL THEN true ELSE false END as starred FROM images i LEFT JOIN starred_images s ON i.hash = s.hash AND s.user_id = $1 WHERE i.hash = $2 AND i.deleted_at IS NULL LIMIT 1",
                 &[&user_uuid, &hash_to_find]
             ).await
             .map_err(|e| {
@@ -259,7 +259,7 @@ pub async fn get_image_metadata(
     } else {
         client
             .query_opt(
-                "SELECT i.hash, i.name, i.description, i.place, i.created_at, i.exif, CASE WHEN s.hash IS NOT NULL THEN true ELSE false END as starred FROM images i LEFT JOIN starred_images s ON i.hash = s.hash AND s.user_id = $1 WHERE i.user_id = $1 AND i.hash = $2 AND i.deleted_at IS NULL",
+                "SELECT i.hash, i.name, i.description, i.place, i.created_at, i.exif, CASE WHEN s.hash IS NOT NULL THEN true ELSE false END as starred FROM images i LEFT JOIN starred_images s ON i.hash = s.hash AND s.user_id = $1 WHERE i.user_id = $1 AND i.hash = $2 AND i.deleted_at IS NULL LIMIT 1",
                 &[&user_uuid, &hash_to_find]
             ).await
             .map_err(|e| {
@@ -916,12 +916,12 @@ pub async fn enhance_image(
 
     let row = if claims.role == "admin" {
         client.query_opt(
-            "SELECT ext FROM images WHERE hash = $1 AND deleted_at IS NULL",
+            "SELECT ext FROM images WHERE hash = $1 AND deleted_at IS NULL LIMIT 1",
             &[&hash],
         ).await
     } else {
         client.query_opt(
-            "SELECT ext FROM images WHERE user_id = $1 AND hash = $2 AND deleted_at IS NULL",
+            "SELECT ext FROM images WHERE user_id = $1 AND hash = $2 AND deleted_at IS NULL LIMIT 1",
             &[&user_uuid, &hash],
         ).await
     }.map_err(|e| {
@@ -1026,12 +1026,12 @@ pub async fn save_enhanced_image(
     // Fetch the original image name and date so we can preserve them
     let row = if claims.role == "admin" {
         client.query_opt(
-            "SELECT name, created_at FROM images WHERE hash = $1 AND deleted_at IS NULL",
+            "SELECT name, created_at FROM images WHERE hash = $1 AND deleted_at IS NULL LIMIT 1",
             &[&original_hash],
         ).await
     } else {
         client.query_opt(
-            "SELECT name, created_at FROM images WHERE user_id = $1 AND hash = $2 AND deleted_at IS NULL",
+            "SELECT name, created_at FROM images WHERE user_id = $1 AND hash = $2 AND deleted_at IS NULL LIMIT 1",
             &[&user_uuid, &original_hash],
         ).await
     }.map_err(|e| {
