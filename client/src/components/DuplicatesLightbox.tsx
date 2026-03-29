@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ZoomIn, ZoomOut, Maximize2, ArrowLeftRight, X, Trash2, ChevronLeft, ChevronRight, ChevronUp, ChevronDown } from "lucide-react";
-import api from "../api/axiosConfig";
+import { ZoomIn, ZoomOut, Maximize2, ArrowLeftRight, X, Trash2, ChevronLeft, ChevronRight, ChevronUp, ChevronDown, Star } from "lucide-react";
 import type { DuplicateGroup, DuplicateImage } from "../stores/DuplicatesStore";
 
 interface Props {
@@ -17,18 +16,17 @@ interface Props {
 export function DuplicatesLightbox({ group, initialIdx, isAdmin, token, onClose, onDelete, onPrev, onNext }: Props) {
     const [leftIdx, setLeftIdx] = useState(initialIdx);
     const [rightIdx, setRightIdx] = useState(initialIdx === 0 ? 1 : 0);
-    const [leftUrl, setLeftUrl] = useState<string | null>(null);
-    const [rightUrl, setRightUrl] = useState<string | null>(null);
-    const [leftLoading, setLeftLoading] = useState(true);
-    const [rightLoading, setRightLoading] = useState(true);
     const [transform, setTransform] = useState({ scale: 1, tx: 0, ty: 0 });
     const [dragging, setDragging] = useState(false);
     const [dragStart, setDragStart] = useState({ x: 0, y: 0, tx: 0, ty: 0 });
 
     const leftRef = useRef<HTMLDivElement>(null);
     const rightRef = useRef<HTMLDivElement>(null);
-    const leftBlobRef = useRef<string | null>(null);
-    const rightBlobRef = useRef<string | null>(null);
+
+    const getAuthUrl = (hash: string) => {
+        const base = `/api/image/${hash}`;
+        return token ? `${base}?token=${token}` : base;
+    };
 
     // Close or clamp indices when images are deleted from the group
     useEffect(() => {
@@ -46,55 +44,13 @@ export function DuplicatesLightbox({ group, initialIdx, isAdmin, token, onClose,
         if (newRight !== rightIdx) setRightIdx(newRight);
     }, [group.images.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
-    // Load full images whenever the displayed image hashes change
+    // Reset zoom when displayed images change
     const leftHash = group.images[leftIdx]?.hash;
     const rightHash = group.images[rightIdx]?.hash;
 
     useEffect(() => {
-        if (!leftHash || !rightHash) return;
-        let cancelled = false;
-
-        setLeftLoading(true);
-        setRightLoading(true);
         setTransform({ scale: 1, tx: 0, ty: 0 });
-
-        const load = async () => {
-            try {
-                const [l, r] = await Promise.all([
-                    api.get(`/image/${leftHash}`, { responseType: "blob" }),
-                    api.get(`/image/${rightHash}`, { responseType: "blob" }),
-                ]);
-                if (!cancelled) {
-                    if (leftBlobRef.current) URL.revokeObjectURL(leftBlobRef.current);
-                    if (rightBlobRef.current) URL.revokeObjectURL(rightBlobRef.current);
-                    const lUrl = URL.createObjectURL(l.data);
-                    const rUrl = URL.createObjectURL(r.data);
-                    leftBlobRef.current = lUrl;
-                    rightBlobRef.current = rUrl;
-                    setLeftUrl(lUrl);
-                    setRightUrl(rUrl);
-                    setLeftLoading(false);
-                    setRightLoading(false);
-                }
-            } catch {
-                if (!cancelled) {
-                    setLeftLoading(false);
-                    setRightLoading(false);
-                }
-            }
-        };
-
-        load();
-        return () => { cancelled = true; };
     }, [leftHash, rightHash]);
-
-    // Revoke blob URLs on unmount
-    useEffect(() => {
-        return () => {
-            if (leftBlobRef.current) URL.revokeObjectURL(leftBlobRef.current);
-            if (rightBlobRef.current) URL.revokeObjectURL(rightBlobRef.current);
-        };
-    }, []);
 
     // Non-passive wheel zoom (synced)
     useEffect(() => {
@@ -287,6 +243,29 @@ export function DuplicatesLightbox({ group, initialIdx, isAdmin, token, onClose,
                     >
                         <ArrowLeftRight size={16} />
                     </button>
+                    {isAdmin && (() => {
+                        // Find the image with highest quality score to keep; delete the rest
+                        const best = group.images.reduce<DuplicateImage | null>((b, img) => {
+                            const qs = qualityScore(img);
+                            const bqs = b ? qualityScore(b) : null;
+                            if (qs == null) return b;
+                            if (bqs == null || qs > bqs) return img;
+                            return b;
+                        }, null);
+                        if (!best) return null;
+                        const toDelete = group.images.filter((img) => img.hash !== best.hash);
+                        if (toDelete.length === 0) return null;
+                        return (
+                            <button
+                                onClick={() => toDelete.forEach((img) => onDelete(img.hash))}
+                                className="flex items-center gap-1.5 px-2 py-1 bg-green-800/50 hover:bg-green-700 text-green-300 hover:text-white text-xs rounded transition-colors"
+                                title={`Keep best quality (${best.name}) and delete ${toDelete.length} other${toDelete.length !== 1 ? "s" : ""}`}
+                            >
+                                <Star size={12} />
+                                Keep best
+                            </button>
+                        );
+                    })()}
                     <div className="w-px h-5 bg-gray-700 mx-1" />
                     <button
                         onClick={onClose}
@@ -327,18 +306,12 @@ export function DuplicatesLightbox({ group, initialIdx, isAdmin, token, onClose,
                         <div className="absolute top-2 left-2 z-10 bg-blue-600 text-white text-xs font-bold px-1.5 py-0.5 rounded pointer-events-none">
                             L
                         </div>
-                        {leftLoading ? (
-                            <div className="absolute inset-0 flex items-center justify-center">
-                                <div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
-                            </div>
-                        ) : leftUrl ? (
-                            <img
-                                src={leftUrl}
-                                alt={leftImg.name}
-                                className="absolute inset-0 w-full h-full object-contain pointer-events-none"
-                                style={imgTransformStyle}
-                            />
-                        ) : null}
+                        <img
+                            src={getAuthUrl(leftImg.hash)}
+                            alt={leftImg.name}
+                            className="absolute inset-0 w-full h-full object-contain pointer-events-none"
+                            style={imgTransformStyle}
+                        />
                     </div>
                     <div
                         className="flex-shrink-0 px-3 py-2 bg-gray-900/90 border-t border-gray-700 flex items-center gap-2"
@@ -390,18 +363,12 @@ export function DuplicatesLightbox({ group, initialIdx, isAdmin, token, onClose,
                         <div className="absolute top-2 left-2 z-10 bg-orange-500 text-white text-xs font-bold px-1.5 py-0.5 rounded pointer-events-none">
                             R
                         </div>
-                        {rightLoading ? (
-                            <div className="absolute inset-0 flex items-center justify-center">
-                                <div className="w-8 h-8 border-2 border-orange-500 border-t-transparent rounded-full animate-spin" />
-                            </div>
-                        ) : rightUrl ? (
-                            <img
-                                src={rightUrl}
-                                alt={rightImg.name}
-                                className="absolute inset-0 w-full h-full object-contain pointer-events-none"
-                                style={imgTransformStyle}
-                            />
-                        ) : null}
+                        <img
+                            src={getAuthUrl(rightImg.hash)}
+                            alt={rightImg.name}
+                            className="absolute inset-0 w-full h-full object-contain pointer-events-none"
+                            style={imgTransformStyle}
+                        />
                     </div>
                     <div
                         className="flex-shrink-0 px-3 py-2 bg-gray-900/90 border-t border-gray-700 flex items-center gap-2"

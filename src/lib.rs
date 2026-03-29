@@ -18,6 +18,7 @@ pub mod ai_worker;
 pub mod telemetry;
 pub mod metrics;
 
+pub mod duplicate_worker;
 pub mod test_utils;
 pub mod metrics_collector;
 
@@ -158,7 +159,9 @@ pub use crate::services::import_dir::{import_directory, get_import_status};
         crate::services::p2p_status::get_invite_status,
         crate::services::p2p_status::remove_p2p_node,
         crate::services::p2p_status::trigger_rebalance,
-        crate::services::duplicates::get_duplicates
+        crate::services::duplicates::get_duplicates,
+        crate::services::duplicates::get_duplicate_status,
+        crate::services::duplicates::trigger_duplicate_scan
     ),
     components(
         schemas(
@@ -231,7 +234,8 @@ pub use crate::services::import_dir::{import_directory, get_import_status};
             Claims,
             crate::services::duplicates::DuplicateImage,
             crate::services::duplicates::DuplicateGroup,
-            crate::services::duplicates::DuplicatesResponse
+            crate::services::duplicates::DuplicatesResponse,
+            crate::services::duplicates::DuplicateWorkerStatusResponse
         )
     ),
     tags((name = "reminisce", description = "Reminisce: Self-hosted photo and video memory vault."))
@@ -332,6 +336,11 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
     let import_job_store: web::Data<services::import_dir::ImportJobStore> =
         web::Data::new(std::sync::Mutex::new(std::collections::HashMap::new()));
 
+    let duplicate_status: web::Data<duplicate_worker::SharedDuplicateStatus> =
+        web::Data::new(Arc::new(tokio::sync::Mutex::new(
+            duplicate_worker::DuplicateWorkerStatus::new()
+        )));
+
     // --- P2P Identity & Service ---
     let p2p_data_path = std::path::Path::new(&config.p2p_data_dir);
     if !p2p_data_path.exists() {
@@ -374,7 +383,14 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
                 config_data.clone()
             )
         );
-    
+
+        tokio::spawn(
+            duplicate_worker::start_duplicate_worker(
+                web::Data::new(main_pool.clone()),
+                duplicate_status.get_ref().clone(),
+            )
+        );
+
         tokio::spawn(
             metrics_collector::start_metrics_collector(
                 web::Data::new(main_pool.clone()),
@@ -516,6 +532,7 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
             .app_data(p2p_service_data.clone())
             .app_data(import_job_store.clone())
             .app_data(shared_system.clone())
+            .app_data(duplicate_status.clone())
             .service(
                 SwaggerUi::new("/swagger-ui/{_:.*}").url("/api-doc/openapi.json", ApiDoc::openapi())
             )
@@ -596,6 +613,8 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
                     .service(services::p2p_status::remove_p2p_node)
                     .service(services::p2p_status::trigger_rebalance)
                     .service(services::duplicates::get_duplicates)
+                    .service(services::duplicates::get_duplicate_status)
+                    .service(services::duplicates::trigger_duplicate_scan)
                     .service(enhance_image)
                     .service(save_enhanced_image)
             )
