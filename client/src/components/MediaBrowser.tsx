@@ -298,12 +298,14 @@ export const MediaBrowser = observer(() => {
                     </h2>
                     <div className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2">
                         {group.items.map((item) => {
-                            const actualIndex = mediaStore.allMedia.findIndex(m => m.hash === item.hash);
                             return (
                                 <div
-                                    key={item.hash}
+                                    key={`${item.hash}_${item.device_id ?? ''}`}
                                     className="group relative aspect-square bg-gray-800 rounded-xl overflow-hidden cursor-pointer hover:ring-2 ring-blue-500 transition-all shadow-lg"
-                                    onClick={() => mediaStore.openMediaLightbox(actualIndex, 'all')}
+                                    onClick={() => {
+                                        const idx = mediaStore.allMedia.findIndex(m => m.hash === item.hash);
+                                        if (idx !== -1) mediaStore.openMediaLightbox(idx, 'all');
+                                    }}
                                 >
                                     {item.thumbnailUrl ? (
                                         <img src={item.thumbnailUrl} alt={item.name} className="object-cover w-full h-full group-hover:scale-110 transition-transform duration-500" loading="lazy" />

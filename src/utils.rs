@@ -458,8 +458,15 @@ pub async fn list_thumbnails(
         } else {
             format!("ORDER BY created_at {}, hash {}", dir, dir)
         };
+        // Wrap in DISTINCT ON to deduplicate by hash (same image on multiple devices
+        // produces duplicate rows; pick one deterministically).
         query_string = format!(
-            "{} UNION ALL {} {} LIMIT ${} OFFSET ${}",
+            "SELECT * FROM (\
+                SELECT DISTINCT ON (hash) hash, name, created_at, place, deviceid, starred, \
+                    distance_km, media_type, file_size_bytes, aesthetic_score \
+                FROM ({} UNION ALL {}) combined \
+                ORDER BY hash, aesthetic_score DESC NULLS LAST\
+            ) deduped {} LIMIT ${} OFFSET ${}",
             img_body, vid_body, order_clause, limit_param, offset_param
         );
     } else {
