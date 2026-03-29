@@ -522,7 +522,7 @@ export const MediaLightbox = observer(() => {
                             {mediaStore.fullMediaUrl ? (
                                 <div style={zoomStyle} className="w-full h-full flex items-center justify-center pointer-events-none">
                                     {isVideo ? (
-                                        <video src={mediaStore.fullMediaUrl} className="max-w-full max-h-full object-contain" controls autoPlay />
+                                        <video src={mediaStore.fullMediaUrl} className="max-w-full max-h-full object-contain pointer-events-auto" controls autoPlay />
                                     ) : (
                                         <img
                                             src={showEnhanced && enhancedUrl ? enhancedUrl : mediaStore.fullMediaUrl ?? undefined}
@@ -545,7 +545,7 @@ export const MediaLightbox = observer(() => {
                                 {mediaStore.comparisonMediaUrl ? (
                                     <div style={zoomStyle} className="w-full h-full flex items-center justify-center pointer-events-none">
                                         {isComparisonVideo ? (
-                                            <video src={mediaStore.comparisonMediaUrl} className="max-w-full max-h-full object-contain" controls />
+                                            <video src={mediaStore.comparisonMediaUrl} className="max-w-full max-h-full object-contain pointer-events-auto" controls />
                                         ) : (
                                             <img src={mediaStore.comparisonMediaUrl} alt={comparisonMedia?.name} className="max-w-full max-h-full object-contain" />
                                         )}
