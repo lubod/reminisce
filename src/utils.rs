@@ -355,6 +355,7 @@ pub async fn list_thumbnails(
     label_id: Option<i32>,
     apply_user_id_filter: bool,
     sort_by: Option<&str>,
+    sort_order: Option<&str>,
     pool: &web::Data<MainDbPool>,
 ) -> Result<Vec<ThumbnailItem>, Box<dyn std::error::Error>> {
     let client = pool.0.get().await.map_err(|e| {
@@ -449,10 +450,13 @@ pub async fn list_thumbnails(
         let img_body = img_builder.build_select_body(lon_param_idx, lat_param_idx);
         let vid_body = vid_builder.build_select_body(None, None); // Videos don't support location sorting yet
 
+        let dir = if sort_order == Some("asc") { "ASC" } else { "DESC" };
         let order_clause = if sort_by == Some("size") {
-            "ORDER BY file_size_bytes DESC NULLS LAST, hash DESC".to_string()
+            format!("ORDER BY file_size_bytes {} NULLS LAST, hash {}", dir, dir)
+        } else if sort_by == Some("quality") {
+            format!("ORDER BY aesthetic_score {} NULLS LAST, hash {}", dir, dir)
         } else {
-            "ORDER BY created_at DESC, hash DESC".to_string()
+            format!("ORDER BY created_at {}, hash {}", dir, dir)
         };
         query_string = format!(
             "{} UNION ALL {} {} LIMIT ${} OFFSET ${}",
@@ -480,7 +484,7 @@ pub async fn list_thumbnails(
         limit_param = builder.param_count() + 1 + (if has_location_filter && table == "images" { 2 } else { 0 });
         offset_param = builder.param_count() + 2 + (if has_location_filter && table == "images" { 2 } else { 0 });
 
-        query_string = builder.build_select_query(limit_param, offset_param, lon_param_idx, lat_param_idx, sort_by);
+        query_string = builder.build_select_query(limit_param, offset_param, lon_param_idx, lat_param_idx, sort_by, sort_order);
     }
 
     // Convert limit and offset to i64
@@ -576,6 +580,7 @@ pub async fn list_thumbnails(
                 media_type: final_media_type,
                 thumbnail_url: format!("/api/thumbnail/{}", hash),
                 file_size_bytes: row.try_get("file_size_bytes").unwrap_or(None),
+                aesthetic_score: row.try_get("aesthetic_score").unwrap_or(None),
             }
         })
         .collect();

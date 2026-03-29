@@ -412,9 +412,12 @@ pub struct PaginationQuery {
     /// Optional search radius in kilometers (default: 10)
     #[serde(default)]
     pub location_radius_km: Option<f64>,
-    /// Sort order: "date" (default) or "size"
+    /// Sort field: "date" (default), "size", or "quality"
     #[serde(default)]
     pub sort_by: Option<String>,
+    /// Sort direction: "desc" (default) or "asc"
+    #[serde(default)]
+    pub sort_order: Option<String>,
 }
 
 fn default_page() -> usize {
@@ -451,6 +454,7 @@ pub struct ThumbnailItem {
     pub media_type: Option<String>,
     pub thumbnail_url: String,
     pub file_size_bytes: Option<i64>,
+    pub aesthetic_score: Option<f32>,
 }
 
 #[derive(Serialize, Deserialize, ToSchema)]
@@ -536,6 +540,7 @@ async fn list_media_thumbnails(
             query.label_id,
             apply_user_id_filter,
             query.sort_by.as_deref(),
+            query.sort_order.as_deref(),
             &pool
         ).await
         .map_err(|e| {

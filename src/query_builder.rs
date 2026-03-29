@@ -118,20 +118,23 @@ impl MediaQueryBuilder {
                     "SELECT t.hash, t.name, t.created_at, t.place, t.deviceid, \
                      CASE WHEN s.hash IS NOT NULL THEN true ELSE false END as starred, \
                      ST_Distance(t.location, ST_MakePoint(${}, ${})::geography) / 1000.0 as distance_km, \
-                     'image' as media_type, t.file_size_bytes::bigint as file_size_bytes",
+                     'image' as media_type, t.file_size_bytes::bigint as file_size_bytes, \
+                     t.aesthetic_score",
                     lon_p, lat_p
                 )
             } else {
                 "SELECT t.hash, t.name, t.created_at, t.place, t.deviceid, \
                  CASE WHEN s.hash IS NOT NULL THEN true ELSE false END as starred, \
                  NULL::double precision as distance_km, \
-                 'image' as media_type, t.file_size_bytes::bigint as file_size_bytes".to_string()
+                 'image' as media_type, t.file_size_bytes::bigint as file_size_bytes, \
+                 t.aesthetic_score".to_string()
             }
         } else {
             "SELECT t.hash, t.name, t.created_at, NULL as place, t.deviceid, \
              CASE WHEN s.hash IS NOT NULL THEN true ELSE false END as starred, \
              NULL::double precision as distance_km, \
-             'video' as media_type, t.file_size_bytes as file_size_bytes".to_string()
+             'video' as media_type, t.file_size_bytes as file_size_bytes, \
+             NULL::real as aesthetic_score".to_string()
         };
 
         let where_clause = self.build_where_clause();
@@ -178,12 +181,15 @@ impl MediaQueryBuilder {
 
     /// Build SELECT clause for listing thumbnails
     /// If lon_param and lat_param are provided, includes distance calculation
-    pub fn build_select_query(&mut self, limit_param: usize, offset_param: usize, lon_param: Option<usize>, lat_param: Option<usize>, sort_by: Option<&str>) -> String {
+    pub fn build_select_query(&mut self, limit_param: usize, offset_param: usize, lon_param: Option<usize>, lat_param: Option<usize>, sort_by: Option<&str>, sort_order: Option<&str>) -> String {
         let body = self.build_select_body(lon_param, lat_param);
+        let dir = if sort_order == Some("asc") { "ASC" } else { "DESC" };
         let order = if sort_by == Some("size") {
-            "ORDER BY t.file_size_bytes DESC NULLS LAST, t.hash DESC"
+            format!("ORDER BY t.file_size_bytes {} NULLS LAST, t.hash {}", dir, dir)
+        } else if sort_by == Some("quality") {
+            format!("ORDER BY t.aesthetic_score {} NULLS LAST, t.hash {}", dir, dir)
         } else {
-            "ORDER BY t.created_at DESC, t.hash DESC"
+            format!("ORDER BY t.created_at {}, t.hash {}", dir, dir)
         };
         format!("{} {} LIMIT ${} OFFSET ${}", body, order, limit_param, offset_param)
     }
@@ -252,7 +258,7 @@ mod tests {
     #[test]
     fn test_build_query_no_filters() {
         let mut builder = MediaQueryBuilder::new(tables::IMAGES);
-        let query = builder.build_select_query(1, 2, None, None, None);
+        let query = builder.build_select_query(1, 2, None, None, None, None);
 
         assert!(query.contains("LEFT JOIN starred_images"));
         assert!(query.contains("ORDER BY"));
@@ -264,7 +270,7 @@ mod tests {
     fn test_build_query_with_device_filter() {
         let mut builder = MediaQueryBuilder::new(tables::IMAGES);
         builder.with_device_id();
-        let query = builder.build_select_query(2, 3, None, None, None);
+        let query = builder.build_select_query(2, 3, None, None, None, None);
 
         assert!(query.contains("WHERE t.deleted_at IS NULL AND t.deviceid = $1"));
         assert!(query.contains("LIMIT $2 OFFSET $3"));
@@ -276,7 +282,7 @@ mod tests {
         builder.with_device_id();
         builder.with_media_type();
         builder.with_starred_only();
-        let query = builder.build_select_query(3, 4, None, None, None);
+        let query = builder.build_select_query(3, 4, None, None, None, None);
 
         assert!(query.contains("WHERE t.deleted_at IS NULL AND t.deviceid = $1 AND t.type = $2 AND s.hash IS NOT NULL"));
         assert!(query.contains("LIMIT $3 OFFSET $4"));

@@ -15,6 +15,7 @@ export interface MediaItem {
     media_type?: string; // "image" or "video"
     thumbnail_url?: string;
     file_size_bytes?: number;
+    aesthetic_score?: number;
 }
 
 export interface LocationResult {
@@ -77,7 +78,8 @@ export class MediaStore {
     groupBy: 'day' | 'place' = 'day';
     videoGroupBy: 'day' | 'place' = 'day';
     allMediaGroupBy: 'day' | 'place' = 'day';
-    sortBy: 'date' | 'size' = 'date';
+    sortBy: 'date' | 'size' | 'quality' = 'date';
+    sortOrder: 'asc' | 'desc' = 'desc';
 
     // Centralized Filters
     filters = {
@@ -207,7 +209,8 @@ export class MediaStore {
 
     setGroupBy = (val: 'day' | 'place') => { this.groupBy = val; };
     setVideoGroupBy = (val: 'day' | 'place') => { this.videoGroupBy = val; };
-    setSortBy = (val: 'date' | 'size') => { this.sortBy = val; this.applyFilters(); };
+    setSortBy = (val: 'date' | 'size' | 'quality') => { this.sortBy = val; this.applyFilters(); };
+    setSortOrder = (val: 'asc' | 'desc') => { this.sortOrder = val; this.applyFilters(); };
 
     // --- Data Fetching ---
 
@@ -325,6 +328,8 @@ export class MediaStore {
                 starred_only: this.filters.starredOnly.toString()
             });
             if (this.sortBy === 'size') params.append('sort_by', 'size');
+            if (this.sortBy === 'quality') params.append('sort_by', 'quality');
+            if (this.sortOrder === 'asc') params.append('sort_order', 'asc');
 
             if (this.filters.startDate) params.append('start_date', this.filters.startDate);
             if (this.filters.endDate) params.append('end_date', this.filters.endDate);
@@ -364,6 +369,8 @@ export class MediaStore {
                 starred_only: this.filters.starredOnly.toString()
             });
             if (this.sortBy === 'size') params.append('sort_by', 'size');
+            if (this.sortBy === 'quality') params.append('sort_by', 'quality');
+            if (this.sortOrder === 'asc') params.append('sort_order', 'asc');
 
             if (this.filters.startDate) params.append('start_date', this.filters.startDate);
             if (this.filters.endDate) params.append('end_date', this.filters.endDate);
@@ -403,6 +410,8 @@ export class MediaStore {
                 starred_only: this.filters.starredOnly.toString()
             });
             if (this.sortBy === 'size') params.append('sort_by', 'size');
+            if (this.sortBy === 'quality') params.append('sort_by', 'quality');
+            if (this.sortOrder === 'asc') params.append('sort_order', 'asc');
 
             if (this.filters.startDate) params.append('start_date', this.filters.startDate);
             if (this.filters.endDate) params.append('end_date', this.filters.endDate);
@@ -699,22 +708,37 @@ export class MediaStore {
         });
 
         const sortBySize = this.sortBy === 'size';
+        const sortByQuality = this.sortBy === 'quality';
+        const asc = this.sortOrder === 'asc';
+        const cmp = (a: number, b: number) => asc ? a - b : b - a;
         const grouped = Array.from(groups.entries()).map(([key, groupItems]) => ({
             date: key,
             displayDate: mode === 'day' ? this.formatDisplayDate(key) : key,
             items: sortBySize
-                ? groupItems.sort((a, b) => (b.file_size_bytes ?? 0) - (a.file_size_bytes ?? 0))
-                : groupItems.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+                ? groupItems.sort((a, b) => cmp(a.file_size_bytes ?? 0, b.file_size_bytes ?? 0))
+                : sortByQuality
+                    ? groupItems.sort((a, b) => cmp(a.aesthetic_score ?? -1, b.aesthetic_score ?? -1))
+                    : groupItems.sort((a, b) => cmp(new Date(a.created_at).getTime(), new Date(b.created_at).getTime()))
         }));
 
         if (sortBySize) {
             return grouped.sort((a, b) => {
                 const maxA = Math.max(...a.items.map(i => i.file_size_bytes ?? 0));
                 const maxB = Math.max(...b.items.map(i => i.file_size_bytes ?? 0));
-                return maxB - maxA;
+                return cmp(maxA, maxB);
             });
         }
-        return grouped.sort((a, b) => mode === 'day' ? b.date.localeCompare(a.date) : a.displayDate.localeCompare(b.displayDate));
+        if (sortByQuality) {
+            return grouped.sort((a, b) => {
+                const maxA = Math.max(...a.items.map(i => i.aesthetic_score ?? -1));
+                const maxB = Math.max(...b.items.map(i => i.aesthetic_score ?? -1));
+                return cmp(maxA, maxB);
+            });
+        }
+        return grouped.sort((a, b) => {
+            const byDate = mode === 'day' ? (asc ? a.date.localeCompare(b.date) : b.date.localeCompare(a.date)) : a.displayDate.localeCompare(b.displayDate);
+            return byDate;
+        });
     }
 
     private formatDisplayDate(dateKey: string): string {

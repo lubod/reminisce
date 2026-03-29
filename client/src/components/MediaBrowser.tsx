@@ -269,6 +269,19 @@ export const MediaBrowser = observer(() => {
                                 onClick={() => mediaStore.setSortBy('size')}
                                 className={`text-[10px] px-2 py-0.5 rounded transition-colors ${mediaStore.sortBy === 'size' ? 'bg-gray-600 text-white' : 'text-gray-500 hover:text-white'}`}
                             >Size</button>
+                            <button
+                                onClick={() => mediaStore.setSortBy('quality')}
+                                className={`text-[10px] px-2 py-0.5 rounded transition-colors ${mediaStore.sortBy === 'quality' ? 'bg-gray-600 text-white' : 'text-gray-500 hover:text-white'}`}
+                            >Quality</button>
+                            <span className="text-gray-600 mx-0.5">|</span>
+                            <button
+                                onClick={() => mediaStore.setSortOrder('desc')}
+                                className={`text-[10px] px-2 py-0.5 rounded transition-colors ${mediaStore.sortOrder === 'desc' ? 'bg-gray-600 text-white' : 'text-gray-500 hover:text-white'}`}
+                            >↓</button>
+                            <button
+                                onClick={() => mediaStore.setSortOrder('asc')}
+                                className={`text-[10px] px-2 py-0.5 rounded transition-colors ${mediaStore.sortOrder === 'asc' ? 'bg-gray-600 text-white' : 'text-gray-500 hover:text-white'}`}
+                            >↑</button>
                         </div>
                         <div className="text-[10px] text-gray-500 uppercase tracking-widest font-bold">
                             Showing {mediaStore.allMedia.length} / {mediaStore.totalAllMedia} items
