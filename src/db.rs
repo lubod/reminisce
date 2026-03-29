@@ -114,6 +114,7 @@ pub async fn run_migrations(pool: &Pool) -> Result<(), Box<dyn std::error::Error
     // Migrations embedded at compile time: (version, sql)
     let migrations: &[(&str, &str)] = &[
         ("001", include_str!("../db/migrations/001_fix_partial_indexes_deleted_at.sql")),
+        ("002", include_str!("../db/migrations/002_add_duplicate_pairs.sql")),
     ];
 
     for (version, sql) in migrations {
