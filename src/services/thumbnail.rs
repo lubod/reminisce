@@ -78,13 +78,15 @@ pub async fn get_face_thumbnail(
 
     let client = utils::get_db_client(&pool.0).await?;
 
-    // Query face details and check if parent image is not deleted
+    // Query face details, extension, and orientation in one round-trip
     let row = client
         .query_opt(
-            "SELECT f.image_hash, f.image_deviceid, f.bbox_x, f.bbox_y, f.bbox_width, f.bbox_height
+            "SELECT f.image_hash, f.image_deviceid, f.bbox_x, f.bbox_y, f.bbox_width, f.bbox_height,
+                    i.ext, i.orientation
              FROM faces f
              JOIN images i ON f.image_hash = i.hash AND f.image_deviceid = i.deviceid
-             WHERE f.id = $1 AND i.deleted_at IS NULL AND (i.user_id = $2 OR $3 = 'admin')",
+             WHERE f.id = $1 AND i.deleted_at IS NULL AND (i.user_id = $2 OR $3 = 'admin')
+             LIMIT 1",
             &[&face_id, &user_uuid, &claims.role]
         )
         .await
@@ -95,18 +97,16 @@ pub async fn get_face_thumbnail(
 
     if let Some(row) = row {
         let image_hash: String = row.get(0);
-        let _device_id: String = row.get(1); 
+        let _device_id: String = row.get(1);
         let x: i32 = row.get(2);
         let y: i32 = row.get(3);
         let w: i32 = row.get(4);
         let h: i32 = row.get(5);
+        let ext: String = row.get::<_, Option<String>>(6).unwrap_or_else(|| "jpg".to_string());
+        let stored_orientation: Option<i16> = row.get(7);
 
         // Find the image file
         let sub_dir_path = utils::get_subdirectory_path(config.get_images_dir(), &image_hash);
-        
-        // Query extension from images table
-        let ext_row = client.query_opt("SELECT ext FROM images WHERE hash = $1", &[&image_hash]).await.unwrap_or(None);
-        let ext = if let Some(r) = ext_row { r.get::<_, String>(0) } else { "jpg".to_string() };
         
         let filename = format!("{}.{}", image_hash, ext);
         let image_path = sub_dir_path.join(&filename);
@@ -131,32 +131,13 @@ pub async fn get_face_thumbnail(
                 e
             })?;
 
-            // Apply EXIF orientation to full image FIRST before cropping
-            // Face detection runs on oriented images, so bbox coordinates are in oriented space
-            let file = std::fs::File::open(&image_path_clone).ok();
-            if let Some(f) = file {
-                let mut bufreader = std::io::BufReader::new(&f);
-                let exifreader = kamadak_exif::Reader::new();
-                if let Ok(exif) = exifreader.read_from_container(&mut bufreader) {
-                    if let Some(field) = exif.get_field(kamadak_exif::Tag::Orientation, kamadak_exif::In::PRIMARY) {
-                        if let kamadak_exif::Value::Short(ref v) = field.value {
-                            if let Some(&orientation) = v.first() {
-                                match orientation {
-                                    1 => {}, // Normal
-                                    2 => img = img.fliph(),
-                                    3 => img = img.rotate180(),
-                                    4 => img = img.flipv(),
-                                    5 => { img = img.rotate90(); img = img.fliph(); },
-                                    6 => img = img.rotate90(),
-                                    7 => { img = img.rotate270(); img = img.fliph(); },
-                                    8 => img = img.rotate270(),
-                                    _ => {},
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            // Apply EXIF orientation FIRST before cropping — face bbox coordinates are in oriented space.
+            // Use stored orientation if available; fall back to file read for older images.
+            let exif_orientation: u16 = stored_orientation
+                .map(|o| o as u16)
+                .or_else(|| crate::media_utils::read_exif_orientation_from_path(&image_path_clone))
+                .unwrap_or(1);
+            img = crate::media_utils::apply_orientation_to_image(img, exif_orientation);
 
             // Validate crop bounds against the ORIENTED image dimensions
             let (img_w, img_h) = img.dimensions();
@@ -231,6 +212,7 @@ pub async fn generate_thumbnail_for_image(
     image_path: &std::path::Path,
     output_path: &std::path::Path,
     max_dimension: u32,
+    orientation: Option<i16>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let image_path = image_path.to_path_buf();
     let output_path = output_path.to_path_buf();
@@ -258,30 +240,13 @@ pub async fn generate_thumbnail_for_image(
             image::open(&image_path)?
         };
 
-        // EXIF Rotation
-        let file = std::fs::File::open(&image_path)?;
-        let mut bufreader = std::io::BufReader::new(&file);
-        let exifreader = kamadak_exif::Reader::new();
-
-        if let Ok(exif) = exifreader.read_from_container(&mut bufreader) {
-            if let Some(field) = exif.get_field(kamadak_exif::Tag::Orientation, kamadak_exif::In::PRIMARY) {
-                if let kamadak_exif::Value::Short(ref v) = field.value {
-                    if let Some(&orientation) = v.first() {
-                        match orientation {
-                            1 => {}, // Normal
-                            2 => img = img.fliph(),
-                            3 => img = img.rotate180(),
-                            4 => img = img.flipv(),
-                            5 => { img = img.rotate90(); img = img.fliph(); },
-                            6 => img = img.rotate90(),
-                            7 => { img = img.rotate270(); img = img.fliph(); },
-                            8 => img = img.rotate270(),
-                            _ => {},
-                        }
-                    }
-                }
-            }
-        }
+        // EXIF Rotation — use stored orientation if available; fall back to file read for
+        // images that were ingested before the orientation column was added.
+        let exif_orientation: u16 = orientation
+            .map(|o| o as u16)
+            .or_else(|| crate::media_utils::read_exif_orientation_from_path(&image_path))
+            .unwrap_or(1);
+        img = crate::media_utils::apply_orientation_to_image(img, exif_orientation);
 
         let (width, height) = img.dimensions();
 

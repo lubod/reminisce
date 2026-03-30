@@ -69,7 +69,7 @@ async fn verify_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) ->
         // Query for files (both images and videos) for the current device ID
         let file_rows = client
             .query(
-                "(SELECT hash, ext, name, deviceid, 'image' as file_type, last_verified_at, has_thumbnail, created_at FROM images \n                 WHERE deviceid = $1 AND deleted_at IS NULL AND (verification_status = 0 OR verification_status = -1 \n                 OR (verification_status = 1 AND (last_verified_at IS NULL OR last_verified_at < NOW() - INTERVAL '1 month'))\n                 OR (verification_status = 1 AND has_thumbnail = false))) \n                 UNION ALL \n                 (SELECT hash, ext, name, deviceid, 'video' as file_type, last_verified_at, has_thumbnail, created_at FROM videos \n                 WHERE deviceid = $1 AND deleted_at IS NULL AND (verification_status = 0 OR verification_status = -1 \n                 OR (verification_status = 1 AND (last_verified_at IS NULL OR last_verified_at < NOW() - INTERVAL '1 month'))\n                 OR (verification_status = 1 AND has_thumbnail = false))) \n                 ORDER BY last_verified_at ASC NULLS FIRST LIMIT $2;",
+                "(SELECT hash, ext, name, deviceid, 'image' as file_type, last_verified_at, has_thumbnail, created_at, orientation FROM images \n                 WHERE deviceid = $1 AND deleted_at IS NULL AND (verification_status = 0 OR verification_status = -1 \n                 OR (verification_status = 1 AND (last_verified_at IS NULL OR last_verified_at < NOW() - INTERVAL '1 month'))\n                 OR (verification_status = 1 AND has_thumbnail = false))) \n                 UNION ALL \n                 (SELECT hash, ext, name, deviceid, 'video' as file_type, last_verified_at, has_thumbnail, created_at, NULL::SMALLINT as orientation FROM videos \n                 WHERE deviceid = $1 AND deleted_at IS NULL AND (verification_status = 0 OR verification_status = -1 \n                 OR (verification_status = 1 AND (last_verified_at IS NULL OR last_verified_at < NOW() - INTERVAL '1 month'))\n                 OR (verification_status = 1 AND has_thumbnail = false))) \n                 ORDER BY last_verified_at ASC NULLS FIRST LIMIT $2;",
                 &[&current_device_id, &batch_size]
             ).await
             .map_err(|e| format!("Failed to query files for verification for device {}: {}", current_device_id, e))?;
@@ -93,8 +93,9 @@ async fn verify_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) ->
             let _name: String = row.get(2);
             let deviceid: String = row.get(3);
             let file_type: String = row.get(4);
-            let mut has_thumbnail: bool = row.get(6); // has_thumbnail is at index 6
-            let created_at: chrono::DateTime<Utc> = row.get(7); // created_at at index 7
+            let mut has_thumbnail: bool = row.get(6);
+            let created_at: chrono::DateTime<Utc> = row.get(7);
+            let orientation: Option<i16> = row.get(8); // NULL for videos
 
             let file_dir = if file_type == "image" { config.get_images_dir().to_string() } else { config.get_videos_dir().to_string() };
             let sub_dir_path = super::utils::get_subdirectory_path(&file_dir, &hash);
@@ -107,7 +108,8 @@ async fn verify_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) ->
             // Spawn a task for each file
             let task = tokio::spawn(async move {
                 // Acquire semaphore permit for hash verification (limits concurrency)
-                let _permit = hash_sem_clone.acquire().await.unwrap();
+                let _permit = hash_sem_clone.acquire().await
+                    .expect("hash_verification_semaphore closed unexpectedly");
 
                 info!(
                     "Verifying {} {}/{}: {} (device: {}, thumbnail: {})",
@@ -186,7 +188,7 @@ async fn verify_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) ->
                             
                             info!("Generating missing thumbnail for {} {}", file_type, hash);
                             let generation_result = if file_type == "image" {
-                                generate_thumbnail_for_image(&file_path, &thumb_path, 500).await
+                                generate_thumbnail_for_image(&file_path, &thumb_path, 500, orientation).await
                             } else {
                                 generate_thumbnail_for_video(&file_path, &thumb_path).await
                             };

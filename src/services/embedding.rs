@@ -338,7 +338,14 @@ async fn perform_semantic_search(
         where_clause
     );
 
-    info!("Executing semantic search query");
+    // hnsw.ef_search controls how many candidates HNSW considers at query time.
+    // Default is 40 — must be >= (limit + offset) so OFFSET pagination works correctly.
+    // Use (limit + offset) * 2 as a buffer, minimum 100.
+    let ef_search = std::cmp::max((limit + offset) * 2, 100);
+    client.execute(&format!("SET hnsw.ef_search = {}", ef_search), &[]).await
+        .unwrap_or(0);
+
+    info!("Executing semantic search query (ef_search={})", ef_search);
     info!("Query params: user_id={}, limit={}, offset={}, device_filter={:?}",
           user_uuid, limit, offset, device_filter);
 

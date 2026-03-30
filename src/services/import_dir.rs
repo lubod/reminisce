@@ -5,8 +5,6 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use std::collections::HashMap;
 use tokio::fs;
-use blake3::Hasher;
-use tokio::io::AsyncReadExt;
 use log::{info, warn, error};
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -192,26 +190,14 @@ async fn run_import(
             let is_video = ["mp4", "mov", "avi", "mkv"].contains(&extension.as_str());
             if !is_image && !is_video { continue; }
 
-            let mut file = match fs::File::open(&path).await {
-                Ok(f) => f,
+            let hash = match crate::media_utils::hash_file_blake3(&path).await {
+                Ok(h) => h,
                 Err(e) => {
-                    errors.push(format!("Failed to open {:?}: {}", path, e));
+                    errors.push(format!("Failed to hash {:?}: {}", path, e));
                     failed += 1;
                     continue;
                 }
             };
-
-            let mut hasher = Hasher::new();
-            let mut buffer = [0u8; 8192];
-            loop {
-                let n = match file.read(&mut buffer).await {
-                    Ok(n) if n == 0 => break,
-                    Ok(n) => n,
-                    Err(_) => break,
-                };
-                hasher.update(&buffer[..n]);
-            }
-            let hash = hasher.finalize().to_hex().to_string();
             let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
             let file_mtime: Option<chrono::DateTime<Utc>> = std::fs::metadata(&path)
                 .ok()

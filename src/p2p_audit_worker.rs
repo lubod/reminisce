@@ -70,23 +70,40 @@ async fn perform_audit(
         let mut success = false;
         match connection {
             Ok(conn) => {
+                let decoded = match hex::decode(&expected_shard_hash) {
+                    Ok(d) if d.len() == 32 => d,
+                    Ok(_) => {
+                        warn!("Shard hash {} has wrong length, skipping", expected_shard_hash);
+                        conn.close(0u32.into(), b"invalid hash");
+                        continue;
+                    }
+                    Err(e) => {
+                        warn!("Invalid shard hash hex {}: {}", expected_shard_hash, e);
+                        conn.close(0u32.into(), b"invalid hash");
+                        continue;
+                    }
+                };
                 let mut shard_hash_bytes = [0u8; 32];
-                let decoded = hex::decode(&expected_shard_hash).unwrap();
                 shard_hash_bytes.copy_from_slice(&decoded);
 
-                let (mut send, mut recv) = conn.open_bi().await.unwrap();
-                let req = Message::RetrieveShardRequest { shard_hash: shard_hash_bytes };
-
-                if Protocol::send(&mut send, &req).await.is_ok() {
-                    if let Ok(Message::RetrieveShardResponse { data: Some(data), .. }) = Protocol::receive(&mut recv).await {
-                        let actual_hash = blake3::hash(&data).to_hex().to_string();
-                        if actual_hash == expected_shard_hash {
-                            success = true;
-                        } else {
-                            warn!("Shard {} index {} on node {} is CORRUPTED!", file_hash, shard_index, node_id);
+                match conn.open_bi().await {
+                    Ok((mut send, mut recv)) => {
+                        let req = Message::RetrieveShardRequest { shard_hash: shard_hash_bytes };
+                        if Protocol::send(&mut send, &req).await.is_ok() {
+                            if let Ok(Message::RetrieveShardResponse { data: Some(data), .. }) = Protocol::receive(&mut recv).await {
+                                let actual_hash = blake3::hash(&data).to_hex().to_string();
+                                if actual_hash == expected_shard_hash {
+                                    success = true;
+                                } else {
+                                    warn!("Shard {} index {} on node {} is CORRUPTED!", file_hash, shard_index, node_id);
+                                }
+                            } else {
+                                warn!("Shard {} index {} on node {} is MISSING!", file_hash, shard_index, node_id);
+                            }
                         }
-                    } else {
-                        warn!("Shard {} index {} on node {} is MISSING!", file_hash, shard_index, node_id);
+                    }
+                    Err(e) => {
+                        warn!("Failed to open stream to node {} for shard {}: {}", node_id, expected_shard_hash, e);
                     }
                 }
                 conn.close(0u32.into(), b"done");

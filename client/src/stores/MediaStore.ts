@@ -97,7 +97,10 @@ export class MediaStore {
     searchQuery: string = "";
     searchMode: boolean = false;
     isSearching: boolean = false;
-    minSimilarity: number = 0.08; 
+    isLoadingMoreSearch: boolean = false;
+    searchOffset: number = 0;
+    searchPageSize: number = 50;
+    minSimilarity: number = 0.08;
     searchType: 'semantic' | 'text' | 'hybrid' = 'semantic';
     
     // Metadata State
@@ -249,17 +252,24 @@ export class MediaStore {
         this.searchQuery = "";
     };
 
-    performSearch = async (query: string) => {
+    performSearch = async (query: string, append: boolean = false) => {
         if (!query.trim()) return;
 
-        this.isSearching = true;
-        this.searchMode = true;
+        if (append) {
+            this.isLoadingMoreSearch = true;
+        } else {
+            this.isSearching = true;
+            this.searchMode = true;
+            this.searchOffset = 0;
+        }
+
+        const offset = append ? this.searchOffset : 0;
 
         try {
             const params = new URLSearchParams({
                 query,
-                limit: '50',
-                offset: '0',
+                limit: this.searchPageSize.toString(),
+                offset: offset.toString(),
                 min_similarity: this.minSimilarity.toString(),
                 mode: this.searchType,
             });
@@ -279,22 +289,33 @@ export class MediaStore {
                 ...item,
                 thumbnailUrl: item.thumbnail_url ? this.getAuthenticatedUrl(item.thumbnail_url) : undefined
             }));
-            
+
             const itemsWithThumbnails = await this.attachThumbnails(searchResults);
+            const gotFullPage = itemsWithThumbnails.length === this.searchPageSize;
 
             runInAction(() => {
-                this.images = itemsWithThumbnails;
+                if (append) {
+                    this.allMedia = [...this.allMedia, ...itemsWithThumbnails.map(item => ({ ...item, media_type: 'image' }))];
+                    this.images = [...this.images, ...itemsWithThumbnails];
+                } else {
+                    this.images = itemsWithThumbnails;
+                    this.allMedia = itemsWithThumbnails.map(item => ({ ...item, media_type: 'image' }));
+                }
                 this.totalImages = response.data.total;
-                this.allMedia = itemsWithThumbnails.map(item => ({ ...item, media_type: 'image' }));
                 this.totalAllMedia = response.data.total;
-                this.allMediaHasMore = false;
-                this.hasMore = false; 
+                this.searchOffset = offset + itemsWithThumbnails.length;
+                // More results available if we got a full page
+                this.allMediaHasMore = gotFullPage;
+                this.hasMore = false;
             });
         } catch (error) {
             console.error("Search failed", error);
             this.rootStore.uiStore.setError("Search failed");
         } finally {
-            runInAction(() => { this.isSearching = false; });
+            runInAction(() => {
+                this.isSearching = false;
+                this.isLoadingMoreSearch = false;
+            });
         }
     };
 
@@ -447,7 +468,14 @@ export class MediaStore {
 
     loadMoreImages = () => { if (this.hasMore && !this.isLoadingMore) this.fetchImages(this.currentPage + 1, 50, true); };
     loadMoreVideos = () => { if (this.videoHasMore && !this.isLoadingMoreVideos) this.fetchVideos(this.videoCurrentPage + 1, 50, true); };
-    loadMoreAllMedia = () => { if (this.allMediaHasMore && !this.isLoadingMoreAllMedia) this.fetchAllMedia(this.allMediaCurrentPage + 1, 50, true); };
+    loadMoreAllMedia = () => {
+        if (!this.allMediaHasMore) return;
+        if (this.searchMode) {
+            if (!this.isLoadingMoreSearch) this.performSearch(this.searchQuery, true);
+        } else {
+            if (!this.isLoadingMoreAllMedia) this.fetchAllMedia(this.allMediaCurrentPage + 1, 50, true);
+        }
+    };
 
     // --- Lightbox Methods ---
 

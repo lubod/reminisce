@@ -46,7 +46,8 @@ export const MediaBrowser = observer(() => {
                 {/* Search Status */}
                 {mediaStore.searchMode && !mediaStore.isSearching && (
                     <div className="text-xs text-blue-400 mb-3 px-2">
-                        <span className="font-semibold">{mediaStore.totalAllMedia}</span> result{mediaStore.totalAllMedia !== 1 ? 's' : ''} for "{mediaStore.searchQuery}"
+                        Showing <span className="font-semibold">{mediaStore.allMedia.length}</span> result{mediaStore.allMedia.length !== 1 ? 's' : ''} for "{mediaStore.searchQuery}"
+                        {mediaStore.allMediaHasMore && <span className="text-gray-500"> — scroll for more</span>}
                     </div>
                 )}
 
@@ -370,7 +371,7 @@ export const MediaBrowser = observer(() => {
             ))}
 
             <div ref={observerTarget} className="h-20 flex items-center justify-center">
-                {mediaStore.isLoadingMoreAllMedia && <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />}
+                {(mediaStore.isLoadingMoreAllMedia || mediaStore.isLoadingMoreSearch) && <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />}
             </div>
 
             <MediaLightbox />

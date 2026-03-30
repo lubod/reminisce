@@ -138,6 +138,17 @@ pub async fn process_image_file(
             &[&exif_str, &device_id, &hash],
         ).await;
 
+        // Store orientation separately so thumbnail generation can avoid re-reading the file
+        let orientation: Option<i16> = exif_json.get("Orientation")
+            .and_then(|v| v.as_str())
+            .and_then(|s| s.parse::<i16>().ok());
+        if let Some(orient) = orientation {
+            let _ = client.execute(
+                "UPDATE images SET orientation = $1 WHERE deviceid = $2 AND hash = $3 AND orientation IS NULL",
+                &[&orient, &device_id, &hash],
+            ).await;
+        }
+
         if let Some(dt_str) = exif_json.get("DateTimeOriginal").and_then(|v| v.as_str()) {
             if let Ok(ndt) = chrono::NaiveDateTime::parse_from_str(dt_str, "%Y-%m-%d %H:%M:%S") {
                 exif_date = Some(ndt.and_utc());

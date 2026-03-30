@@ -572,38 +572,15 @@ async fn generate_and_store_embedding(
 fn apply_exif_orientation(image_data: &[u8]) -> Result<Vec<u8>, String> {
     use std::io::Cursor;
 
-    // Decode the image
-    let mut img = image::load_from_memory(image_data)
+    let img = image::load_from_memory(image_data)
         .map_err(|e| format!("Failed to decode image: {}", e))?;
 
-    // Read EXIF orientation from the original bytes
-    let cursor = Cursor::new(image_data);
-    let mut bufreader = std::io::BufReader::new(cursor);
-    let exifreader = kamadak_exif::Reader::new();
+    let orientation = crate::media_utils::read_exif_orientation_from_bytes(image_data).unwrap_or(1);
+    let oriented = crate::media_utils::apply_orientation_to_image(img, orientation);
 
-    if let Ok(exif) = exifreader.read_from_container(&mut bufreader) {
-        if let Some(field) = exif.get_field(kamadak_exif::Tag::Orientation, kamadak_exif::In::PRIMARY) {
-            if let kamadak_exif::Value::Short(ref v) = field.value {
-                if let Some(&orientation) = v.first() {
-                    match orientation {
-                        1 => {}, // Normal - no change needed
-                        2 => img = img.fliph(),
-                        3 => img = img.rotate180(),
-                        4 => img = img.flipv(),
-                        5 => { img = img.rotate90(); img = img.fliph(); },
-                        6 => img = img.rotate90(),
-                        7 => { img = img.rotate270(); img = img.fliph(); },
-                        8 => img = img.rotate270(),
-                        _ => {},
-                    }
-                }
-            }
-        }
-    }
-
-    // Re-encode as JPEG
     let mut output = Cursor::new(Vec::new());
-    img.write_to(&mut output, image::ImageOutputFormat::Jpeg(90))
+    oriented
+        .write_to(&mut output, image::ImageOutputFormat::Jpeg(90))
         .map_err(|e| format!("Failed to encode oriented image: {}", e))?;
 
     Ok(output.into_inner())
