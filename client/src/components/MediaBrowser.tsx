@@ -325,6 +325,14 @@ export const MediaBrowser = observer(() => {
                                             </span>
                                         </div>
                                     )}
+                                    {/* Quality Score Badge */}
+                                    {mediaStore.sortBy === 'quality' && item.aesthetic_score != null && (
+                                        <div className="absolute top-2 left-2 px-1.5 py-0.5 rounded-md bg-black/60 backdrop-blur-sm">
+                                            <span className="text-[10px] font-bold text-yellow-400">
+                                                ★ {item.aesthetic_score.toFixed(1)}
+                                            </span>
+                                        </div>
+                                    )}
                                     {/* Star Button */}
                                     <button
                                         onClick={(e) => {
