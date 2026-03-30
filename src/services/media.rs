@@ -320,12 +320,12 @@ async fn toggle_media_star_inner(
     // Verify the media exists and user has access
     let exists = if is_admin {
         transaction
-            .query_opt(&format!("SELECT 1 FROM {} WHERE hash = $1 AND deleted_at IS NULL", media_table), &[&hash])
+            .query_opt(&format!("SELECT 1 FROM {} WHERE hash = $1 AND deleted_at IS NULL LIMIT 1", media_table), &[&hash])
             .await
     } else {
         transaction
             .query_opt(
-                &format!("SELECT 1 FROM {} WHERE user_id = $1 AND hash = $2 AND deleted_at IS NULL", media_table),
+                &format!("SELECT 1 FROM {} WHERE user_id = $1 AND hash = $2 AND deleted_at IS NULL LIMIT 1", media_table),
                 &[user_uuid, &hash]
             )
             .await
