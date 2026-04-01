@@ -56,25 +56,56 @@ pub async fn get_stats(
 
     let client = utils::get_db_client(&pool.0).await?;
 
-    // Combine all stats into a single query for better performance
+    // Single-pass aggregation: collapse all same-table counts with FILTER to avoid
+    // repeated full-table scans. faces uses a JOIN instead of an IN subquery.
     let query = "
+        WITH img AS (
+            SELECT
+                COUNT(*) FILTER (WHERE deleted_at IS NULL)                                                  AS total_images,
+                COUNT(*) FILTER (WHERE description IS NOT NULL AND description != '' AND deleted_at IS NULL) AS images_with_description,
+                COUNT(*) FILTER (WHERE embedding_generated_at IS NOT NULL AND deleted_at IS NULL)           AS images_with_embedding,
+                COUNT(*) FILTER (WHERE verification_status = 1 AND deleted_at IS NULL)                     AS verified_images,
+                COUNT(*) FILTER (WHERE face_detection_completed_at IS NULL AND deleted_at IS NULL)          AS images_face_pending,
+                COUNT(*) FILTER (WHERE p2p_synced_at IS NOT NULL AND deleted_at IS NULL)                   AS p2p_synced,
+                COUNT(*) FILTER (WHERE has_thumbnail = true AND deleted_at IS NULL)                         AS with_thumbnail
+            FROM images
+        ),
+        vid AS (
+            SELECT
+                COUNT(*) FILTER (WHERE deleted_at IS NULL)                                                  AS total_videos,
+                COUNT(*) FILTER (WHERE verification_status = 1 AND deleted_at IS NULL)                     AS verified_videos,
+                COUNT(*) FILTER (WHERE p2p_synced_at IS NOT NULL AND deleted_at IS NULL)                   AS p2p_synced,
+                COUNT(*) FILTER (WHERE has_thumbnail = true AND deleted_at IS NULL)                         AS with_thumbnail
+            FROM videos
+        ),
+        face_stats AS (
+            SELECT
+                COUNT(*)                                            AS total_faces,
+                COUNT(DISTINCT (f.image_user_id, f.image_hash))    AS images_with_faces
+            FROM faces f
+            JOIN images i ON i.user_id = f.image_user_id AND i.hash = f.image_hash
+            WHERE i.deleted_at IS NULL
+        )
         SELECT
-            (SELECT COUNT(*) FROM images WHERE deleted_at IS NULL) as total_images,
-            (SELECT COUNT(*) FROM videos WHERE deleted_at IS NULL) as total_videos,
-            (SELECT COUNT(*) FROM users) as total_users,
-            (SELECT COUNT(*) FROM images WHERE description IS NOT NULL AND description != '' AND deleted_at IS NULL) as images_with_description,
-            (SELECT COUNT(DISTINCT hash) FROM starred_images WHERE hash IN (SELECT hash FROM images WHERE deleted_at IS NULL)) as starred_images,
-            (SELECT COUNT(DISTINCT hash) FROM starred_videos WHERE hash IN (SELECT hash FROM videos WHERE deleted_at IS NULL)) as starred_videos,
-            (SELECT COUNT(*) FROM images WHERE embedding_generated_at IS NOT NULL AND deleted_at IS NULL) as images_with_embedding,
-            (SELECT COUNT(*) FROM images WHERE verification_status = 1 AND deleted_at IS NULL) as verified_images,
-            (SELECT COUNT(*) FROM videos WHERE verification_status = 1 AND deleted_at IS NULL) as verified_videos,
-            (SELECT COUNT(*) FROM faces WHERE (image_user_id, image_hash) IN (SELECT user_id, hash FROM images WHERE deleted_at IS NULL)) as total_faces,
-            (SELECT COUNT(*) FROM persons) as total_persons,
-            (SELECT COUNT(*) FROM (SELECT DISTINCT image_hash, image_user_id FROM faces WHERE (image_user_id, image_hash) IN (SELECT user_id, hash FROM images WHERE deleted_at IS NULL)) AS distinct_images) as images_with_faces,
-            (SELECT COUNT(*) FROM images WHERE face_detection_completed_at IS NULL AND deleted_at IS NULL) as images_face_pending,
-            (SELECT COUNT(*) FROM images WHERE p2p_synced_at IS NOT NULL AND deleted_at IS NULL) as total_p2p_synced_images,
-            (SELECT COUNT(*) FROM videos WHERE p2p_synced_at IS NOT NULL AND deleted_at IS NULL) as total_p2p_synced_videos,
-            ((SELECT COUNT(*) FROM images WHERE has_thumbnail = true AND deleted_at IS NULL) + (SELECT COUNT(*) FROM videos WHERE has_thumbnail = true AND deleted_at IS NULL)) as thumbnail_count
+            img.total_images,
+            vid.total_videos,
+            (SELECT COUNT(*) FROM users),
+            img.images_with_description,
+            (SELECT COUNT(DISTINCT si.hash) FROM starred_images si
+                JOIN images i ON i.hash = si.hash WHERE i.deleted_at IS NULL),
+            (SELECT COUNT(DISTINCT sv.hash) FROM starred_videos sv
+                JOIN videos v ON v.hash = sv.hash WHERE v.deleted_at IS NULL),
+            img.images_with_embedding,
+            img.verified_images,
+            vid.verified_videos,
+            face_stats.total_faces,
+            (SELECT COUNT(*) FROM persons),
+            face_stats.images_with_faces,
+            img.images_face_pending,
+            img.p2p_synced,
+            vid.p2p_synced,
+            img.with_thumbnail + vid.with_thumbnail
+        FROM img, vid, face_stats
     ";
 
     // Use instrumented query to log performance

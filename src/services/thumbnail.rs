@@ -596,6 +596,7 @@ pub async fn list_all_media_thumbnails(
 pub async fn get_thumbnail(
     req: HttpRequest,
     path: web::Path<String>,
+    pool: web::Data<crate::db::MainDbPool>,
     config: web::Data<Config>
 ) -> Result<HttpResponse, actix_web::Error> {
     if
@@ -652,6 +653,21 @@ pub async fn get_thumbnail(
                 &image_thumb_path,
                 &video_thumb_path
             );
+            // Reset has_thumbnail so the verification worker regenerates it
+            let pool_clone = pool.clone();
+            let hash_clone = media_hash.clone();
+            tokio::spawn(async move {
+                if let Ok(client) = pool_clone.0.get().await {
+                    let _ = client.execute(
+                        "UPDATE images SET has_thumbnail = false WHERE hash = $1 AND has_thumbnail = true",
+                        &[&hash_clone],
+                    ).await;
+                    let _ = client.execute(
+                        "UPDATE videos SET has_thumbnail = false WHERE hash = $1 AND has_thumbnail = true",
+                        &[&hash_clone],
+                    ).await;
+                }
+            });
             Ok(
                 HttpResponse::NotFound().json(
                     serde_json::json!({"status": "error", "message": "Thumbnail not found."})
