@@ -23,7 +23,7 @@ pub struct Person {
     pub name: Option<String>,
     pub face_count: i32,
     pub representative_face_hash: Option<String>,
-    pub representative_face_deviceid: Option<String>,
+    pub representative_face_user_id: Option<uuid::Uuid>,
     pub representative_face_id: Option<i64>,
     pub representative_bbox: Option<Vec<i32>>,
     pub representative_face_url: Option<String>,
@@ -47,7 +47,7 @@ pub struct PersonResponse {
 #[derive(Serialize, ToSchema)]
 pub struct PersonImage {
     pub hash: String,
-    pub deviceid: String,
+    pub user_id: uuid::Uuid,
     pub name: String,
     pub created_at: String,
     pub bbox: Vec<i32>,
@@ -120,7 +120,7 @@ pub async fn get_persons(
     let total: i64 = total_rows.get(0);
 
     let base_query = "SELECT p.id, p.name, p.face_count, p.created_at, p.updated_at,
-                    f.image_hash, f.image_deviceid, f.bbox_x, f.bbox_y, f.bbox_width, f.bbox_height, p.representative_face_id
+                    f.image_hash, f.image_user_id, f.bbox_x, f.bbox_y, f.bbox_width, f.bbox_height, p.representative_face_id
              FROM persons p
              LEFT JOIN faces f ON p.representative_face_id = f.id";
 
@@ -150,7 +150,7 @@ pub async fn get_persons(
                 created_at: row.get::<_, chrono::DateTime<chrono::Utc>>(3).to_rfc3339(),
                 updated_at: row.get::<_, chrono::DateTime<chrono::Utc>>(4).to_rfc3339(),
                 representative_face_hash: row.get(5),
-                representative_face_deviceid: row.get(6),
+                representative_face_user_id: row.get(6),
                 representative_face_id: face_id,
                 representative_face_url: face_id.map(|id| format!("/api/face/{}/thumbnail", id)),
                 representative_bbox: if row.get::<_, Option<String>>(5).is_some() {
@@ -212,10 +212,10 @@ pub async fn get_person(
     let client = utils::get_db_client(&pool.0).await?;
 
     let base_query = "SELECT p.id, p.name, p.face_count, p.created_at, p.updated_at,
-                    f.image_hash, f.image_deviceid, f.bbox_x, f.bbox_y, f.bbox_width, f.bbox_height, p.representative_face_id
+                    f.image_hash, f.image_user_id, f.bbox_x, f.bbox_y, f.bbox_width, f.bbox_height, p.representative_face_id
              FROM persons p
              LEFT JOIN faces f ON p.representative_face_id = f.id
-             LEFT JOIN images i ON f.image_hash = i.hash AND f.image_deviceid = i.deviceid AND i.deleted_at IS NULL";
+             LEFT JOIN images i ON f.image_hash = i.hash AND f.image_user_id = i.user_id AND i.deleted_at IS NULL";
 
     let row = if is_admin {
         client.query_opt(
@@ -241,7 +241,7 @@ pub async fn get_person(
             created_at: row.get::<_, chrono::DateTime<chrono::Utc>>(3).to_rfc3339(),
             updated_at: row.get::<_, chrono::DateTime<chrono::Utc>>(4).to_rfc3339(),
             representative_face_hash: row.get(5),
-            representative_face_deviceid: row.get(6),
+            representative_face_user_id: row.get(6),
             representative_face_id: face_id,
             representative_face_url: face_id.map(|id| format!("/api/face/{}/thumbnail", id)),
             representative_bbox: if row.get::<_, Option<String>>(5).is_some() {
@@ -328,12 +328,12 @@ pub async fn get_person_images(
 
     let rows = client
         .query(
-            "SELECT f.image_hash, f.image_deviceid, i.name, i.created_at,
+            "SELECT f.image_hash, f.image_user_id, i.name, i.created_at,
                     f.bbox_x, f.bbox_y, f.bbox_width, f.bbox_height, f.confidence, f.id,
                     i.place,
                     (CASE WHEN s.hash IS NOT NULL THEN true ELSE false END) as starred
              FROM faces f
-             JOIN images i ON f.image_hash = i.hash AND f.image_deviceid = i.deviceid
+             JOIN images i ON f.image_hash = i.hash AND f.image_user_id = i.user_id
              LEFT JOIN starred_images s ON i.hash = s.hash AND s.user_id = $2
              WHERE f.person_id = $1 AND i.deleted_at IS NULL
              ORDER BY i.created_at DESC
@@ -352,7 +352,7 @@ pub async fn get_person_images(
             let hash: String = row.get(0);
             PersonImage {
                 hash: hash.clone(),
-                deviceid: row.get(1),
+                user_id: row.get(1),
                 name: row.get(2),
                 created_at: row.get::<_, chrono::DateTime<chrono::Utc>>(3).to_rfc3339(),
                 bbox: vec![row.get(4), row.get(5), row.get(6), row.get(7)],
@@ -369,7 +369,7 @@ pub async fn get_person_images(
     let total_row = client
         .query_one(
             "SELECT COUNT(*) FROM faces f
-             JOIN images i ON f.image_hash = i.hash AND f.image_deviceid = i.deviceid
+             JOIN images i ON f.image_hash = i.hash AND f.image_user_id = i.user_id
              WHERE f.person_id = $1 AND i.deleted_at IS NULL",
             &[&person_id],
         )
