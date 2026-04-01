@@ -208,11 +208,6 @@ async fn run_import(
 
         if chunk_hashes.is_empty() { continue; }
 
-        let client = match pool.0.get().await {
-            Ok(c) => c,
-            Err(e) => { error!("DB pool error: {}", e); continue; }
-        };
-
         let image_hashes: Vec<String> = chunk_hashes.iter()
             .filter(|(_, _, _, is_img, _)| *is_img)
             .map(|(_, h, _, _, _)| h.clone()).collect();
@@ -220,35 +215,8 @@ async fn run_import(
             .filter(|(_, _, _, is_img, _)| !*is_img)
             .map(|(_, h, _, _, _)| h.clone()).collect();
 
-        let mut existing_image_hashes = std::collections::HashSet::new();
-        if !image_hashes.is_empty() {
-            let mut placeholders = Vec::new();
-            for i in 2..=image_hashes.len() + 1 { placeholders.push(format!("${}", i)); }
-            let query = format!(
-                "SELECT hash FROM images WHERE deviceid = $1 AND hash IN ({}) AND deleted_at IS NULL",
-                placeholders.join(", ")
-            );
-            let mut params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = vec![&device_id];
-            for h in &image_hashes { params.push(h); }
-            if let Ok(rows) = client.query(&query[..], &params[..]).await {
-                for row in rows { existing_image_hashes.insert(row.get::<_, String>(0)); }
-            }
-        }
-
-        let mut existing_video_hashes = std::collections::HashSet::new();
-        if !video_hashes.is_empty() {
-            let mut placeholders = Vec::new();
-            for i in 2..=video_hashes.len() + 1 { placeholders.push(format!("${}", i)); }
-            let query = format!(
-                "SELECT hash FROM videos WHERE deviceid = $1 AND hash IN ({}) AND deleted_at IS NULL",
-                placeholders.join(", ")
-            );
-            let mut params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = vec![&device_id];
-            for h in &video_hashes { params.push(h); }
-            if let Ok(rows) = client.query(&query[..], &params[..]).await {
-                for row in rows { existing_video_hashes.insert(row.get::<_, String>(0)); }
-            }
-        }
+        let existing_image_hashes = ingest::filter_existing_hashes(&image_hashes, &user_uuid, "images", &pool).await;
+        let existing_video_hashes = ingest::filter_existing_hashes(&video_hashes, &user_uuid, "videos", &pool).await;
 
         for (path, hash, name, is_image, file_mtime) in chunk_hashes {
             let already_exists = if is_image {
@@ -292,7 +260,7 @@ async fn run_import(
                     id
                 };
                 if let Some(lid) = lid {
-                    attach_label(&pool, &hash, &device_id, lid, is_image).await;
+                    attach_label(&pool, &hash, &user_uuid, lid, is_image).await;
                 }
             }
         }
@@ -373,16 +341,16 @@ async fn get_or_create_label(pool: &web::Data<MainDbPool>, user_id: &Uuid, name:
     }
 }
 
-async fn attach_label(pool: &web::Data<MainDbPool>, hash: &str, device_id: &str, label_id: i32, is_image: bool) {
+async fn attach_label(pool: &web::Data<MainDbPool>, hash: &str, user_id: &uuid::Uuid, label_id: i32, is_image: bool) {
     let table = if is_image { "image_labels" } else { "video_labels" };
     let hash_col = if is_image { "image_hash" } else { "video_hash" };
-    let dev_col = if is_image { "image_deviceid" } else { "video_deviceid" };
+    let user_col = if is_image { "image_user_id" } else { "video_user_id" };
     let query = format!(
         "INSERT INTO {} ({}, {}, label_id) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
-        table, hash_col, dev_col
+        table, hash_col, user_col
     );
     match pool.0.get().await {
-        Ok(client) => { let _ = client.execute(&query, &[&hash, &device_id, &label_id]).await; }
+        Ok(client) => { let _ = client.execute(&query, &[&hash, user_id, &label_id]).await; }
         Err(e) => error!("DB pool error attaching label: {}", e),
     }
 }

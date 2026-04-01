@@ -291,26 +291,24 @@ pub async fn add_image_label(
 
     let client = utils::get_db_client(&pool.0).await?;
 
-    // Get deviceid for this image
-    let row = client
+    // Verify image exists for this user
+    let image_exists = client
         .query_opt(
-            "SELECT deviceid FROM images WHERE hash = $1 AND user_id = $2 AND deleted_at IS NULL",
+            "SELECT 1 FROM images WHERE hash = $1 AND user_id = $2 AND deleted_at IS NULL",
             &[&hash, &user_uuid],
         )
         .await
         .map_err(|e| {
             error!("Failed to query image: {}", e);
             actix_web::error::ErrorInternalServerError("Query failed")
-        })?;
+        })?
+        .is_some();
 
-    let deviceid: String = match row {
-        Some(r) => r.get(0),
-        None => {
-            return Ok(HttpResponse::NotFound().json(serde_json::json!({
-                "error": "Image not found"
-            })));
-        }
-    };
+    if !image_exists {
+        return Ok(HttpResponse::NotFound().json(serde_json::json!({
+            "error": "Image not found"
+        })));
+    }
 
     // Verify label belongs to user
     let label_exists = client
@@ -334,10 +332,10 @@ pub async fn add_image_label(
     // Add label to image
     client
         .execute(
-            "INSERT INTO image_labels (image_hash, image_deviceid, label_id)
+            "INSERT INTO image_labels (image_hash, image_user_id, label_id)
              VALUES ($1, $2, $3)
              ON CONFLICT DO NOTHING",
-            &[&hash, &deviceid, &body.label_id],
+            &[&hash, &user_uuid, &body.label_id],
         )
         .await
         .map_err(|e| {
@@ -382,10 +380,8 @@ pub async fn remove_image_label(
 
     client
         .execute(
-            "DELETE FROM image_labels il
-             USING images i
-             WHERE il.image_hash = $1 AND il.label_id = $2
-               AND il.image_hash = i.hash AND i.user_id = $3 AND i.deleted_at IS NULL",
+            "DELETE FROM image_labels
+             WHERE image_hash = $1 AND label_id = $2 AND image_user_id = $3",
             &[&hash, &label_id, &user_uuid],
         )
         .await
@@ -465,26 +461,24 @@ pub async fn add_video_label(
 
     let client = utils::get_db_client(&pool.0).await?;
 
-    // Get deviceid for this video
-    let row = client
+    // Verify video exists for this user
+    let video_exists = client
         .query_opt(
-            "SELECT deviceid FROM videos WHERE hash = $1 AND user_id = $2 AND deleted_at IS NULL",
+            "SELECT 1 FROM videos WHERE hash = $1 AND user_id = $2 AND deleted_at IS NULL",
             &[&hash, &user_uuid],
         )
         .await
         .map_err(|e| {
             error!("Failed to query video: {}", e);
             actix_web::error::ErrorInternalServerError("Query failed")
-        })?;
+        })?
+        .is_some();
 
-    let deviceid: String = match row {
-        Some(r) => r.get(0),
-        None => {
-            return Ok(HttpResponse::NotFound().json(serde_json::json!({
-                "error": "Video not found"
-            })));
-        }
-    };
+    if !video_exists {
+        return Ok(HttpResponse::NotFound().json(serde_json::json!({
+            "error": "Video not found"
+        })));
+    }
 
     // Verify label belongs to user
     let label_exists = client
@@ -508,10 +502,10 @@ pub async fn add_video_label(
     // Add label to video
     client
         .execute(
-            "INSERT INTO video_labels (video_hash, video_deviceid, label_id)
+            "INSERT INTO video_labels (video_hash, video_user_id, label_id)
              VALUES ($1, $2, $3)
              ON CONFLICT DO NOTHING",
-            &[&hash, &deviceid, &body.label_id],
+            &[&hash, &user_uuid, &body.label_id],
         )
         .await
         .map_err(|e| {
@@ -543,10 +537,8 @@ pub async fn remove_video_label(
 
     client
         .execute(
-            "DELETE FROM video_labels vl
-             USING videos v
-             WHERE vl.video_hash = $1 AND vl.label_id = $2
-               AND vl.video_hash = v.hash AND v.user_id = $3 AND v.deleted_at IS NULL",
+            "DELETE FROM video_labels
+             WHERE video_hash = $1 AND label_id = $2 AND video_user_id = $3",
             &[&hash, &label_id, &user_uuid],
         )
         .await

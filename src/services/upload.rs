@@ -3,9 +3,7 @@ use actix_web::{web, HttpResponse, Error, post};
 use futures::{TryStreamExt};
 use serde::{Deserialize, Serialize};
 use tracing::{error};
-use blake3::Hasher;
 use uuid::Uuid;
-use tokio::io::AsyncWriteExt;
 use chrono::Utc;
 
 use crate::config::Config;
@@ -126,49 +124,19 @@ pub async fn upload_image(
         let name = content_disposition.get_name().unwrap_or("");
 
         match name {
-            "hash" => {
-                let mut bytes = Vec::new();
-                while let Ok(Some(chunk)) = field.try_next().await {
-                    bytes.extend_from_slice(&chunk);
-                }
-                image_hash_opt = Some(String::from_utf8_lossy(&bytes).into_owned());
-            }
-            "name" => {
-                let mut bytes = Vec::new();
-                while let Ok(Some(chunk)) = field.try_next().await {
-                    bytes.extend_from_slice(&chunk);
-                }
-                image_name_opt = Some(String::from_utf8_lossy(&bytes).into_owned());
-            }
-            "device_id" => {
-                let mut bytes = Vec::new();
-                while let Ok(Some(chunk)) = field.try_next().await {
-                    bytes.extend_from_slice(&chunk);
-                }
-                device_id_opt = Some(String::from_utf8_lossy(&bytes).into_owned());
-            }
+            "hash" => image_hash_opt = Some(crate::media_utils::read_field_string(&mut field).await),
+            "name" => image_name_opt = Some(crate::media_utils::read_field_string(&mut field).await),
+            "device_id" => device_id_opt = Some(crate::media_utils::read_field_string(&mut field).await),
             "created_at" => {
-                let mut bytes = Vec::new();
-                while let Ok(Some(chunk)) = field.try_next().await {
-                    bytes.extend_from_slice(&chunk);
-                }
-                let s = String::from_utf8_lossy(&bytes);
+                let s = crate::media_utils::read_field_string(&mut field).await;
                 client_created_at_opt = chrono::DateTime::parse_from_rfc3339(s.trim())
                     .ok()
                     .map(|dt| dt.with_timezone(&Utc));
             }
             "image" => {
                 let temp_dir = std::path::Path::new(config.get_images_dir()).join(".tmp");
-                tokio::fs::create_dir_all(&temp_dir).await.map_err(|_| actix_web::error::ErrorInternalServerError("Failed to create temp dir"))?;
-                let temp_path = temp_dir.join(format!("{}.tmp", uuid::Uuid::new_v4()));
-                let mut f = tokio::fs::File::create(&temp_path).await.map_err(|_| actix_web::error::ErrorInternalServerError("Failed to create temp file"))?;
-                
-                let mut hasher = Hasher::new();
-                while let Ok(Some(chunk)) = field.try_next().await {
-                    hasher.update(&chunk);
-                    f.write_all(&chunk).await.map_err(|_| actix_web::error::ErrorInternalServerError("Failed to write temp file"))?;
-                }
-                calculated_image_hash_opt = Some(hasher.finalize().to_hex().to_string());
+                let (temp_path, hash) = crate::media_utils::streaming_hash_to_temp(&mut field, &temp_dir).await?;
+                calculated_image_hash_opt = Some(hash);
                 image_temp_file_path = Some(temp_path);
             }
             _ => (),
@@ -252,16 +220,7 @@ pub async fn batch_upload_image(
         let filename = content_disposition.get_filename().unwrap_or("unknown").to_string();
         
         let temp_dir = std::path::Path::new(config.get_images_dir()).join(".tmp");
-        tokio::fs::create_dir_all(&temp_dir).await.map_err(|_| actix_web::error::ErrorInternalServerError("Failed to create temp dir"))?;
-        let temp_path = temp_dir.join(format!("{}.tmp", uuid::Uuid::new_v4()));
-        let mut f = tokio::fs::File::create(&temp_path).await.map_err(|_| actix_web::error::ErrorInternalServerError("Failed to create temp file"))?;
-        
-        let mut hasher = Hasher::new();
-        while let Ok(Some(chunk)) = field.try_next().await {
-            hasher.update(&chunk);
-            f.write_all(&chunk).await.map_err(|_| actix_web::error::ErrorInternalServerError("Failed to write temp file"))?;
-        }
-        let hash = hasher.finalize().to_hex().to_string();
+        let (temp_path, hash) = crate::media_utils::streaming_hash_to_temp(&mut field, &temp_dir).await?;
 
         let res = ingest::process_image_file(
             &temp_path,
@@ -342,10 +301,9 @@ pub async fn upload_image_metadata(
         .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
         .map(|dt| dt.with_timezone(&Utc));
 
-    let query = "INSERT INTO images (deviceid, hash, user_id, type, created_at, name, ext, exif, has_thumbnail, last_verified_at, verification_status, location, place, added_at)
-                 VALUES ($1, $2, $14, $3, $4, $5, $6, $7, $8, $9, $10, ST_SetSRID(ST_MakePoint($11, $12), 4326), $13, NOW())
-                 ON CONFLICT (deviceid, hash) DO UPDATE SET
-                 user_id = EXCLUDED.user_id,
+    let query = "INSERT INTO images (user_id, hash, deviceid, type, created_at, name, ext, exif, has_thumbnail, last_verified_at, verification_status, location, place, added_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, ST_SetSRID(ST_MakePoint($12, $13), 4326), $14, NOW())
+                 ON CONFLICT (user_id, hash) DO UPDATE SET
                  type = EXCLUDED.type, name = EXCLUDED.name, ext = EXCLUDED.ext,
                  exif = COALESCE(EXCLUDED.exif, images.exif),
                  has_thumbnail = EXCLUDED.has_thumbnail, last_verified_at = EXCLUDED.last_verified_at,
@@ -355,23 +313,29 @@ pub async fn upload_image_metadata(
     let lat = metadata.latitude.unwrap_or(0.0);
     let lon = metadata.longitude.unwrap_or(0.0);
 
-    match client.execute(query, &[
-        &metadata.deviceid, &metadata.hash, &metadata.type_name, &created_at, &metadata.name, &metadata.ext,
+    if let Err(e) = client.execute(query, &[
+        &user_uuid, &metadata.hash, &metadata.deviceid, &metadata.type_name, &created_at, &metadata.name, &metadata.ext,
         &metadata.exif, &metadata.has_thumbnail.unwrap_or(false), &last_verified_at,
-        &metadata.verification_status.unwrap_or(0), &lon, &lat, &metadata.place, &user_uuid
+        &metadata.verification_status.unwrap_or(0), &lon, &lat, &metadata.place
     ]).await {
-        Ok(_) => HttpResponse::Ok().json(UploadImageMetadataResponse {
-            status: "success".to_string(),
-            message: "Metadata updated".to_string(),
-        }),
-        Err(e) => {
-            error!("Failed to update image metadata: {}", e);
-            HttpResponse::InternalServerError().json(UploadImageMetadataResponse {
-                status: "error".to_string(),
-                message: format!("Database error: {}", e),
-            })
-        }
+        error!("Failed to update image metadata: {}", e);
+        return HttpResponse::InternalServerError().json(UploadImageMetadataResponse {
+            status: "error".to_string(),
+            message: format!("Database error: {}", e),
+        });
     }
+
+    let _ = client.execute(
+        "INSERT INTO media_sources (user_id, hash, media_type, device_id, uploaded_at)
+         VALUES ($1, $2, 'image', $3, NOW())
+         ON CONFLICT DO NOTHING",
+        &[&user_uuid, &metadata.hash, &metadata.deviceid],
+    ).await;
+
+    HttpResponse::Ok().json(UploadImageMetadataResponse {
+        status: "success".to_string(),
+        message: "Metadata updated".to_string(),
+    })
 }
 
 #[utoipa::path(
@@ -420,35 +384,41 @@ pub async fn upload_video_metadata(
         .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
         .map(|dt| dt.with_timezone(&Utc));
 
-    let query = "INSERT INTO videos (deviceid, hash, user_id, type, created_at, name, ext, metadata, has_thumbnail, last_verified_at, verification_status, added_at)
-                 VALUES ($1, $2, $11, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
-                 ON CONFLICT (deviceid, hash) DO UPDATE SET
-                 user_id = EXCLUDED.user_id,
+    let query = "INSERT INTO videos (user_id, hash, deviceid, type, created_at, name, ext, metadata, has_thumbnail, last_verified_at, verification_status, added_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
+                 ON CONFLICT (user_id, hash) DO UPDATE SET
                  type = EXCLUDED.type, name = EXCLUDED.name, ext = EXCLUDED.ext, metadata = EXCLUDED.metadata,
                  has_thumbnail = EXCLUDED.has_thumbnail, last_verified_at = EXCLUDED.last_verified_at,
                  verification_status = EXCLUDED.verification_status,
                  added_at = NOW()";
 
-    match client.execute(query, &[
-        &metadata.deviceid, &metadata.hash, &metadata.type_name, &created_at, &metadata.name, &metadata.ext,
+    if let Err(e) = client.execute(query, &[
+        &user_uuid, &metadata.hash, &metadata.deviceid, &metadata.type_name, &created_at, &metadata.name, &metadata.ext,
         &metadata.metadata, &metadata.has_thumbnail.unwrap_or(false), &last_verified_at,
-        &metadata.verification_status.unwrap_or(0), &user_uuid
+        &metadata.verification_status.unwrap_or(0)
     ]).await {
-        Ok(_) => HttpResponse::Ok().json(UploadVideoMetadataResponse {
-            status: "success".to_string(),
-            message: "Metadata updated".to_string(),
-        }),
-        Err(e) => {
-            error!("Failed to update video metadata: {}", e);
-            HttpResponse::InternalServerError().json(UploadVideoMetadataResponse {
-                status: "error".to_string(),
-                message: format!("Database error: {}", e),
-            })
-        }
+        error!("Failed to update video metadata: {}", e);
+        return HttpResponse::InternalServerError().json(UploadVideoMetadataResponse {
+            status: "error".to_string(),
+            message: format!("Database error: {}", e),
+        });
     }
+
+    let _ = client.execute(
+        "INSERT INTO media_sources (user_id, hash, media_type, device_id, uploaded_at)
+         VALUES ($1, $2, 'video', $3, NOW())
+         ON CONFLICT DO NOTHING",
+        &[&user_uuid, &metadata.hash, &metadata.deviceid],
+    ).await;
+
+    HttpResponse::Ok().json(UploadVideoMetadataResponse {
+        status: "success".to_string(),
+        message: "Metadata updated".to_string(),
+    })
 }
 
 async fn internal_check_images_exist(
+    user_id: &Uuid,
     req: CheckImagesExistRequest,
     pool: web::Data<MainDbPool>,
 ) -> HttpResponse {
@@ -462,8 +432,8 @@ async fn internal_check_images_exist(
     }
 
     match client.query(
-        "SELECT hash FROM images WHERE deviceid = $1 AND hash = ANY($2) AND deleted_at IS NULL",
-        &[&req.device_id, &req.hashes]
+        "SELECT hash FROM images WHERE user_id = $1 AND hash = ANY($2) AND deleted_at IS NULL",
+        &[user_id, &req.hashes]
     ).await {
         Ok(rows) => {
             let existing_hashes: Vec<String> = rows.iter().map(|r| r.get(0)).collect();
@@ -477,6 +447,7 @@ async fn internal_check_images_exist(
 }
 
 async fn internal_check_videos_exist(
+    user_id: &Uuid,
     req: CheckVideosExistRequest,
     pool: web::Data<MainDbPool>,
 ) -> HttpResponse {
@@ -490,8 +461,8 @@ async fn internal_check_videos_exist(
     }
 
     match client.query(
-        "SELECT hash FROM videos WHERE deviceid = $1 AND hash = ANY($2) AND deleted_at IS NULL",
-        &[&req.device_id, &req.hashes]
+        "SELECT hash FROM videos WHERE user_id = $1 AND hash = ANY($2) AND deleted_at IS NULL",
+        &[user_id, &req.hashes]
     ).await {
         Ok(rows) => {
             let existing_hashes: Vec<String> = rows.iter().map(|r| r.get(0)).collect();
@@ -521,9 +492,13 @@ async fn internal_check_videos_exist(
 pub async fn check_images_exist_batch(
     req: web::Json<CheckImagesExistRequest>,
     pool: web::Data<MainDbPool>,
-    _claims: Claims,
+    claims: Claims,
 ) -> HttpResponse {
-    internal_check_images_exist(req.into_inner(), pool).await
+    let user_uuid = match Uuid::parse_str(&claims.user_id) {
+        Ok(u) => u,
+        Err(_) => return HttpResponse::Unauthorized().finish(),
+    };
+    internal_check_images_exist(&user_uuid, req.into_inner(), pool).await
 }
 
 #[utoipa::path(
@@ -543,9 +518,13 @@ pub async fn check_images_exist_batch(
 pub async fn check_videos_exist_batch(
     req: web::Json<CheckVideosExistRequest>,
     pool: web::Data<MainDbPool>,
-    _claims: Claims,
+    claims: Claims,
 ) -> HttpResponse {
-    internal_check_videos_exist(req.into_inner(), pool).await
+    let user_uuid = match Uuid::parse_str(&claims.user_id) {
+        Ok(u) => u,
+        Err(_) => return HttpResponse::Unauthorized().finish(),
+    };
+    internal_check_videos_exist(&user_uuid, req.into_inner(), pool).await
 }
 
 #[utoipa::path(
@@ -565,9 +544,13 @@ pub async fn check_videos_exist_batch(
 pub async fn batch_check_images(
     req: web::Json<CheckImagesExistRequest>,
     pool: web::Data<MainDbPool>,
-    _claims: Claims,
+    claims: Claims,
 ) -> HttpResponse {
-    internal_check_images_exist(req.into_inner(), pool).await
+    let user_uuid = match Uuid::parse_str(&claims.user_id) {
+        Ok(u) => u,
+        Err(_) => return HttpResponse::Unauthorized().finish(),
+    };
+    internal_check_images_exist(&user_uuid, req.into_inner(), pool).await
 }
 
 #[utoipa::path(
@@ -587,9 +570,13 @@ pub async fn batch_check_images(
 pub async fn batch_check_videos(
     req: web::Json<CheckVideosExistRequest>,
     pool: web::Data<MainDbPool>,
-    _claims: Claims,
+    claims: Claims,
 ) -> HttpResponse {
-    internal_check_videos_exist(req.into_inner(), pool).await
+    let user_uuid = match Uuid::parse_str(&claims.user_id) {
+        Ok(u) => u,
+        Err(_) => return HttpResponse::Unauthorized().finish(),
+    };
+    internal_check_videos_exist(&user_uuid, req.into_inner(), pool).await
 }
 
 #[utoipa::path(
@@ -626,49 +613,19 @@ pub async fn upload_video(
         let name = content_disposition.get_name().unwrap_or("");
 
         match name {
-            "hash" => {
-                let mut bytes = Vec::new();
-                while let Ok(Some(chunk)) = field.try_next().await {
-                    bytes.extend_from_slice(&chunk);
-                }
-                video_hash_opt = Some(String::from_utf8_lossy(&bytes).into_owned());
-            }
-            "name" => {
-                let mut bytes = Vec::new();
-                while let Ok(Some(chunk)) = field.try_next().await {
-                    bytes.extend_from_slice(&chunk);
-                }
-                video_name_opt = Some(String::from_utf8_lossy(&bytes).into_owned());
-            }
-            "device_id" => {
-                let mut bytes = Vec::new();
-                while let Ok(Some(chunk)) = field.try_next().await {
-                    bytes.extend_from_slice(&chunk);
-                }
-                device_id_opt = Some(String::from_utf8_lossy(&bytes).into_owned());
-            }
+            "hash" => video_hash_opt = Some(crate::media_utils::read_field_string(&mut field).await),
+            "name" => video_name_opt = Some(crate::media_utils::read_field_string(&mut field).await),
+            "device_id" => device_id_opt = Some(crate::media_utils::read_field_string(&mut field).await),
             "created_at" => {
-                let mut bytes = Vec::new();
-                while let Ok(Some(chunk)) = field.try_next().await {
-                    bytes.extend_from_slice(&chunk);
-                }
-                let s = String::from_utf8_lossy(&bytes);
+                let s = crate::media_utils::read_field_string(&mut field).await;
                 client_created_at_opt = chrono::DateTime::parse_from_rfc3339(s.trim())
                     .ok()
                     .map(|dt| dt.with_timezone(&Utc));
             }
             "video" => {
                 let temp_dir = std::path::Path::new(config.get_videos_dir()).join(".tmp");
-                tokio::fs::create_dir_all(&temp_dir).await.map_err(|_| actix_web::error::ErrorInternalServerError("Failed to create temp dir"))?;
-                let temp_path = temp_dir.join(format!("{}.tmp", uuid::Uuid::new_v4()));
-                let mut f = tokio::fs::File::create(&temp_path).await.map_err(|_| actix_web::error::ErrorInternalServerError("Failed to create temp file"))?;
-                
-                let mut hasher = Hasher::new();
-                while let Ok(Some(chunk)) = field.try_next().await {
-                    hasher.update(&chunk);
-                    f.write_all(&chunk).await.map_err(|_| actix_web::error::ErrorInternalServerError("Failed to write temp file"))?;
-                }
-                calculated_video_hash_opt = Some(hasher.finalize().to_hex().to_string());
+                let (temp_path, hash) = crate::media_utils::streaming_hash_to_temp(&mut field, &temp_dir).await?;
+                calculated_video_hash_opt = Some(hash);
                 video_temp_file_path = Some(temp_path);
             }
             _ => (),

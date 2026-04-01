@@ -164,7 +164,12 @@ impl MediaQueryBuilder {
             } else {
                 "video_hash"
             };
-            format!("INNER JOIN {} l ON t.hash = l.{} AND l.label_id = ${}", label_table, hash_col, label_id_param)
+            let user_col = if self.table == tables::IMAGES {
+                "image_user_id"
+            } else {
+                "video_user_id"
+            };
+            format!("INNER JOIN {} l ON t.hash = l.{} AND t.user_id = l.{} AND l.label_id = ${}", label_table, hash_col, user_col, label_id_param)
         } else {
             String::new()
         };
@@ -229,7 +234,12 @@ impl MediaQueryBuilder {
             } else {
                 "video_hash"
             };
-            format!("INNER JOIN {} l ON t.hash = l.{} AND l.label_id = ${}", label_table, hash_col, label_id_param)
+            let user_col = if self.table == tables::IMAGES {
+                "image_user_id"
+            } else {
+                "video_user_id"
+            };
+            format!("INNER JOIN {} l ON t.hash = l.{} AND t.user_id = l.{} AND l.label_id = ${}", label_table, hash_col, user_col, label_id_param)
         } else {
             String::new()
         };

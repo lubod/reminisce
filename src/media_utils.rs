@@ -1,9 +1,10 @@
 use actix_web::web;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
+use futures::TryStreamExt;
 use log::{error, info, warn};
 use std::path::PathBuf;
 use tokio::fs;
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::constants::media;
 use crate::db::MainDbPool;
@@ -87,6 +88,47 @@ pub async fn hash_file_blake3(path: &std::path::Path) -> Result<String, std::io:
     Ok(hasher.finalize().to_hex().to_string())
 }
 
+/// Stream a multipart field to a temp file while computing its BLAKE3 hash.
+/// Returns `(temp_path, blake3_hex_hash)`.
+pub async fn streaming_hash_to_temp(
+    field: &mut actix_multipart::Field,
+    temp_dir: &std::path::Path,
+) -> Result<(PathBuf, String), actix_web::Error> {
+    tokio::fs::create_dir_all(temp_dir).await
+        .map_err(|_| actix_web::error::ErrorInternalServerError("Failed to create temp dir"))?;
+    let temp_path = temp_dir.join(format!("{}.tmp", uuid::Uuid::new_v4()));
+    let mut f = tokio::fs::File::create(&temp_path).await
+        .map_err(|_| actix_web::error::ErrorInternalServerError("Failed to create temp file"))?;
+    let mut hasher = blake3::Hasher::new();
+    while let Ok(Some(chunk)) = field.try_next().await {
+        hasher.update(&chunk);
+        f.write_all(&chunk).await
+            .map_err(|_| actix_web::error::ErrorInternalServerError("Failed to write temp file"))?;
+    }
+    Ok((temp_path, hasher.finalize().to_hex().to_string()))
+}
+
+/// Drain a multipart text field into a `String`.
+pub async fn read_field_string(field: &mut actix_multipart::Field) -> String {
+    let mut bytes = Vec::new();
+    while let Ok(Some(chunk)) = field.try_next().await {
+        bytes.extend_from_slice(&chunk);
+    }
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
+/// Decode `image_data`, apply the given EXIF `orientation`, and re-encode as JPEG (quality 90).
+pub fn orient_image_to_jpeg(image_data: &[u8], orientation: u16) -> Result<Vec<u8>, String> {
+    let img = image::load_from_memory(image_data)
+        .map_err(|e| format!("Failed to decode image: {}", e))?;
+    let oriented = apply_orientation_to_image(img, orientation);
+    let mut output = std::io::Cursor::new(Vec::new());
+    oriented
+        .write_to(&mut output, image::ImageOutputFormat::Jpeg(90))
+        .map_err(|e| format!("Failed to encode oriented image: {}", e))?;
+    Ok(output.into_inner())
+}
+
 /// Generates a two-character subdirectory path from the first two characters of a hash.
 pub fn get_subdirectory_path(base_dir: &str, hash: &str) -> PathBuf {
     if hash.len() < 2 {
@@ -125,13 +167,13 @@ pub fn determine_video_type(video_name: &str) -> String {
 
 #[derive(serde::Serialize)]
 pub struct ExistenceCheckResult {
-    pub exists_for_deviceid: bool,
-    pub exists_without_deviceid: bool,
+    pub exists_for_user: bool,
+    pub exists_verified: bool,
 }
 
 pub async fn check_if_exists(
     hash: &str,
-    device_id: &str,
+    user_id: &uuid::Uuid,
     table: &str,
     pool: web::Data<MainDbPool>,
 ) -> Result<ExistenceCheckResult, tokio_postgres::Error> {
@@ -140,13 +182,13 @@ pub async fn check_if_exists(
     let query_string = match table {
         "images" => "
             SELECT
-                EXISTS(SELECT 1 FROM images WHERE deviceid = $1 AND hash = $2 AND deleted_at IS NULL) as exists_for_deviceid,
-                EXISTS(SELECT 1 FROM images WHERE hash = $2 AND verification_status = 1 AND deleted_at IS NULL) as exists_without_deviceid
+                EXISTS(SELECT 1 FROM images WHERE user_id = $1 AND hash = $2 AND deleted_at IS NULL) as exists_for_user,
+                EXISTS(SELECT 1 FROM images WHERE user_id = $1 AND hash = $2 AND verification_status = 1 AND deleted_at IS NULL) as exists_verified
         ",
         "videos" => "
             SELECT
-                EXISTS(SELECT 1 FROM videos WHERE deviceid = $1 AND hash = $2 AND deleted_at IS NULL) as exists_for_deviceid,
-                EXISTS(SELECT 1 FROM videos WHERE hash = $2 AND verification_status = 1 AND deleted_at IS NULL) as exists_without_deviceid
+                EXISTS(SELECT 1 FROM videos WHERE user_id = $1 AND hash = $2 AND deleted_at IS NULL) as exists_for_user,
+                EXISTS(SELECT 1 FROM videos WHERE user_id = $1 AND hash = $2 AND verification_status = 1 AND deleted_at IS NULL) as exists_verified
         ",
         _ => {
             warn!("Invalid table name provided to check_if_exists: {}", table);
@@ -154,10 +196,10 @@ pub async fn check_if_exists(
         }
     };
 
-    let row = client.query_one(query_string, &[&device_id, &hash]).await?;
+    let row = client.query_one(query_string, &[user_id, &hash]).await?;
     Ok(ExistenceCheckResult {
-        exists_for_deviceid: row.get(0),
-        exists_without_deviceid: row.get(1),
+        exists_for_user: row.get(0),
+        exists_verified: row.get(1),
     })
 }
 

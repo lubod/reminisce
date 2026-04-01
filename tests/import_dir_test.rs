@@ -1,5 +1,6 @@
+use actix_web::dev::{Service, ServiceResponse};
 use actix_web::{http, test, web, App};
-use reminisce::services::import_dir::import_directory;
+use reminisce::services::import_dir::{import_directory, get_import_status, ImportJobStore};
 use reminisce::test_utils::setup_test_database_with_instance;
 use serial_test::serial;
 use std::fs;
@@ -15,6 +16,7 @@ async fn test_import_directory_success() {
     common::init_log();
     let (pool, _test_db) = setup_test_database_with_instance().await;
     let config = common::utils::create_test_config();
+    let job_store: web::Data<ImportJobStore> = web::Data::new(std::sync::Mutex::new(std::collections::HashMap::new()));
 
     // Wrap pools
     let main_pool = common::utils::wrap_main_pool(pool.clone());
@@ -25,7 +27,9 @@ async fn test_import_directory_success() {
             .app_data(web::Data::new(main_pool.clone()))
             .app_data(web::Data::new(geotagging_pool.clone()))
             .app_data(web::Data::new(config.clone()))
+            .app_data(job_store.clone())
             .service(import_directory)
+            .service(get_import_status)
     ).await;
 
     // Create a temporary directory for import
@@ -55,9 +59,28 @@ async fn test_import_directory_success() {
 
     // Execute Request
     let response = test::call_service(&app, req).await;
-    assert_eq!(response.status(), http::StatusCode::OK);
+    assert_eq!(response.status(), http::StatusCode::ACCEPTED);
 
-    let result: serde_json::Value = test::read_body_json(response).await;
+    let start_res: serde_json::Value = test::read_body_json(response).await;
+    let job_id = start_res["job_id"].as_str().unwrap();
+
+    // Poll for completion
+    let mut result = serde_json::json!({});
+    for _ in 0..20 {
+        let poll_req = test::TestRequest::get()
+            .uri(&format!("/import_directory/status/{}", job_id))
+            .insert_header(("Authorization", format!("Bearer {}", token)))
+            .to_request();
+        let poll_resp = test::call_service(&app, poll_req).await;
+        let body = test::read_body(poll_resp).await;
+        result = serde_json::from_slice(&body).unwrap();
+        if matches!(result["status"].as_str(), Some("done") | Some("failed")) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+
+    assert_eq!(result["status"], "done");
     assert_eq!(result["scanned"], 1);
     assert_eq!(result["imported"], 1);
     assert_eq!(result["failed"], 0);
@@ -78,6 +101,7 @@ async fn test_import_directory_not_found() {
     common::init_log();
     let (pool, _test_db) = setup_test_database_with_instance().await;
     let config = common::utils::create_test_config();
+    let job_store: web::Data<ImportJobStore> = web::Data::new(std::sync::Mutex::new(std::collections::HashMap::new()));
 
     let main_pool = common::utils::wrap_main_pool(pool.clone());
     let geotagging_pool = common::utils::create_geotagging_pool().await;
@@ -87,7 +111,9 @@ async fn test_import_directory_not_found() {
             .app_data(web::Data::new(main_pool.clone()))
             .app_data(web::Data::new(geotagging_pool.clone()))
             .app_data(web::Data::new(config.clone()))
+            .app_data(job_store.clone())
             .service(import_directory)
+            .service(get_import_status)
     ).await;
 
     let token = common::utils::create_test_jwt_token().await;
@@ -113,6 +139,7 @@ async fn test_import_directory_uses_file_mtime_as_fallback() {
     common::init_log();
     let (pool, _test_db) = setup_test_database_with_instance().await;
     let config = common::utils::create_test_config();
+    let job_store: web::Data<ImportJobStore> = web::Data::new(std::sync::Mutex::new(std::collections::HashMap::new()));
 
     let main_pool = common::utils::wrap_main_pool(pool.clone());
     let geotagging_pool = common::utils::create_geotagging_pool().await;
@@ -122,7 +149,9 @@ async fn test_import_directory_uses_file_mtime_as_fallback() {
             .app_data(web::Data::new(main_pool.clone()))
             .app_data(web::Data::new(geotagging_pool.clone()))
             .app_data(web::Data::new(config.clone()))
+            .app_data(job_store.clone())
             .service(import_directory)
+            .service(get_import_status)
     ).await;
 
     let import_base_path = std::env::temp_dir().join(format!("reminisce_test_import_mtime_{}", Uuid::new_v4()));
@@ -150,9 +179,28 @@ async fn test_import_directory_uses_file_mtime_as_fallback() {
         .to_request();
 
     let response = test::call_service(&app, req).await;
-    assert_eq!(response.status(), http::StatusCode::OK);
+    assert_eq!(response.status(), http::StatusCode::ACCEPTED);
 
-    let result: serde_json::Value = test::read_body_json(response).await;
+    let start_res: serde_json::Value = test::read_body_json(response).await;
+    let job_id = start_res["job_id"].as_str().unwrap();
+
+    // Poll for completion
+    let mut result = serde_json::json!({});
+    for _ in 0..20 {
+        let poll_req = test::TestRequest::get()
+            .uri(&format!("/import_directory/status/{}", job_id))
+            .insert_header(("Authorization", format!("Bearer {}", token)))
+            .to_request();
+        let poll_resp = test::call_service(&app, poll_req).await;
+        let body = test::read_body(poll_resp).await;
+        result = serde_json::from_slice(&body).unwrap();
+        if matches!(result["status"].as_str(), Some("done") | Some("failed")) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+
+    assert_eq!(result["status"], "done");
     assert_eq!(result["imported"], 1, "Expected 1 imported file");
 
     // Verify created_at was set from mtime, not upload time

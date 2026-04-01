@@ -15,7 +15,6 @@ use crate::duplicate_worker::SharedDuplicateStatus;
 #[derive(Serialize, ToSchema, Clone)]
 pub struct DuplicateImage {
     pub hash: String,
-    pub deviceid: String,
     pub name: String,
     pub created_at: String,
     pub thumbnail_url: String,
@@ -147,7 +146,7 @@ async fn build_groups(
     let hash_refs: Vec<&str> = hashes.iter().map(|s| s.as_str()).collect();
     let meta_rows = if is_admin {
         client.query(
-            "SELECT DISTINCT ON (hash) hash, deviceid, name, created_at, \
+            "SELECT DISTINCT ON (hash) hash, name, created_at, \
                     aesthetic_score, sharpness_score, width, height, file_size_bytes \
              FROM images \
              WHERE hash = ANY($1) AND deleted_at IS NULL \
@@ -156,11 +155,10 @@ async fn build_groups(
         ).await?
     } else {
         client.query(
-            "SELECT DISTINCT ON (hash) hash, deviceid, name, created_at, \
+            "SELECT hash, name, created_at, \
                     aesthetic_score, sharpness_score, width, height, file_size_bytes \
              FROM images \
-             WHERE hash = ANY($1) AND user_id = $2 AND deleted_at IS NULL \
-             ORDER BY hash, added_at",
+             WHERE hash = ANY($1) AND user_id = $2 AND deleted_at IS NULL",
             &[&hash_refs, &user_uuid],
         ).await?
     };
@@ -168,18 +166,17 @@ async fn build_groups(
     let mut meta_map: HashMap<String, DuplicateImage> = HashMap::new();
     for row in &meta_rows {
         let hash: String = row.get(0);
-        let created_at: DateTime<Utc> = row.get(3);
+        let created_at: DateTime<Utc> = row.get(2);
         meta_map.insert(hash.clone(), DuplicateImage {
             thumbnail_url: format!("/api/thumbnail/{}", hash),
             hash,
-            deviceid: row.get(1),
-            name: row.get(2),
+            name: row.get(1),
             created_at: created_at.to_rfc3339(),
-            aesthetic_score: row.get(4),
-            sharpness_score: row.get(5),
-            width: row.get(6),
-            height: row.get(7),
-            file_size_bytes: row.get(8),
+            aesthetic_score: row.get(3),
+            sharpness_score: row.get(4),
+            width: row.get(5),
+            height: row.get(6),
+            file_size_bytes: row.get(7),
         });
     }
 
@@ -235,83 +232,9 @@ pub async fn get_duplicates(
 
     let threshold_f32 = threshold as f32;
 
-    // ── Phase 1: Exact duplicates (same hash, multiple devices/rows, same user) ──
-    let exact_hash_rows = if is_admin {
-        client.query(
-            "SELECT hash FROM images \
-             WHERE deleted_at IS NULL \
-             GROUP BY user_id, hash HAVING COUNT(*) > 1",
-            &[],
-        ).await
-    } else {
-        client.query(
-            "SELECT hash FROM images \
-             WHERE user_id = $1 AND deleted_at IS NULL \
-             GROUP BY hash HAVING COUNT(*) > 1",
-            &[&user_uuid],
-        ).await
-    }.map_err(|e| {
-        error!("get_duplicates: exact query failed: {}", e);
-        actix_web::error::ErrorInternalServerError("Database error")
-    })?;
-
-    let mut exact_groups: Vec<DuplicateGroup> = Vec::new();
-
-    if !exact_hash_rows.is_empty() {
-        let exact_hashes: Vec<String> = exact_hash_rows.iter().map(|r| r.get::<_, String>(0)).collect();
-        let exact_hash_refs: Vec<&str> = exact_hashes.iter().map(|s| s.as_str()).collect();
-
-        let detail_rows = if is_admin {
-            client.query(
-                "SELECT hash, deviceid, name, created_at, \
-                        aesthetic_score, sharpness_score, width, height, file_size_bytes \
-                 FROM images \
-                 WHERE hash = ANY($1) AND deleted_at IS NULL \
-                 ORDER BY hash, added_at",
-                &[&exact_hash_refs],
-            ).await
-        } else {
-            client.query(
-                "SELECT hash, deviceid, name, created_at, \
-                        aesthetic_score, sharpness_score, width, height, file_size_bytes \
-                 FROM images \
-                 WHERE hash = ANY($1) AND user_id = $2 AND deleted_at IS NULL \
-                 ORDER BY hash, added_at",
-                &[&exact_hash_refs, &user_uuid],
-            ).await
-        }.map_err(|e| {
-            error!("get_duplicates: exact detail query failed: {}", e);
-            actix_web::error::ErrorInternalServerError("Database error")
-        })?;
-
-        let mut by_hash: HashMap<String, Vec<DuplicateImage>> = HashMap::new();
-        for row in &detail_rows {
-            let hash: String = row.get(0);
-            let created_at: DateTime<Utc> = row.get(3);
-            by_hash.entry(hash.clone()).or_default().push(DuplicateImage {
-                thumbnail_url: format!("/api/thumbnail/{}", hash),
-                hash,
-                deviceid: row.get(1),
-                name: row.get(2),
-                created_at: created_at.to_rfc3339(),
-                aesthetic_score: row.get(4),
-                sharpness_score: row.get(5),
-                width: row.get(6),
-                height: row.get(7),
-                file_size_bytes: row.get(8),
-            });
-        }
-
-        for (_, images) in by_hash {
-            if images.len() >= 2 {
-                exact_groups.push(DuplicateGroup { similarity: 1.0, images });
-            }
-        }
-    }
-
     let mut pairs: Vec<(String, String, f32)> = Vec::new();
 
-    // ── Phase 2: Near-duplicates from pre-computed pairs table ──
+    // ── Near-duplicates from pre-computed pairs table ──
     let near_rows = if is_admin {
         client.query(
             "SELECT hash_a, hash_b, similarity \
@@ -335,8 +258,7 @@ pub async fn get_duplicates(
         pairs.push((row.get(0), row.get(1), row.get(2)));
     }
 
-    // Build near-dup groups and merge with exact groups
-    let mut all_groups = exact_groups;
+    let mut all_groups: Vec<DuplicateGroup> = Vec::new();
 
     if !pairs.is_empty() {
         let near_groups = build_groups(pairs, is_admin, user_uuid, &client)

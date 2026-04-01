@@ -24,9 +24,9 @@ CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 
 -- Create the tables if they don't exist (same as schema.sql)
 CREATE TABLE IF NOT EXISTS images (
-    deviceid VARCHAR(255) NOT NULL,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     hash VARCHAR(255) NOT NULL,
-    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    deviceid VARCHAR(255) NOT NULL, -- original upload device (informational; full history in media_sources)
     type VARCHAR(255),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     added_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS images (
     height INTEGER, -- Image height in pixels
     file_size_bytes INTEGER, -- File size in bytes
     quality_score_generated_at TIMESTAMPTZ, -- Timestamp when quality scores were computed
-    PRIMARY KEY (deviceid, hash)
+    PRIMARY KEY (user_id, hash)
 );
 
 CREATE INDEX IF NOT EXISTS idx_deviceid_type_created_at ON images(deviceid, type, created_at DESC);
@@ -107,7 +107,6 @@ ALTER TABLE images ADD COLUMN IF NOT EXISTS width INTEGER;
 ALTER TABLE images ADD COLUMN IF NOT EXISTS height INTEGER;
 ALTER TABLE images ADD COLUMN IF NOT EXISTS file_size_bytes INTEGER;
 ALTER TABLE images ADD COLUMN IF NOT EXISTS quality_score_generated_at TIMESTAMPTZ;
-ALTER TABLE videos ADD COLUMN IF NOT EXISTS file_size_bytes BIGINT;
 ALTER TABLE images ADD COLUMN IF NOT EXISTS duplicates_checked_at TIMESTAMPTZ;
 
 -- Pre-computed near-duplicate pairs (background worker populates this)
@@ -148,10 +147,23 @@ CREATE INDEX IF NOT EXISTS idx_starred_videos_user_id ON starred_videos(user_id)
 -- Composite covers the gallery LEFT JOIN: ON t.hash = s.hash AND s.user_id = $N
 CREATE INDEX IF NOT EXISTS idx_starred_videos_hash_user ON starred_videos(hash, user_id);
 
-CREATE TABLE IF NOT EXISTS videos (
-    deviceid VARCHAR(255) NOT NULL,
+CREATE TABLE IF NOT EXISTS media_sources (
+    id BIGSERIAL PRIMARY KEY,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     hash VARCHAR(255) NOT NULL,
-    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    media_type VARCHAR(10) NOT NULL CHECK (media_type IN ('image', 'video')),
+    device_id VARCHAR(255) NOT NULL,
+    uploaded_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (user_id, hash, device_id, media_type)
+);
+
+CREATE INDEX IF NOT EXISTS idx_media_sources_user_hash ON media_sources(user_id, hash);
+CREATE INDEX IF NOT EXISTS idx_media_sources_device ON media_sources(device_id);
+
+CREATE TABLE IF NOT EXISTS videos (
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    hash VARCHAR(255) NOT NULL,
+    deviceid VARCHAR(255) NOT NULL, -- original upload device (informational; full history in media_sources)
     type VARCHAR(255),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     added_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -167,7 +179,7 @@ CREATE TABLE IF NOT EXISTS videos (
     p2p_shard_hash VARCHAR(255), -- Root hash or manifest hash of the object in P2P network (Blake3).
     p2p_encryption_key BYTEA, -- 32-byte encryption key used for sharding (needed for re-sharding during rebalance)
     p2p_encrypted_size INTEGER, -- Size of the encrypted blob before erasure coding (needed for reconstruction)
-    PRIMARY KEY (deviceid, hash)
+    PRIMARY KEY (user_id, hash)
 );
 
 CREATE INDEX IF NOT EXISTS idx_video_deviceid_type_created_at ON videos(deviceid, type, created_at DESC);
@@ -229,7 +241,7 @@ WITH (m = 16, ef_construction = 64);
 CREATE TABLE IF NOT EXISTS faces (
     id BIGSERIAL PRIMARY KEY,
     image_hash VARCHAR(255) NOT NULL,
-    image_deviceid VARCHAR(255) NOT NULL,
+    image_user_id UUID NOT NULL,
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
 
     -- Face location (bounding box in original image coordinates)
@@ -251,11 +263,11 @@ CREATE TABLE IF NOT EXISTS faces (
     detected_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
     -- Foreign key to images table
-    FOREIGN KEY (image_deviceid, image_hash) REFERENCES images(deviceid, hash) ON DELETE CASCADE
+    FOREIGN KEY (image_user_id, image_hash) REFERENCES images(user_id, hash) ON DELETE CASCADE
 );
 
 -- Indices for faces table
-CREATE INDEX IF NOT EXISTS idx_faces_image ON faces(image_deviceid, image_hash);
+CREATE INDEX IF NOT EXISTS idx_faces_image ON faces(image_user_id, image_hash);
 CREATE INDEX IF NOT EXISTS idx_faces_user_id ON faces(user_id);
 CREATE INDEX IF NOT EXISTS idx_faces_person_id ON faces(person_id);
 -- Compound index for face clustering: WHERE user_id = $1 AND person_id IS NULL ORDER BY detected_at
@@ -325,29 +337,29 @@ CREATE INDEX IF NOT EXISTS idx_labels_user_id ON labels(user_id);
 -- Many-to-many relationship between images and labels
 CREATE TABLE IF NOT EXISTS image_labels (
     image_hash VARCHAR(255) NOT NULL,
-    image_deviceid VARCHAR(255) NOT NULL,
+    image_user_id UUID NOT NULL,
     label_id INTEGER REFERENCES labels(id) ON DELETE CASCADE,
-    PRIMARY KEY (image_hash, image_deviceid, label_id),
-    FOREIGN KEY (image_deviceid, image_hash) REFERENCES images(deviceid, hash) ON DELETE CASCADE
+    PRIMARY KEY (image_hash, image_user_id, label_id),
+    FOREIGN KEY (image_user_id, image_hash) REFERENCES images(user_id, hash) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_image_labels_label_id ON image_labels(label_id);
-CREATE INDEX IF NOT EXISTS idx_image_labels_image ON image_labels(image_deviceid, image_hash);
--- Composite for gallery label filter JOIN: ON t.hash = l.image_hash AND l.label_id = $N
+CREATE INDEX IF NOT EXISTS idx_image_labels_image ON image_labels(image_user_id, image_hash);
+-- Composite for gallery label filter JOIN: ON t.hash = l.image_hash AND t.user_id = l.image_user_id AND l.label_id = $N
 CREATE INDEX IF NOT EXISTS idx_image_labels_hash_label ON image_labels(image_hash, label_id);
 
 -- Many-to-many relationship between videos and labels
 CREATE TABLE IF NOT EXISTS video_labels (
     video_hash VARCHAR(255) NOT NULL,
-    video_deviceid VARCHAR(255) NOT NULL,
+    video_user_id UUID NOT NULL,
     label_id INTEGER REFERENCES labels(id) ON DELETE CASCADE,
-    PRIMARY KEY (video_hash, video_deviceid, label_id),
-    FOREIGN KEY (video_deviceid, video_hash) REFERENCES videos(deviceid, hash) ON DELETE CASCADE
+    PRIMARY KEY (video_hash, video_user_id, label_id),
+    FOREIGN KEY (video_user_id, video_hash) REFERENCES videos(user_id, hash) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_video_labels_label_id ON video_labels(label_id);
-CREATE INDEX IF NOT EXISTS idx_video_labels_video ON video_labels(video_deviceid, video_hash);
--- Composite for gallery label filter JOIN: ON t.hash = l.video_hash AND l.label_id = $N
+CREATE INDEX IF NOT EXISTS idx_video_labels_video ON video_labels(video_user_id, video_hash);
+-- Composite for gallery label filter JOIN: ON t.hash = l.video_hash AND t.user_id = l.video_user_id AND l.label_id = $N
 CREATE INDEX IF NOT EXISTS idx_video_labels_hash_label ON video_labels(video_hash, label_id);
 
 -- P2P Storage Nodes table
@@ -376,3 +388,4 @@ CREATE TABLE IF NOT EXISTS p2p_shards (
 CREATE INDEX IF NOT EXISTS idx_p2p_shards_file_hash ON p2p_shards(file_hash);
 CREATE INDEX IF NOT EXISTS idx_p2p_shards_node_id ON p2p_shards(node_id);
 
+ALTER TABLE videos ADD COLUMN IF NOT EXISTS file_size_bytes BIGINT;

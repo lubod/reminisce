@@ -48,38 +48,56 @@ async fn verify_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) ->
     // Only log if we are actually going to check DB (reduce log noise)
     // info!("System load: {:.2}...", ...); 
 
-    // First, get distinct device IDs that have files needing verification or missing thumbnails
-    let device_id_rows = client
+    // Get distinct user IDs that have files needing verification or missing thumbnails
+    let user_id_rows = client
         .query(
-            "SELECT DISTINCT deviceid FROM (\n                 SELECT deviceid FROM images \n                 WHERE deleted_at IS NULL AND (verification_status = 0 OR verification_status = -1 \n                 OR (verification_status = 1 AND (last_verified_at IS NULL OR last_verified_at < NOW() - INTERVAL '1 month'))\n                 OR (verification_status = 1 AND has_thumbnail = false))\n                 UNION ALL \n                 SELECT deviceid FROM videos \n                 WHERE deleted_at IS NULL AND (verification_status = 0 OR verification_status = -1 \n                 OR (verification_status = 1 AND (last_verified_at IS NULL OR last_verified_at < NOW() - INTERVAL '1 month'))\n                 OR (verification_status = 1 AND has_thumbnail = false))\n             ) AS devices_to_verify;",
+            "SELECT DISTINCT user_id FROM (\
+                 SELECT user_id FROM images \
+                 WHERE deleted_at IS NULL AND (verification_status = 0 OR verification_status = -1 \
+                 OR (verification_status = 1 AND (last_verified_at IS NULL OR last_verified_at < NOW() - INTERVAL '1 month'))\
+                 OR (verification_status = 1 AND has_thumbnail = false))\
+                 UNION ALL \
+                 SELECT user_id FROM videos \
+                 WHERE deleted_at IS NULL AND (verification_status = 0 OR verification_status = -1 \
+                 OR (verification_status = 1 AND (last_verified_at IS NULL OR last_verified_at < NOW() - INTERVAL '1 month'))\
+                 OR (verification_status = 1 AND has_thumbnail = false))\
+             ) AS users_to_verify",
             &[]
         ).await
-        .map_err(|e| format!("Failed to query distinct device IDs for verification: {}", e))?;
+        .map_err(|e| format!("Failed to query distinct user IDs for verification: {}", e))?;
 
-    if device_id_rows.is_empty() {
+    if user_id_rows.is_empty() {
         return Ok(false);
     }
 
-    info!("Found {} distinct device IDs with files to verify/process", device_id_rows.len());
+    info!("Found {} distinct users with files to verify/process", user_id_rows.len());
 
-    for device_id_row in device_id_rows {
-        let current_device_id: String = device_id_row.get(0);
-        // info!("Processing files for device ID: {}", current_device_id);
+    for user_id_row in user_id_rows {
+        let current_user_id: uuid::Uuid = user_id_row.get(0);
 
-        // Query for files (both images and videos) for the current device ID
+        // Query for files (both images and videos) for the current user
         let file_rows = client
             .query(
-                "(SELECT hash, ext, name, deviceid, 'image' as file_type, last_verified_at, has_thumbnail, created_at, orientation FROM images \n                 WHERE deviceid = $1 AND deleted_at IS NULL AND (verification_status = 0 OR verification_status = -1 \n                 OR (verification_status = 1 AND (last_verified_at IS NULL OR last_verified_at < NOW() - INTERVAL '1 month'))\n                 OR (verification_status = 1 AND has_thumbnail = false))) \n                 UNION ALL \n                 (SELECT hash, ext, name, deviceid, 'video' as file_type, last_verified_at, has_thumbnail, created_at, NULL::SMALLINT as orientation FROM videos \n                 WHERE deviceid = $1 AND deleted_at IS NULL AND (verification_status = 0 OR verification_status = -1 \n                 OR (verification_status = 1 AND (last_verified_at IS NULL OR last_verified_at < NOW() - INTERVAL '1 month'))\n                 OR (verification_status = 1 AND has_thumbnail = false))) \n                 ORDER BY last_verified_at ASC NULLS FIRST LIMIT $2;",
-                &[&current_device_id, &batch_size]
+                "(SELECT hash, ext, name, deviceid, 'image' as file_type, last_verified_at, has_thumbnail, created_at, orientation FROM images \
+                 WHERE user_id = $1 AND deleted_at IS NULL AND (verification_status = 0 OR verification_status = -1 \
+                 OR (verification_status = 1 AND (last_verified_at IS NULL OR last_verified_at < NOW() - INTERVAL '1 month'))\
+                 OR (verification_status = 1 AND has_thumbnail = false))) \
+                 UNION ALL \
+                 (SELECT hash, ext, name, deviceid, 'video' as file_type, last_verified_at, has_thumbnail, created_at, NULL::SMALLINT as orientation FROM videos \
+                 WHERE user_id = $1 AND deleted_at IS NULL AND (verification_status = 0 OR verification_status = -1 \
+                 OR (verification_status = 1 AND (last_verified_at IS NULL OR last_verified_at < NOW() - INTERVAL '1 month'))\
+                 OR (verification_status = 1 AND has_thumbnail = false))) \
+                 ORDER BY last_verified_at ASC NULLS FIRST LIMIT $2",
+                &[&current_user_id, &batch_size]
             ).await
-            .map_err(|e| format!("Failed to query files for verification for device {}: {}", current_device_id, e))?;
+            .map_err(|e| format!("Failed to query files for verification for user {}: {}", current_user_id, e))?;
 
         let total_files = file_rows.len();
         if total_files == 0 {
             continue;
         }
-        
-        info!("Found {} files to verify for device {}", total_files, current_device_id);
+
+        info!("Found {} files to verify for user {}", total_files, current_user_id);
 
         // Verification is I/O-bound (BLAKE3 hashing), use calculated concurrency
         let hash_verification_semaphore = Arc::new(Semaphore::new(limits.verification));
@@ -91,11 +109,12 @@ async fn verify_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) ->
             let hash: String = row.get(0);
             let ext: String = row.get(1);
             let _name: String = row.get(2);
-            let deviceid: String = row.get(3);
+            let deviceid: String = row.get(3); // kept for logging compatibility
             let file_type: String = row.get(4);
             let mut has_thumbnail: bool = row.get(6);
             let created_at: chrono::DateTime<Utc> = row.get(7);
             let orientation: Option<i16> = row.get(8); // NULL for videos
+            let user_id = current_user_id;
 
             let file_dir = if file_type == "image" { config.get_images_dir().to_string() } else { config.get_videos_dir().to_string() };
             let sub_dir_path = super::utils::get_subdirectory_path(&file_dir, &hash);
@@ -161,8 +180,8 @@ async fn verify_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) ->
                                 // Update verification status to -1 (failed)
                                 let table_name = if file_type == "image" { "images" } else { "videos" };
                                 let query =
-                                    format!("UPDATE {} SET last_verified_at = NOW(), verification_status = -1 WHERE hash = $1 AND deviceid = $2", table_name);
-                                if let Err(db_err) = client.execute(&query, &[&hash, &deviceid]).await {
+                                    format!("UPDATE {} SET last_verified_at = NOW(), verification_status = -1 WHERE hash = $1 AND user_id = $2", table_name);
+                                if let Err(db_err) = client.execute(&query, &[&hash, &user_id]).await {
                                     error!(
                                         "Failed to update verification_status for {} {}: {}",
                                         file_type,
@@ -213,8 +232,8 @@ async fn verify_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) ->
 
                         // Mark as verified immediately and update thumbnail status
                         let table_name = if file_type == "image" { "images" } else { "videos" };
-                        let query = format!("UPDATE {} SET last_verified_at = NOW(), verification_status = 1, has_thumbnail = $3 WHERE hash = $1 AND deviceid = $2", table_name);
-                        if let Err(e) = client.execute(&query, &[&hash, &deviceid, &has_thumbnail]).await {
+                        let query = format!("UPDATE {} SET last_verified_at = NOW(), verification_status = 1, has_thumbnail = $3 WHERE hash = $1 AND user_id = $2", table_name);
+                        if let Err(e) = client.execute(&query, &[&hash, &user_id, &has_thumbnail]).await {
                             error!("Failed to update verification_status for {} {}: {}", file_type, hash, e);
                         }
 
@@ -237,8 +256,8 @@ async fn verify_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) ->
                         // Update verification status to -1 (failed)
                         let table_name = if file_type == "image" { "images" } else { "videos" };
                         let query =
-                            format!("UPDATE {} SET last_verified_at = NOW(), verification_status = -1 WHERE hash = $1 AND deviceid = $2", table_name);
-                        if let Err(e) = client.execute(&query, &[&hash, &deviceid]).await {
+                            format!("UPDATE {} SET last_verified_at = NOW(), verification_status = -1 WHERE hash = $1 AND user_id = $2", table_name);
+                        if let Err(e) = client.execute(&query, &[&hash, &user_id]).await {
                             error!(
                                 "Failed to update verification_status for failed {} {}: {}",
                                 file_type,
@@ -254,8 +273,8 @@ async fn verify_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) ->
                     // Update verification status to -1 (failed)
                     let table_name = if file_type == "image" { "images" } else { "videos" };
                     let query =
-                        format!("UPDATE {} SET last_verified_at = NOW(), verification_status = -1 WHERE hash = $1 AND deviceid = $2", table_name);
-                    if let Err(db_err) = client.execute(&query, &[&hash, &deviceid]).await {
+                        format!("UPDATE {} SET last_verified_at = NOW(), verification_status = -1 WHERE hash = $1 AND user_id = $2", table_name);
+                    if let Err(db_err) = client.execute(&query, &[&hash, &user_id]).await {
                         error!(
                             "Failed to update verification_status for failed-to-open {} {}: {}",
                             file_type,
@@ -271,13 +290,13 @@ async fn verify_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) ->
         }
 
         // Wait for all tasks to complete
-        info!("Waiting for {} verification tasks to complete for device {}...", tasks.len(), current_device_id);
+        info!("Waiting for {} verification tasks to complete for user {}...", tasks.len(), current_user_id);
         for task in tasks {
             if let Err(e) = task.await {
                 error!("Verification task failed: {}", e);
             }
         }
-        info!("All verification tasks completed for device {}", current_device_id);
+        info!("All verification tasks completed for user {}", current_user_id);
     }
 
     Ok(true)

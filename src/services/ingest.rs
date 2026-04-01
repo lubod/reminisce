@@ -75,6 +75,31 @@ fn extract_exif_from_image(path: &Path) -> Option<serde_json::Value> {
     if map.is_empty() { None } else { Some(serde_json::Value::Object(map)) }
 }
 
+/// Return the subset of `hashes` that already exist for `user_id` in `table` (images or videos).
+/// Uses `ANY($2)` for a single round-trip regardless of batch size.
+pub async fn filter_existing_hashes(
+    hashes: &Vec<String>,
+    user_id: &Uuid,
+    table: &str,
+    pool: &Data<MainDbPool>,
+) -> std::collections::HashSet<String> {
+    if hashes.is_empty() {
+        return std::collections::HashSet::new();
+    }
+    let client = match pool.0.get().await {
+        Ok(c) => c,
+        Err(_) => return std::collections::HashSet::new(),
+    };
+    let query = format!(
+        "SELECT hash FROM {} WHERE user_id = $1 AND hash = ANY($2) AND deleted_at IS NULL",
+        table
+    );
+    match client.query(&query, &[user_id, hashes]).await {
+        Ok(rows) => rows.iter().map(|row| row.get::<_, String>(0)).collect(),
+        Err(_) => std::collections::HashSet::new(),
+    }
+}
+
 pub async fn process_image_file(
     temp_path: &Path,
     name: &str,
@@ -111,18 +136,26 @@ pub async fn process_image_file(
     let created_at = Utc::now();
 
     client.execute(
-        "INSERT INTO images (deviceid, hash, user_id, name, ext, created_at, added_at)
+        "INSERT INTO images (user_id, hash, deviceid, name, ext, created_at, added_at)
          VALUES ($1, $2, $3, $4, $5, $6, NOW())
-         ON CONFLICT (deviceid, hash) DO UPDATE SET deleted_at = NULL",
-        &[&device_id, &hash, user_id, &name, &ext, &created_at]
+         ON CONFLICT (user_id, hash) DO UPDATE SET deleted_at = NULL",
+        &[user_id, &hash, &device_id, &name, &ext, &created_at]
     ).await?;
+
+    // Track device upload history
+    let _ = client.execute(
+        "INSERT INTO media_sources (user_id, hash, media_type, device_id, uploaded_at)
+         VALUES ($1, $2, 'image', $3, NOW())
+         ON CONFLICT DO NOTHING",
+        &[user_id, &hash, &device_id],
+    ).await;
 
     // Store file size
     if let Ok(meta) = fs::metadata(&target_path) {
         let file_size = meta.len().min(i32::MAX as u64) as i32;
         let _ = client.execute(
-            "UPDATE images SET file_size_bytes = $1 WHERE deviceid = $2 AND hash = $3",
-            &[&file_size, &device_id, &hash],
+            "UPDATE images SET file_size_bytes = $1 WHERE user_id = $2 AND hash = $3",
+            &[&file_size, user_id, &hash],
         ).await;
     }
 
@@ -134,8 +167,8 @@ pub async fn process_image_file(
 
         // Store EXIF only if not already set (client metadata upload takes priority)
         let _ = client.execute(
-            "UPDATE images SET exif = $1 WHERE deviceid = $2 AND hash = $3 AND exif IS NULL",
-            &[&exif_str, &device_id, &hash],
+            "UPDATE images SET exif = $1 WHERE user_id = $2 AND hash = $3 AND exif IS NULL",
+            &[&exif_str, user_id, &hash],
         ).await;
 
         // Store orientation separately so thumbnail generation can avoid re-reading the file
@@ -144,8 +177,8 @@ pub async fn process_image_file(
             .and_then(|s| s.parse::<i16>().ok());
         if let Some(orient) = orientation {
             let _ = client.execute(
-                "UPDATE images SET orientation = $1 WHERE deviceid = $2 AND hash = $3 AND orientation IS NULL",
-                &[&orient, &device_id, &hash],
+                "UPDATE images SET orientation = $1 WHERE user_id = $2 AND hash = $3 AND orientation IS NULL",
+                &[&orient, user_id, &hash],
             ).await;
         }
 
@@ -165,9 +198,9 @@ pub async fn process_image_file(
     if let Some(dt) = best_date {
         let _ = client.execute(
             "UPDATE images SET created_at = $1 \
-             WHERE deviceid = $2 AND hash = $3 \
+             WHERE user_id = $2 AND hash = $3 \
              AND created_at > NOW() - INTERVAL '1 minute'",
-            &[&dt, &device_id, &hash],
+            &[&dt, user_id, &hash],
         ).await;
     }
 
@@ -176,8 +209,8 @@ pub async fn process_image_file(
         if let Some((lat, lon)) = utils::extract_gps_coordinates(exif_json) {
             let updated = client.execute(
                 "UPDATE images SET location = ST_SetSRID(ST_MakePoint($1, $2), 4326) \
-                 WHERE deviceid = $3 AND hash = $4 AND location IS NULL",
-                &[&lon, &lat, &device_id, &hash],
+                 WHERE user_id = $3 AND hash = $4 AND location IS NULL",
+                &[&lon, &lat, user_id, &hash],
             ).await.unwrap_or(0);
 
             if updated > 0 {
@@ -187,8 +220,8 @@ pub async fn process_image_file(
                     config.enable_external_geocoding_fallback,
                 ).await {
                     let _ = client.execute(
-                        "UPDATE images SET place = $1 WHERE deviceid = $2 AND hash = $3 AND place IS NULL",
-                        &[&place, &device_id, &hash],
+                        "UPDATE images SET place = $1 WHERE user_id = $2 AND hash = $3 AND place IS NULL",
+                        &[&place, user_id, &hash],
                     ).await;
                 }
             }
@@ -236,18 +269,26 @@ pub async fn process_video_file(
 
     let client = pool.0.get().await?;
     client.execute(
-        "INSERT INTO videos (deviceid, hash, user_id, name, ext, created_at, added_at)
+        "INSERT INTO videos (user_id, hash, deviceid, name, ext, created_at, added_at)
          VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
-         ON CONFLICT (deviceid, hash) DO UPDATE SET deleted_at = NULL",
-        &[&device_id, &hash, user_id, &name, &ext]
+         ON CONFLICT (user_id, hash) DO UPDATE SET deleted_at = NULL",
+        &[user_id, &hash, &device_id, &name, &ext]
     ).await?;
+
+    // Track device upload history
+    let _ = client.execute(
+        "INSERT INTO media_sources (user_id, hash, media_type, device_id, uploaded_at)
+         VALUES ($1, $2, 'video', $3, NOW())
+         ON CONFLICT DO NOTHING",
+        &[user_id, &hash, &device_id],
+    ).await;
 
     // Store file size
     if let Ok(meta) = fs::metadata(&target_path) {
         let file_size = meta.len() as i64;
         let _ = client.execute(
-            "UPDATE videos SET file_size_bytes = $1 WHERE deviceid = $2 AND hash = $3",
-            &[&file_size, &device_id, &hash],
+            "UPDATE videos SET file_size_bytes = $1 WHERE user_id = $2 AND hash = $3",
+            &[&file_size, user_id, &hash],
         ).await;
     }
 
@@ -258,9 +299,9 @@ pub async fn process_video_file(
     if let Some(dt) = best_date {
         let _ = client.execute(
             "UPDATE videos SET created_at = $1 \
-             WHERE deviceid = $2 AND hash = $3 \
+             WHERE user_id = $2 AND hash = $3 \
              AND created_at > NOW() - INTERVAL '1 minute'",
-            &[&dt, &device_id, &hash],
+            &[&dt, user_id, &hash],
         ).await;
     }
 

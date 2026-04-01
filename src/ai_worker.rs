@@ -134,7 +134,7 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
     if enable_embeddings {
         let embedding_rows = client
             .query(
-                "SELECT hash, ext, name, deviceid, 'image' as file_type, created_at FROM images
+                "SELECT hash, ext, name, user_id, 'image' as file_type, created_at FROM images
                  WHERE verification_status = 1 AND deleted_at IS NULL AND embedding IS NULL AND embedding_generated_at IS NULL
                    AND lower(ext) != 'svg'
                  LIMIT $1",
@@ -142,15 +142,15 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
             )
             .await
             .map_err(|e| format!("Failed to query for AI embedding tasks: {}", e))?;
-        
+
         for row in embedding_rows {
             let hash: String = row.get(0);
             let ext: String = row.get(1);
             let name: String = row.get(2);
-            let deviceid: String = row.get(3);
+            let user_id: uuid::Uuid = row.get(3);
             let file_type: String = row.get(4);
             let created_at: DateTime<Utc> = row.get(5);
-            all_tasks_to_process.insert(hash.clone(), (hash, ext, name, deviceid, file_type, None, false, true, false, false, created_at));
+            all_tasks_to_process.insert(hash.clone(), (hash, ext, name, user_id, file_type, false, true, false, false, created_at, None));
         }
     }
 
@@ -160,7 +160,7 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
         let room_left = total_batch_limit - all_tasks_to_process.len();
         let face_detection_rows = client
             .query(
-                "SELECT i.hash, i.ext, i.name, i.deviceid, i.user_id, 'image' as file_type, i.created_at
+                "SELECT i.hash, i.ext, i.name, i.user_id, 'image' as file_type, i.created_at, i.orientation
                  FROM images i
                  WHERE i.verification_status = 1
                    AND i.deleted_at IS NULL
@@ -176,17 +176,17 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
             let hash: String = row.get(0);
             let ext: String = row.get(1);
             let name: String = row.get(2);
-            let deviceid: String = row.get(3);
-            let user_id: uuid::Uuid = row.get(4);
-            let file_type: String = row.get(5);
-            let created_at: DateTime<Utc> = row.get(6);
-            
+            let user_id: uuid::Uuid = row.get(3);
+            let file_type: String = row.get(4);
+            let created_at: DateTime<Utc> = row.get(5);
+            let orientation: Option<i16> = row.try_get(6).unwrap_or(None);
+
             all_tasks_to_process.entry(hash.clone())
                 .and_modify(|e| {
-                    e.5 = Some(user_id);
-                    e.8 = true;
+                    e.7 = true;
+                    e.10 = orientation;
                 })
-                .or_insert((hash, ext, name, deviceid, file_type, Some(user_id), false, false, true, false, created_at));
+                .or_insert((hash, ext, name, user_id, file_type, false, false, true, false, created_at, orientation));
         }
     }
 
@@ -196,7 +196,7 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
         let room_left = total_batch_limit - all_tasks_to_process.len();
         let description_rows = client
             .query(
-                "SELECT hash, ext, name, deviceid, 'image' as file_type, created_at FROM images
+                "SELECT hash, ext, name, user_id, 'image' as file_type, created_at FROM images
                  WHERE verification_status = 1 AND deleted_at IS NULL AND description IS NULL
                    AND lower(ext) != 'svg'
                  LIMIT $1",
@@ -209,13 +209,13 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
             let hash: String = row.get(0);
             let ext: String = row.get(1);
             let name: String = row.get(2);
-            let deviceid: String = row.get(3);
+            let user_id: uuid::Uuid = row.get(3);
             let file_type: String = row.get(4);
             let created_at: DateTime<Utc> = row.get(5);
-            
+
             all_tasks_to_process.entry(hash.clone())
-                .and_modify(|e| e.6 = true)
-                .or_insert((hash, ext, name, deviceid, file_type, None, true, false, false, false, created_at));
+                .and_modify(|e| e.5 = true)
+                .or_insert((hash, ext, name, user_id, file_type, true, false, false, false, created_at, None));
         }
     }
 
@@ -225,7 +225,7 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
         let room_left = total_batch_limit - all_tasks_to_process.len();
         let quality_rows = client
             .query(
-                "SELECT hash, ext, name, deviceid, 'image' as file_type, created_at FROM images
+                "SELECT hash, ext, name, user_id, 'image' as file_type, created_at FROM images
                  WHERE verification_status = 1
                    AND deleted_at IS NULL
                    AND embedding IS NOT NULL
@@ -241,13 +241,13 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
             let hash: String = row.get(0);
             let ext: String = row.get(1);
             let name: String = row.get(2);
-            let deviceid: String = row.get(3);
+            let user_id: uuid::Uuid = row.get(3);
             let file_type: String = row.get(4);
             let created_at: DateTime<Utc> = row.get(5);
 
             all_tasks_to_process.entry(hash.clone())
-                .and_modify(|e| e.9 = true)
-                .or_insert((hash, ext, name, deviceid, file_type, None, false, false, false, true, created_at));
+                .and_modify(|e| e.8 = true)
+                .or_insert((hash, ext, name, user_id, file_type, false, false, false, true, created_at, None));
         }
     }
 
@@ -276,7 +276,7 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
     let users_with_new_faces_clone = users_with_new_faces.clone();
 
     stream::iter(tasks_to_process)
-        .for_each_concurrent(concurrent_limit, move |(hash, ext, _name, deviceid, file_type, user_id, process_description, process_embedding, process_faces, process_quality, created_at)| {
+        .for_each_concurrent(concurrent_limit, move |(hash, ext, _name, user_id, file_type, process_description, process_embedding, process_faces, process_quality, created_at, db_orientation)| {
             let file_dir = if file_type == "image" { config.get_images_dir().to_string() } else { config.get_videos_dir().to_string() };
             let sub_dir_path = super::utils::get_subdirectory_path(&file_dir, &hash);
             let file_path = sub_dir_path.join(format!("{}.{}", hash, ext));
@@ -313,8 +313,8 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
                             AI_DESCRIPTION_PROCESSING_DELAY.observe(delay_secs);
                             info!("Got AI description for {} {} (took {:.2}s): {}", file_type, hash, duration.as_secs_f64(), desc);
                             let table_name = if file_type == "image" { "images" } else { "videos" };
-                            let query = format!("UPDATE {} SET description = $1 WHERE hash = $2 AND deviceid = $3", table_name);
-                            if let Err(e) = client.execute(&query, &[&desc, &hash, &deviceid]).await {
+                            let query = format!("UPDATE {} SET description = $1 WHERE hash = $2 AND user_id = $3", table_name);
+                            if let Err(e) = client.execute(&query, &[&desc, &hash, &user_id]).await {
                                 error!("Failed to update description for {} {}: {}", file_type, hash, e);
                             }
                         }
@@ -327,8 +327,8 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
                             // Mark permanent failures (400 Bad Request) so they aren't retried
                             if e.contains("400 Bad Request") {
                                 let table_name = if file_type == "image" { "images" } else { "videos" };
-                                let query = format!("UPDATE {} SET description = $1 WHERE hash = $2 AND deviceid = $3", table_name);
-                                let _ = client.execute(&query, &[&"[skipped]", &hash, &deviceid]).await;
+                                let query = format!("UPDATE {} SET description = $1 WHERE hash = $2 AND user_id = $3", table_name);
+                                let _ = client.execute(&query, &[&"[skipped]", &hash, &user_id]).await;
                             }
                         }
                     }
@@ -340,7 +340,7 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
                     let _emb_permit = emb_sem_clone.acquire().await.unwrap();
                     info!("Starting embedding generation for image: {}", hash);
                     let start_time = Instant::now();
-                    match generate_and_store_embedding(&hash, &file_path, &deviceid, &config_clone, &client).await {
+                    match generate_and_store_embedding(&hash, &file_path, &user_id, &config_clone, &client).await {
                         Ok(_) => {
                             let duration = start_time.elapsed();
                             EMBEDDING_DURATION.observe(duration.as_secs_f64());
@@ -356,8 +356,8 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
                             // Mark permanent failures (400 Bad Request) so they aren't retried
                             if e.contains("400 Bad Request") {
                                 let _ = client.execute(
-                                    "UPDATE images SET embedding_generated_at = NOW() WHERE hash = $1 AND deviceid = $2",
-                                    &[&hash, &deviceid],
+                                    "UPDATE images SET embedding_generated_at = NOW() WHERE hash = $1 AND user_id = $2",
+                                    &[&hash, &user_id],
                                 ).await;
                             }
                         }
@@ -366,47 +366,45 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
                 }
 
                 if file_type == "image" && process_faces {
-                    if let Some(uid) = user_id {
-                        // Acquire permit in scope to auto-release when done
-                        let _face_permit = face_sem_clone.acquire().await.unwrap();
-                        info!("Starting face detection for image: {}", hash);
-                        let start_time = Instant::now();
-                        match process_face_detection(&file_path, &hash, &deviceid, &uid, &config_clone, &client).await {
-                            Ok(count) => {
-                                let duration = start_time.elapsed();
-                                FACE_DETECTION_DURATION.observe(duration.as_secs_f64());
-                                FACE_DETECTION_SUCCESS_TOTAL.inc();
-                                FACE_DETECTION_PROCESSING_DELAY.observe(delay_secs);
-                                FACES_DETECTED_TOTAL.inc_by(count as u64);
-                                info!("Detected and stored {} faces for image {} (took {:.2}s)", count, hash, duration.as_secs_f64());
-                                // Mark image as processed (even if 0 faces found)
-                                if let Err(e) = client.execute(
-                                    "UPDATE images SET face_detection_completed_at = NOW() WHERE hash = $1 AND deviceid = $2",
-                                    &[&hash, &deviceid]
-                                ).await {
-                                    error!("Failed to mark face detection complete for image {}: {}", hash, e);
-                                }
-                                // Mark user for batch clustering if faces were found
-                                if count > 0 {
-                                    users_set_clone.lock().await.insert(uid);
-                                }
-                            },
-                            Err(e) => {
-                                let duration = start_time.elapsed();
-                                FACE_DETECTION_DURATION.observe(duration.as_secs_f64());
-                                FACE_DETECTION_FAILURES_TOTAL.inc();
-                                error!("Failed face detection for image {} (took {:.2}s): {}", hash, duration.as_secs_f64(), e);
-                                // Still mark as processed to avoid retry loops
-                                if let Err(e) = client.execute(
-                                    "UPDATE images SET face_detection_completed_at = NOW() WHERE hash = $1 AND deviceid = $2",
-                                    &[&hash, &deviceid]
-                                ).await {
-                                    error!("Failed to mark face detection complete for image {}: {}", hash, e);
-                                }
+                    // Acquire permit in scope to auto-release when done
+                    let _face_permit = face_sem_clone.acquire().await.unwrap();
+                    info!("Starting face detection for image: {}", hash);
+                    let start_time = Instant::now();
+                    match process_face_detection(&file_path, &hash, &user_id, db_orientation, &config_clone, &client).await {
+                        Ok(count) => {
+                            let duration = start_time.elapsed();
+                            FACE_DETECTION_DURATION.observe(duration.as_secs_f64());
+                            FACE_DETECTION_SUCCESS_TOTAL.inc();
+                            FACE_DETECTION_PROCESSING_DELAY.observe(delay_secs);
+                            FACES_DETECTED_TOTAL.inc_by(count as u64);
+                            info!("Detected and stored {} faces for image {} (took {:.2}s)", count, hash, duration.as_secs_f64());
+                            // Mark image as processed (even if 0 faces found)
+                            if let Err(e) = client.execute(
+                                "UPDATE images SET face_detection_completed_at = NOW() WHERE hash = $1 AND user_id = $2",
+                                &[&hash, &user_id]
+                            ).await {
+                                error!("Failed to mark face detection complete for image {}: {}", hash, e);
+                            }
+                            // Mark user for batch clustering if faces were found
+                            if count > 0 {
+                                users_set_clone.lock().await.insert(user_id);
+                            }
+                        },
+                        Err(e) => {
+                            let duration = start_time.elapsed();
+                            FACE_DETECTION_DURATION.observe(duration.as_secs_f64());
+                            FACE_DETECTION_FAILURES_TOTAL.inc();
+                            error!("Failed face detection for image {} (took {:.2}s): {}", hash, duration.as_secs_f64(), e);
+                            // Still mark as processed to avoid retry loops
+                            if let Err(e) = client.execute(
+                                "UPDATE images SET face_detection_completed_at = NOW() WHERE hash = $1 AND user_id = $2",
+                                &[&hash, &user_id]
+                            ).await {
+                                error!("Failed to mark face detection complete for image {}: {}", hash, e);
                             }
                         }
-                        // _face_permit automatically dropped here
                     }
+                    // _face_permit automatically dropped here
                 }
 
                 if file_type == "image" && process_quality {
@@ -424,17 +422,17 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
                                             let _ = client.execute(
                                                 "UPDATE images SET aesthetic_score=$1, sharpness_score=$2, width=$3, height=$4, \
                                                  file_size_bytes=$5, quality_score_generated_at=NOW() \
-                                                 WHERE hash=$6 AND deviceid=$7",
+                                                 WHERE hash=$6 AND user_id=$7",
                                                 &[&q.aesthetic_score, &q.sharpness_score, &q.width, &q.height,
-                                                  &file_size, &hash, &deviceid],
+                                                  &file_size, &hash, &user_id],
                                             ).await;
                                             info!("Quality scored image {} (aesthetic={:.1}, sharpness={:.0})", hash, q.aesthetic_score, q.sharpness_score);
                                         }
                                         Err(e) if e.contains("400") => {
                                             // Permanent failure — mark done to avoid retry
                                             let _ = client.execute(
-                                                "UPDATE images SET quality_score_generated_at=NOW() WHERE hash=$1 AND deviceid=$2",
-                                                &[&hash, &deviceid],
+                                                "UPDATE images SET quality_score_generated_at=NOW() WHERE hash=$1 AND user_id=$2",
+                                                &[&hash, &user_id],
                                             ).await;
                                         }
                                         Err(e) => {
@@ -544,7 +542,7 @@ async fn get_image_description(
 async fn generate_and_store_embedding(
     hash: &str,
     file_path: &PathBuf,
-    deviceid: &str,
+    user_id: &uuid::Uuid,
     config: &Config,
     client: &tokio_postgres::Client,
 ) -> Result<(), String> {
@@ -558,8 +556,8 @@ async fn generate_and_store_embedding(
 
     client
         .execute(
-            "UPDATE images SET embedding = $1, embedding_generated_at = NOW() WHERE hash = $2 AND deviceid = $3",
-            &[&embedding, &hash, &deviceid],
+            "UPDATE images SET embedding = $1, embedding_generated_at = NOW() WHERE hash = $2 AND user_id = $3",
+            &[&embedding, &hash, user_id],
         )
         .await
         .map_err(|e| format!("Failed to store embedding: {}", e))?;
@@ -568,29 +566,11 @@ async fn generate_and_store_embedding(
     Ok(())
 }
 
-/// Apply EXIF orientation to image bytes and return correctly oriented JPEG bytes
-fn apply_exif_orientation(image_data: &[u8]) -> Result<Vec<u8>, String> {
-    use std::io::Cursor;
-
-    let img = image::load_from_memory(image_data)
-        .map_err(|e| format!("Failed to decode image: {}", e))?;
-
-    let orientation = crate::media_utils::read_exif_orientation_from_bytes(image_data).unwrap_or(1);
-    let oriented = crate::media_utils::apply_orientation_to_image(img, orientation);
-
-    let mut output = Cursor::new(Vec::new());
-    oriented
-        .write_to(&mut output, image::ImageOutputFormat::Jpeg(90))
-        .map_err(|e| format!("Failed to encode oriented image: {}", e))?;
-
-    Ok(output.into_inner())
-}
-
 async fn process_face_detection(
     file_path: &PathBuf,
     hash: &str,
-    deviceid: &str,
     user_id: &uuid::Uuid,
+    db_orientation: Option<i16>,
     config: &Config,
     client: &tokio_postgres::Client,
 ) -> Result<usize, String> {
@@ -599,10 +579,10 @@ async fn process_face_detection(
     let raw_image_data = tokio::fs::read(file_path).await
         .map_err(|e| format!("Failed to read image: {}", e))?;
 
-    // Apply EXIF orientation before face detection
-    // This ensures faces are correctly oriented for detection and bbox coordinates match the oriented image
+    // Apply orientation using the DB-stored value — avoids re-parsing EXIF from bytes.
+    let orientation = db_orientation.unwrap_or(1) as u16;
     let oriented_image_data = actix_web::web::block(move || {
-        apply_exif_orientation(&raw_image_data)
+        crate::media_utils::orient_image_to_jpeg(&raw_image_data, orientation)
     }).await
         .map_err(|e| format!("Blocking task failed: {}", e))?
         .map_err(|e| format!("Failed to apply orientation: {}", e))?;
@@ -634,7 +614,7 @@ async fn process_face_detection(
     // relative to the original so get_face_thumbnail can crop correctly.
     let faces = scale_bboxes_to_original(faces, orig_w, orig_h, FACE_DET_MAX_DIM);
 
-    crate::services::face_detection::store_faces(hash, deviceid, user_id, faces, client).await
+    crate::services::face_detection::store_faces(hash, user_id, faces, client).await
 }
 
 /// Scale face bbox coordinates from detection-image space back to original image space.

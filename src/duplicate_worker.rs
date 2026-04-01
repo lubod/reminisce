@@ -115,7 +115,7 @@ async fn process_batch(
     // Fetch a batch of unchecked images
     let batch = client
         .query(
-            "SELECT hash, deviceid, user_id, embedding \
+            "SELECT hash, user_id, embedding \
              FROM images \
              WHERE duplicates_checked_at IS NULL \
                AND embedding IS NOT NULL \
@@ -132,9 +132,8 @@ async fn process_batch(
 
     for row in &batch {
         let hash: String = row.get(0);
-        let deviceid: String = row.get(1);
-        let user_id: uuid::Uuid = row.get(2);
-        let embedding: pgvector::Vector = row.get(3);
+        let user_id: uuid::Uuid = row.get(1);
+        let embedding: pgvector::Vector = row.get(2);
 
         // HNSW search: nearest neighbors for this image within the same user's library
         let neighbors = match client
@@ -157,8 +156,8 @@ async fn process_batch(
                 // Mark as checked so we don't retry broken rows forever
                 let _ = client
                     .execute(
-                        "UPDATE images SET duplicates_checked_at = NOW() WHERE hash = $1 AND deviceid = $2",
-                        &[&hash, &deviceid],
+                        "UPDATE images SET duplicates_checked_at = NOW() WHERE hash = $1 AND user_id = $2",
+                        &[&hash, &user_id],
                     )
                     .await;
                 continue;
@@ -199,8 +198,8 @@ async fn process_batch(
         // Mark image as checked
         if let Err(e) = client
             .execute(
-                "UPDATE images SET duplicates_checked_at = NOW() WHERE hash = $1 AND deviceid = $2",
-                &[&hash, &deviceid],
+                "UPDATE images SET duplicates_checked_at = NOW() WHERE hash = $1 AND user_id = $2",
+                &[&hash, &user_id],
             )
             .await
         {

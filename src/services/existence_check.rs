@@ -15,6 +15,7 @@ use crate::db::MainDbPool;
 pub struct ImageCheckQuery {
     hash: String,
     #[serde(default = "default_device_id")]
+    #[allow(dead_code)]
     device_id: String,
 }
 
@@ -26,6 +27,7 @@ pub struct ImageCheckQuery {
 pub struct VideoCheckQuery {
     hash: String,
     #[serde(default = "default_device_id")]
+    #[allow(dead_code)]
     device_id: String,
 }
 
@@ -60,7 +62,7 @@ pub async fn check_image_exists(
     pool: web::Data<MainDbPool>,
     config: web::Data<Config>
 ) -> HttpResponse {
-    let _claims = match
+    let claims = match
         utils::authenticate_request(&req, "check_image_exists", config.get_api_key())
     {
         Ok(claims) => claims,
@@ -69,17 +71,22 @@ pub async fn check_image_exists(
         }
     };
 
+    let user_uuid = match utils::parse_user_uuid(&claims.user_id) {
+        Ok(u) => u,
+        Err(_) => return HttpResponse::Unauthorized().finish(),
+    };
+
     let hash_to_find = &query.hash;
-    let check_result = match utils::check_if_exists(hash_to_find, &query.device_id, "images", pool).await {
+    let check_result = match utils::check_if_exists(hash_to_find, &user_uuid, "images", pool).await {
         Ok(result) => result,
         Err(e) => {
             error!("Failed to check image existence: {}", e);
             return HttpResponse::InternalServerError().json("Failed to check image existence");
         }
     };
-    let response_data = ExistenceResponse { 
-        exists_without_deviceid: check_result.exists_without_deviceid,
-        exists: check_result.exists_for_deviceid
+    let response_data = ExistenceResponse {
+        exists_without_deviceid: check_result.exists_verified,
+        exists: check_result.exists_for_user
     };
     HttpResponse::Ok().json(response_data)
 }
@@ -101,7 +108,7 @@ pub async fn check_video_exists(
     pool: web::Data<MainDbPool>,
     config: web::Data<Config>
 ) -> HttpResponse {
-    let _claims = match
+    let claims = match
         utils::authenticate_request(&req, "check_video_exists", config.get_api_key())
     {
         Ok(claims) => claims,
@@ -110,17 +117,22 @@ pub async fn check_video_exists(
         }
     };
 
+    let user_uuid = match utils::parse_user_uuid(&claims.user_id) {
+        Ok(u) => u,
+        Err(_) => return HttpResponse::Unauthorized().finish(),
+    };
+
     let hash_to_find = &query.hash;
-    let check_result = match utils::check_if_exists(hash_to_find, &query.device_id, "videos", pool).await {
+    let check_result = match utils::check_if_exists(hash_to_find, &user_uuid, "videos", pool).await {
         Ok(result) => result,
         Err(e) => {
             error!("Failed to check video existence: {}", e);
             return HttpResponse::InternalServerError().json("Failed to check video existence");
         }
     };
-    let response_data = ExistenceResponse { 
-        exists_without_deviceid: check_result.exists_without_deviceid,
-        exists: check_result.exists_for_deviceid
+    let response_data = ExistenceResponse {
+        exists_without_deviceid: check_result.exists_verified,
+        exists: check_result.exists_for_user
     };
     HttpResponse::Ok().json(response_data)
 }

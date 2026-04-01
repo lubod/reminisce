@@ -71,7 +71,6 @@ pub async fn detect_faces(
 /// Store detected faces in the database
 pub async fn store_faces(
     hash: &str,
-    deviceid: &str,
     user_id: &uuid::Uuid,
     faces: Vec<(Vec<i32>, Vector, f32)>,
     client: &tokio_postgres::Client,
@@ -85,10 +84,10 @@ pub async fn store_faces(
 
         let result = client
             .execute(
-                "INSERT INTO faces (image_hash, image_deviceid, user_id, bbox_x, bbox_y, bbox_width, bbox_height, embedding, confidence)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                "INSERT INTO faces (image_hash, image_user_id, user_id, bbox_x, bbox_y, bbox_width, bbox_height, embedding, confidence)
+                 VALUES ($1, $2, $2, $3, $4, $5, $6, $7, $8)
                  ON CONFLICT DO NOTHING",
-                &[&hash, &deviceid, &user_id, &bbox[0], &bbox[1], &bbox[2], &bbox[3], &embedding, &confidence],
+                &[&hash, &user_id, &bbox[0], &bbox[1], &bbox[2], &bbox[3], &embedding, &confidence],
             )
             .await
             .map_err(|e| format!("Failed to store face: {}", e))?;
@@ -98,7 +97,7 @@ pub async fn store_faces(
         }
     }
 
-    info!("Stored {} faces for image {} (device: {})", stored_count, hash, deviceid);
+    info!("Stored {} faces for image {}", stored_count, hash);
     Ok(stored_count)
 }
 

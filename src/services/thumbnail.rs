@@ -81,10 +81,10 @@ pub async fn get_face_thumbnail(
     // Query face details, extension, and orientation in one round-trip
     let row = client
         .query_opt(
-            "SELECT f.image_hash, f.image_deviceid, f.bbox_x, f.bbox_y, f.bbox_width, f.bbox_height,
+            "SELECT f.image_hash, f.bbox_x, f.bbox_y, f.bbox_width, f.bbox_height,
                     i.ext, i.orientation
              FROM faces f
-             JOIN images i ON f.image_hash = i.hash AND f.image_deviceid = i.deviceid
+             JOIN images i ON f.image_hash = i.hash AND f.image_user_id = i.user_id
              WHERE f.id = $1 AND i.deleted_at IS NULL AND (i.user_id = $2 OR $3 = 'admin')
              LIMIT 1",
             &[&face_id, &user_uuid, &claims.role]
@@ -97,13 +97,12 @@ pub async fn get_face_thumbnail(
 
     if let Some(row) = row {
         let image_hash: String = row.get(0);
-        let _device_id: String = row.get(1);
-        let x: i32 = row.get(2);
-        let y: i32 = row.get(3);
-        let w: i32 = row.get(4);
-        let h: i32 = row.get(5);
-        let ext: String = row.get::<_, Option<String>>(6).unwrap_or_else(|| "jpg".to_string());
-        let stored_orientation: Option<i16> = row.get(7);
+        let x: i32 = row.get(1);
+        let y: i32 = row.get(2);
+        let w: i32 = row.get(3);
+        let h: i32 = row.get(4);
+        let ext: String = row.get::<_, Option<String>>(5).unwrap_or_else(|| "jpg".to_string());
+        let stored_orientation: Option<i16> = row.get(6);
 
         // Find the image file
         let sub_dir_path = utils::get_subdirectory_path(config.get_images_dir(), &image_hash);

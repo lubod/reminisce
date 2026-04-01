@@ -636,7 +636,6 @@ pub struct TrashItem {
     responses(
         (status = 200, description = "List of deleted media"),
         (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Forbidden (Admin only)"),
         (status = 500, description = "Internal server error")
     )
 )]
@@ -651,22 +650,19 @@ pub async fn get_trash(
         Err(response) => return Ok(response),
     };
 
-    if claims.role != "admin" {
-        return Ok(HttpResponse::Forbidden().json(serde_json::json!({"status": "error", "message": "Only admins can view trash."})));
-    }
-
+    let user_uuid = utils::parse_user_uuid(&claims.user_id)?;
     let client = utils::get_db_client(&pool.0).await?;
 
     let rows = client
         .query(
             "SELECT hash, name, created_at, ext, COALESCE(type, ''), deviceid, deleted_at, 'image' as media_type \
-             FROM images WHERE deleted_at IS NOT NULL \
+             FROM images WHERE user_id = $1 AND deleted_at IS NOT NULL \
              UNION ALL \
              SELECT hash, name, created_at, ext, COALESCE(type, ''), deviceid, deleted_at, 'video' as media_type \
-             FROM videos WHERE deleted_at IS NOT NULL \
+             FROM videos WHERE user_id = $1 AND deleted_at IS NOT NULL \
              ORDER BY deleted_at DESC \
              LIMIT 200",
-            &[]
+            &[&user_uuid]
         ).await
         .map_err(|e| {
             error!("Failed to query trash: {}", e);
@@ -688,18 +684,19 @@ pub async fn get_trash(
     Ok(HttpResponse::Ok().json(items))
 }
 
-/// Shared implementation for soft-restoring images or videos (admin only).
+/// Shared implementation for soft-restoring images or videos.
 async fn soft_restore_media(
     pool: &deadpool_postgres::Pool,
     table: &str,
     hash: &str,
+    user_id: &uuid::Uuid,
 ) -> Result<HttpResponse, actix_web::Error> {
     let client = utils::get_db_client(pool).await?;
 
     let result = client
         .execute(
-            &format!("UPDATE {} SET deleted_at = NULL WHERE hash = $1 AND deleted_at IS NOT NULL", table),
-            &[&hash]
+            &format!("UPDATE {} SET deleted_at = NULL WHERE hash = $1 AND user_id = $2 AND deleted_at IS NOT NULL", table),
+            &[&hash, user_id]
         ).await
         .map_err(|e| {
             error!("Failed to restore {}: {}", table, e);
@@ -724,7 +721,6 @@ async fn soft_restore_media(
     responses(
         (status = 200, description = "Image restored"),
         (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Forbidden (Admin only)"),
         (status = 404, description = "Image not found or not deleted"),
         (status = 500, description = "Internal server error")
     )
@@ -741,12 +737,9 @@ pub async fn restore_image(
         Err(response) => return Ok(response),
     };
 
-    if claims.role != "admin" {
-        return Ok(HttpResponse::Forbidden().json(serde_json::json!({"status": "error", "message": "Only admins can restore media."})));
-    }
-
+    let user_uuid = utils::parse_user_uuid(&claims.user_id)?;
     let hash = path.into_inner();
-    soft_restore_media(&pool.0, "images", &hash).await
+    soft_restore_media(&pool.0, "images", &hash, &user_uuid).await
 }
 
 #[utoipa::path(
@@ -755,7 +748,6 @@ pub async fn restore_image(
     responses(
         (status = 200, description = "Video restored"),
         (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Forbidden (Admin only)"),
         (status = 404, description = "Video not found or not deleted"),
         (status = 500, description = "Internal server error")
     )
@@ -772,26 +764,24 @@ pub async fn restore_video(
         Err(response) => return Ok(response),
     };
 
-    if claims.role != "admin" {
-        return Ok(HttpResponse::Forbidden().json(serde_json::json!({"status": "error", "message": "Only admins can restore media."})));
-    }
-
+    let user_uuid = utils::parse_user_uuid(&claims.user_id)?;
     let hash = path.into_inner();
-    soft_restore_media(&pool.0, "videos", &hash).await
+    soft_restore_media(&pool.0, "videos", &hash, &user_uuid).await
 }
 
-/// Shared implementation for soft-deleting images or videos (admin only).
+/// Shared implementation for soft-deleting images or videos.
 async fn soft_delete_media(
     pool: &deadpool_postgres::Pool,
     table: &str,
     hash: &str,
+    user_id: &uuid::Uuid,
 ) -> Result<HttpResponse, actix_web::Error> {
     let client = utils::get_db_client(pool).await?;
 
     let result = client
         .execute(
-            &format!("UPDATE {} SET deleted_at = NOW() WHERE hash = $1 AND deleted_at IS NULL", table),
-            &[&hash]
+            &format!("UPDATE {} SET deleted_at = NOW() WHERE hash = $1 AND user_id = $2 AND deleted_at IS NULL", table),
+            &[&hash, user_id]
         ).await
         .map_err(|e| {
             error!("Failed to soft delete {}: {}", table, e);
@@ -816,7 +806,6 @@ async fn soft_delete_media(
     responses(
         (status = 200, description = "Image marked as deleted"),
         (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Forbidden (Admin only)"),
         (status = 404, description = "Image not found"),
         (status = 500, description = "Internal server error")
     )
@@ -833,12 +822,9 @@ pub async fn delete_image(
         Err(response) => return Ok(response),
     };
 
-    if claims.role != "admin" {
-        return Ok(HttpResponse::Forbidden().json(serde_json::json!({"status": "error", "message": "Only admins can delete media."})));
-    }
-
+    let user_uuid = utils::parse_user_uuid(&claims.user_id)?;
     let hash = path.into_inner();
-    soft_delete_media(&pool.0, "images", &hash).await
+    soft_delete_media(&pool.0, "images", &hash, &user_uuid).await
 }
 
 #[utoipa::path(
@@ -847,7 +833,6 @@ pub async fn delete_image(
     responses(
         (status = 200, description = "Video marked as deleted"),
         (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Forbidden (Admin only)"),
         (status = 404, description = "Video not found"),
         (status = 500, description = "Internal server error")
     )
@@ -864,12 +849,9 @@ pub async fn delete_video(
         Err(response) => return Ok(response),
     };
 
-    if claims.role != "admin" {
-        return Ok(HttpResponse::Forbidden().json(serde_json::json!({"status": "error", "message": "Only admins can delete media."})));
-    }
-
+    let user_uuid = utils::parse_user_uuid(&claims.user_id)?;
     let hash = path.into_inner();
-    soft_delete_media(&pool.0, "videos", &hash).await
+    soft_delete_media(&pool.0, "videos", &hash, &user_uuid).await
 }
 
 // ── Image enhancement ─────────────────────────────────────────────────────────

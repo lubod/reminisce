@@ -100,14 +100,8 @@ impl TestDatabase {
 
     /// Runs database migrations for the test database
     async fn run_migrations(&self) -> Result<(), Box<dyn std::error::Error>> {
-        let client = self.pool.get().await?;
-
-        // Read schema from init.sql to keep test and production schemas in sync
-        let sql = std::fs::read_to_string("db/init.sql")
-            .map_err(|e| format!("Failed to read db/init.sql: {}", e))?;
-
-        client.batch_execute(&sql).await?;
-        Ok(())
+        let init_sql = include_str!("../db/init.sql");
+        crate::db::run_migrations_with_schema(&self.pool, init_sql).await
     }
 
     /// Runs migrations AND seeds the fixed-UUID test user needed by most integration tests.
@@ -215,17 +209,19 @@ mod tests {
         let pool = test_db.pool();
         let client = pool.get().await.expect("Failed to get client");
 
+        let test_user_id = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+
         // Test that we can insert and query data
         let result = client
             .execute(
-                "INSERT INTO images (deviceid, hash, name, ext, type, has_thumbnail) VALUES ($1, $2, $3, $4, $5, $6)",
-                &[&"test_device", &"test_hash", &"test_name.jpg", &"jpg", &"camera", &false],
+                "INSERT INTO images (user_id, deviceid, hash, name, ext, type, has_thumbnail) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                &[&test_user_id, &"test_device", &"test_hash", &"test_name.jpg", &"jpg", &"camera", &false],
             )
             .await;
         assert!(result.is_ok());
 
         let rows = client
-            .query("SELECT hash, name FROM images WHERE deviceid = $1", &[&"test_device"])
+            .query("SELECT hash, name FROM images WHERE user_id = $1 AND hash = $2", &[&test_user_id, &"test_hash"])
             .await
             .expect("Failed to query");
 
@@ -243,17 +239,19 @@ mod tests {
         let pool = setup_test_database().await;
         let client = pool.get().await.expect("Failed to get client");
 
+        let test_user_id = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+
         // Test that we can insert and query data
         let result = client
             .execute(
-                "INSERT INTO images (deviceid, hash, name, ext, type, has_thumbnail) VALUES ($1, $2, $3, $4, $5, $6)",
-                &[&"test_device", &"test_hash", &"test_name.jpg", &"jpg", &"camera", &false],
+                "INSERT INTO images (user_id, deviceid, hash, name, ext, type, has_thumbnail) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                &[&test_user_id, &"test_device", &"test_hash", &"test_name.jpg", &"jpg", &"camera", &false],
             )
             .await;
         assert!(result.is_ok());
 
         let rows = client
-            .query("SELECT hash, name FROM images WHERE deviceid = $1", &[&"test_device"])
+            .query("SELECT hash, name FROM images WHERE user_id = $1 AND hash = $2", &[&test_user_id, &"test_hash"])
             .await
             .expect("Failed to query");
 
