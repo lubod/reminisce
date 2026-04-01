@@ -190,9 +190,9 @@ impl MediaQueryBuilder {
         let body = self.build_select_body(lon_param, lat_param);
         let dir = if sort_order == Some("asc") { "ASC" } else { "DESC" };
         let order = if sort_by == Some("size") {
-            format!("ORDER BY t.file_size_bytes {} NULLS LAST, t.hash {}", dir, dir)
+            format!("ORDER BY file_size_bytes {} NULLS LAST, hash {}", dir, dir)
         } else if sort_by == Some("quality") {
-            format!("ORDER BY t.aesthetic_score {} NULLS LAST, t.hash {}", dir, dir)
+            format!("ORDER BY aesthetic_score {} NULLS LAST, hash {}", dir, dir)
         } else {
             format!("ORDER BY t.created_at {}, t.hash {}", dir, dir)
         };
