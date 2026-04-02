@@ -7,7 +7,7 @@ import { DuplicatesLightbox } from "./DuplicatesLightbox";
 export const DuplicatesBrowser = observer(() => {
     const { duplicatesStore, authStore } = useStore();
     const isAdmin = authStore.user?.role === "admin";
-    const token = authStore.token;
+    const token = authStore.token; // passed to lightbox only
     const [lightboxState, setLightboxState] = useState<{ groupIdx: number; imageIdx: number } | null>(null);
 
     useEffect(() => {
@@ -23,12 +23,6 @@ export const DuplicatesBrowser = observer(() => {
             setLightboxState(null);
         }
     }, [duplicatesStore.groups.length, lightboxState]);
-
-    const getThumbSrc = (thumbnailUrl: string) => {
-        if (!token) return thumbnailUrl;
-        const sep = thumbnailUrl.includes("?") ? "&" : "?";
-        return `${thumbnailUrl}${sep}token=${token}`;
-    };
 
     const formatDate = (iso: string) => {
         try {
@@ -241,7 +235,7 @@ export const DuplicatesBrowser = observer(() => {
                                         onClick={() => setLightboxState({ groupIdx, imageIdx: imgIdx })}
                                     >
                                         <img
-                                            src={getThumbSrc(img.thumbnail_url)}
+                                            src={img.thumbnail_url}
                                             alt={img.name}
                                             className="w-full h-full object-cover"
                                             loading="eager"

@@ -63,6 +63,23 @@ export class DuplicatesStore {
         this.threshold = Math.min(1.0, Math.max(0.8, value));
     }
 
+    private authUrl(url: string): string {
+        const token = this.rootStore.authStore.token;
+        if (!token) return url;
+        const sep = url.includes("?") ? "&" : "?";
+        return `${url}${sep}token=${token}`;
+    }
+
+    private withAuthUrls(groups: DuplicateGroup[]): DuplicateGroup[] {
+        return groups.map(group => ({
+            ...group,
+            images: group.images.map(img => ({
+                ...img,
+                thumbnail_url: this.authUrl(img.thumbnail_url),
+            })),
+        }));
+    }
+
     fetchDuplicates = async () => {
         this.isLoading = true;
         this.error = null;
@@ -72,7 +89,7 @@ export class DuplicatesStore {
                 params: { threshold: this.threshold, page: 1, limit: PAGE_SIZE },
             });
             runInAction(() => {
-                this.groups = response.data.groups;
+                this.groups = this.withAuthUrls(response.data.groups);
                 this.totalGroups = response.data.total_groups;
                 this.page = 1;
                 this.isLoading = false;
@@ -94,7 +111,7 @@ export class DuplicatesStore {
                 params: { threshold: this.threshold, page: nextPage, limit: PAGE_SIZE },
             });
             runInAction(() => {
-                this.groups = [...this.groups, ...response.data.groups];
+                this.groups = [...this.groups, ...this.withAuthUrls(response.data.groups)];
                 this.totalGroups = response.data.total_groups;
                 this.page = nextPage;
                 this.isLoadingMore = false;
