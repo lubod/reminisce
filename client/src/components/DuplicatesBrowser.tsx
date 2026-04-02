@@ -232,7 +232,7 @@ export const DuplicatesBrowser = observer(() => {
                         <div className="flex gap-3 p-3 overflow-x-auto">
                             {group.images.map((img, imgIdx) => (
                                 <div
-                                    key={`${img.hash}-${img.deviceid}-${imgIdx}`}
+                                    key={`${img.hash}-${imgIdx}`}
                                     className="flex-shrink-0 w-40 bg-gray-800 rounded-lg overflow-hidden border border-gray-700"
                                 >
                                     {/* Thumbnail */}
@@ -244,7 +244,7 @@ export const DuplicatesBrowser = observer(() => {
                                             src={getThumbSrc(img.thumbnail_url)}
                                             alt={img.name}
                                             className="w-full h-full object-cover"
-                                            loading="lazy"
+                                            loading="eager"
                                         />
                                     </div>
 
@@ -258,12 +258,6 @@ export const DuplicatesBrowser = observer(() => {
                                         </p>
                                         <p className="text-[10px] text-gray-500 mt-0.5">
                                             {formatDate(img.created_at)}
-                                        </p>
-                                        <p
-                                            className="text-[10px] text-gray-600 truncate mt-0.5"
-                                            title={img.deviceid}
-                                        >
-                                            {img.deviceid}
                                         </p>
                                         {img.aesthetic_score != null && (
                                             <p className="text-[10px] text-yellow-400 mt-0.5">

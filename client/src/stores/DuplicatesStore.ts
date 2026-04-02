@@ -4,7 +4,6 @@ import api from "../api/axiosConfig";
 
 export interface DuplicateImage {
     hash: string;
-    deviceid: string;
     name: string;
     created_at: string;
     thumbnail_url: string;

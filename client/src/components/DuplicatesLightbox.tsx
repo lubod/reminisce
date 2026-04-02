@@ -322,9 +322,6 @@ export function DuplicatesLightbox({ group, initialIdx, isAdmin, token, onClose,
                                 {leftImg.name}
                             </p>
                             <p className="text-[10px] text-gray-400">{formatDate(leftImg.created_at)}</p>
-                            <p className="text-[10px] text-gray-500 truncate" title={leftImg.deviceid}>
-                                {leftImg.deviceid}
-                            </p>
                             {(leftImg.width || leftImg.file_size_bytes) && (
                                 <div className="flex gap-2 mt-1 flex-wrap">
                                     {leftImg.width && <span className="text-[10px] text-gray-400">{leftImg.width}×{leftImg.height}</span>}
@@ -379,9 +376,6 @@ export function DuplicatesLightbox({ group, initialIdx, isAdmin, token, onClose,
                                 {rightImg.name}
                             </p>
                             <p className="text-[10px] text-gray-400">{formatDate(rightImg.created_at)}</p>
-                            <p className="text-[10px] text-gray-500 truncate" title={rightImg.deviceid}>
-                                {rightImg.deviceid}
-                            </p>
                             {(rightImg.width || rightImg.file_size_bytes) && (
                                 <div className="flex gap-2 mt-1 flex-wrap">
                                     {rightImg.width && <span className="text-[10px] text-gray-400">{rightImg.width}×{rightImg.height}</span>}
