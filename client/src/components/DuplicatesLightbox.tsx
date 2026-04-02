@@ -131,7 +131,7 @@ export function DuplicatesLightbox({ group, initialIdx, isAdmin, token, onClose,
     };
 
     const getThumbSrc = (thumbnailUrl: string) => {
-        if (!token) return thumbnailUrl;
+        if (!token || thumbnailUrl.includes("token=")) return thumbnailUrl;
         const sep = thumbnailUrl.includes("?") ? "&" : "?";
         return `${thumbnailUrl}${sep}token=${token}`;
     };
