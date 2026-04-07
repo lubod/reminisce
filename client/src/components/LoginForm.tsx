@@ -1,7 +1,6 @@
 import { useState, useEffect } from "react";
 import { observer } from "mobx-react-lite";
 import { useStore } from "../stores/RootStore";
-import { useNavigate } from "react-router-dom";
 import { Shield, Eye, EyeOff, Loader } from "lucide-react";
 
 export const LoginForm = observer(() => {
@@ -12,7 +11,6 @@ export const LoginForm = observer(() => {
     const [showPassword, setShowPassword] = useState(false);
     const [error, setError] = useState("");
     const [isLoading, setIsLoading] = useState(true);
-    const navigate = useNavigate();
 
     useEffect(() => {
         authStore.checkSetupStatus().finally(() => setIsLoading(false));
