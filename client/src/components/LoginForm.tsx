@@ -25,14 +25,17 @@ export const LoginForm = observer(() => {
         if (password.length < 8) { setError("Password must be at least 8 characters"); return; }
         setIsLoading(true);
         const result = await authStore.setupAdmin(username, password);
-        setIsLoading(false);
         if (result.success) {
             // Auto-login after setup
             const loginResult = await authStore.login(username, password);
-            if (loginResult.success) navigate("/");
-        } else {
-            setError(result.error || "Setup failed");
+            if (loginResult.success) {
+                // Force a full page reload to trigger password save
+                window.location.href = "/";
+                return;
+            }
         }
+        setIsLoading(false);
+        if (!result.success) setError(result.error || "Setup failed");
     };
 
     const handleLogin = async (e: React.FormEvent) => {
@@ -40,9 +43,13 @@ export const LoginForm = observer(() => {
         setError("");
         setIsLoading(true);
         const result = await authStore.login(username, password);
+        if (result.success) {
+            // Force a full page reload to trigger password save
+            window.location.href = "/";
+            return;
+        }
         setIsLoading(false);
-        if (result.success) navigate("/");
-        else setError(result.error || "Login failed");
+        setError(result.error || "Login failed");
     };
 
     if (isLoading && authStore.needsSetup === undefined) {
@@ -75,9 +82,9 @@ export const LoginForm = observer(() => {
                         {error && <p className="text-xs text-red-400 bg-red-900/20 border border-red-800 rounded-lg px-3 py-2">{error}</p>}
 
                         <div>
-                            <label className="block text-sm font-medium text-gray-300 mb-1.5">Username</label>
+                            <label htmlFor="setup-username" className="block text-sm font-medium text-gray-300 mb-1.5">Username</label>
                             <input
-                                type="text" name="username" autoComplete="username"
+                                id="setup-username" type="text" name="username" autoComplete="username"
                                 value={username} onChange={e => setUsername(e.target.value)}
                                 className="w-full px-3 py-2.5 bg-gray-700 border border-gray-600 rounded-lg text-gray-100 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
                                 placeholder="admin" autoFocus required minLength={3} disabled={isLoading}
@@ -85,10 +92,10 @@ export const LoginForm = observer(() => {
                         </div>
 
                         <div>
-                            <label className="block text-sm font-medium text-gray-300 mb-1.5">Password</label>
+                            <label htmlFor="setup-password" className="block text-sm font-medium text-gray-300 mb-1.5">Password</label>
                             <div className="relative">
                                 <input
-                                    type={showPassword ? "text" : "password"} name="password"
+                                    id="setup-password" type={showPassword ? "text" : "password"} name="password"
                                     autoComplete="new-password"
                                     value={password} onChange={e => setPassword(e.target.value)}
                                     className="w-full px-3 py-2.5 bg-gray-700 border border-gray-600 rounded-lg text-gray-100 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 pr-10"
@@ -101,9 +108,9 @@ export const LoginForm = observer(() => {
                         </div>
 
                         <div>
-                            <label className="block text-sm font-medium text-gray-300 mb-1.5">Confirm Password</label>
+                            <label htmlFor="setup-confirm" className="block text-sm font-medium text-gray-300 mb-1.5">Confirm Password</label>
                             <input
-                                type={showPassword ? "text" : "password"} name="confirmPassword"
+                                id="setup-confirm" type={showPassword ? "text" : "password"} name="confirmPassword"
                                 autoComplete="new-password"
                                 value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)}
                                 className="w-full px-3 py-2.5 bg-gray-700 border border-gray-600 rounded-lg text-gray-100 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
@@ -141,9 +148,9 @@ export const LoginForm = observer(() => {
                     {error && <p className="text-xs text-red-400 bg-red-900/20 border border-red-800 rounded-lg px-3 py-2">{error}</p>}
 
                     <div>
-                        <label className="block text-sm font-medium text-gray-300 mb-1.5">Username</label>
+                        <label htmlFor="login-username" className="block text-sm font-medium text-gray-300 mb-1.5">Username</label>
                         <input
-                            type="text" name="username" autoComplete="username"
+                            id="login-username" type="text" name="username" autoComplete="username"
                             value={username} onChange={e => setUsername(e.target.value)}
                             className="w-full px-3 py-2.5 bg-gray-700 border border-gray-600 rounded-lg text-gray-100 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
                             placeholder="Enter your username" autoFocus required disabled={isLoading}
@@ -151,10 +158,10 @@ export const LoginForm = observer(() => {
                     </div>
 
                     <div>
-                        <label className="block text-sm font-medium text-gray-300 mb-1.5">Password</label>
+                        <label htmlFor="login-password" className="block text-sm font-medium text-gray-300 mb-1.5">Password</label>
                         <div className="relative">
                             <input
-                                type={showPassword ? "text" : "password"} name="password"
+                                id="login-password" type={showPassword ? "text" : "password"} name="password"
                                 autoComplete="current-password"
                                 value={password} onChange={e => setPassword(e.target.value)}
                                 className="w-full px-3 py-2.5 bg-gray-700 border border-gray-600 rounded-lg text-gray-100 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 pr-10"
