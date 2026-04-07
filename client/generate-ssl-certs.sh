@@ -20,12 +20,13 @@ echo "Generating self-signed SSL certificate for development..."
 echo "Valid for $DAYS_VALID days"
 
 # Generate private key and certificate
+# Including common LAN IP patterns in SAN to reduce browser friction
 openssl req -x509 -nodes -days $DAYS_VALID \
     -newkey rsa:2048 \
     -keyout "$KEY_FILE" \
     -out "$CERT_FILE" \
-    -subj "/C=US/ST=State/L=City/O=Reminisce/CN=localhost" \
-    -addext "subjectAltName=DNS:localhost,DNS:*.localhost,IP:127.0.0.1"
+    -subj "/C=US/ST=State/L=City/O=Reminisce/CN=reminisce.local" \
+    -addext "subjectAltName=DNS:localhost,DNS:reminisce.local,IP:127.0.0.1,IP:192.168.1.197,IP:192.168.1.1,IP:10.0.0.1"
 
 # Set proper permissions
 chmod 600 "$KEY_FILE"
