@@ -72,7 +72,8 @@ export const LoginForm = observer(() => {
                         <div>
                             <label className="block text-sm font-medium text-gray-300 mb-1.5">Username</label>
                             <input
-                                type="text" value={username} onChange={e => setUsername(e.target.value)}
+                                type="text" name="username" autoComplete="username"
+                                value={username} onChange={e => setUsername(e.target.value)}
                                 className="w-full px-3 py-2.5 bg-gray-700 border border-gray-600 rounded-lg text-gray-100 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
                                 placeholder="admin" autoFocus required minLength={3}
                             />
@@ -82,7 +83,9 @@ export const LoginForm = observer(() => {
                             <label className="block text-sm font-medium text-gray-300 mb-1.5">Password</label>
                             <div className="relative">
                                 <input
-                                    type={showPassword ? "text" : "password"} value={password} onChange={e => setPassword(e.target.value)}
+                                    type={showPassword ? "text" : "password"} name="password"
+                                    autoComplete="new-password"
+                                    value={password} onChange={e => setPassword(e.target.value)}
                                     className="w-full px-3 py-2.5 bg-gray-700 border border-gray-600 rounded-lg text-gray-100 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 pr-10"
                                     placeholder="Min 8 characters" required minLength={8}
                                 />
@@ -95,7 +98,9 @@ export const LoginForm = observer(() => {
                         <div>
                             <label className="block text-sm font-medium text-gray-300 mb-1.5">Confirm Password</label>
                             <input
-                                type={showPassword ? "text" : "password"} value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)}
+                                type={showPassword ? "text" : "password"} name="confirmPassword"
+                                autoComplete="new-password"
+                                value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)}
                                 className="w-full px-3 py-2.5 bg-gray-700 border border-gray-600 rounded-lg text-gray-100 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
                                 placeholder="Repeat password" required
                             />
@@ -128,7 +133,8 @@ export const LoginForm = observer(() => {
                     <div>
                         <label className="block text-sm font-medium text-gray-300 mb-1.5">Username</label>
                         <input
-                            type="text" value={username} onChange={e => setUsername(e.target.value)}
+                            type="text" name="username" autoComplete="username"
+                            value={username} onChange={e => setUsername(e.target.value)}
                             className="w-full px-3 py-2.5 bg-gray-700 border border-gray-600 rounded-lg text-gray-100 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
                             placeholder="Enter your username" autoFocus required
                         />
@@ -138,7 +144,9 @@ export const LoginForm = observer(() => {
                         <label className="block text-sm font-medium text-gray-300 mb-1.5">Password</label>
                         <div className="relative">
                             <input
-                                type={showPassword ? "text" : "password"} value={password} onChange={e => setPassword(e.target.value)}
+                                type={showPassword ? "text" : "password"} name="password"
+                                autoComplete="current-password"
+                                value={password} onChange={e => setPassword(e.target.value)}
                                 className="w-full px-3 py-2.5 bg-gray-700 border border-gray-600 rounded-lg text-gray-100 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 pr-10"
                                 placeholder="Enter your password" required
                             />
