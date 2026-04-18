@@ -139,11 +139,8 @@ async fn rebalance_file(
         let _current_shard_hash: String = shard_row.get(2);
 
         let idx = shard_index as usize;
-        if idx >= ideal_nodes.len() {
-            continue;
-        }
-
-        let (ideal_node_id, ideal_node_addr) = &ideal_nodes[idx];
+        // With fewer nodes than shards, we use round-robin to pick from the ideal nodes.
+        let (ideal_node_id, ideal_node_addr) = &ideal_nodes[idx % ideal_nodes.len()];
         if &current_node == ideal_node_id {
             continue; // Already on the correct node
         }
@@ -176,7 +173,7 @@ async fn migrate_shard(
     p2p_service: &Arc<P2PService>,
     file_hash: &str,
     shard_index: usize,
-    new_node_id: &str,
+    _new_node_id: &str,
     new_node_addr: SocketAddr,
     old_node_id: &str,
     old_shard_hash: &str,

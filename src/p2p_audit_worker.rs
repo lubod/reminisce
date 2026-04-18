@@ -191,10 +191,7 @@ async fn repair_file(
     }
 
     let ideal_nodes = rendezvous_select_nodes(file_hash, &active_nodes, SHARD_COUNT.min(active_nodes.len()));
-    if failed_shard_index >= ideal_nodes.len() {
-        return Err(format!("Shard index {} exceeds available nodes", failed_shard_index).into());
-    }
-    let (target_node_id, target_node_addr) = &ideal_nodes[failed_shard_index];
+    let (target_node_id, target_node_addr) = &ideal_nodes[failed_shard_index % ideal_nodes.len()];
 
     // Check if this specific shard record already exists and is healthy
     let existing_shard = client.query_opt(

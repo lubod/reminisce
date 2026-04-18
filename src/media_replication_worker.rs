@@ -14,7 +14,7 @@ use tokio::sync::Mutex;
 // Constants
 const BATCH_SIZE: i64 = 10; // Smaller batches for sharding as it is more CPU intensive
 pub const SHARD_COUNT: usize = 5;
-pub const MIN_NODES_REQUIRED: usize = 3;
+pub const MIN_NODES_REQUIRED: usize = 1;
 
 struct MediaToReplicate {
     hash: String,
@@ -65,8 +65,11 @@ async fn replicate_all(
     }
 
     if nodes.len() < MIN_NODES_REQUIRED {
-        warn!("Only {} P2P nodes discovered. Minimum {} required for 3/5 EC replication.", nodes.len(), MIN_NODES_REQUIRED);
         return Ok(false);
+    }
+
+    if nodes.len() < 3 {
+        warn!("Only {} P2P nodes discovered. 3+ nodes recommended for 3/5 EC redundancy.", nodes.len());
     }
 
     let images_done = replicate_batch(pool, config, p2p_service, &nodes, "images").await
@@ -177,6 +180,7 @@ async fn replicate_single_file(
     let (shards, _enc_size) = StorageEngine::process_for_backup(&file_data, &encryption_key)?;
 
     // 2. Select nodes via rendezvous hashing (HRW)
+    // We always want to distribute among available nodes, but we MUST store ALL shards.
     let target_nodes = rendezvous_select_nodes(&file.hash, nodes, SHARD_COUNT.min(nodes.len()));
 
     info!("Sharding {} into {} pieces across {} nodes (rendezvous)", file.hash, shards.len(), target_nodes.len());
@@ -186,8 +190,8 @@ async fn replicate_single_file(
     let shard_results: Arc<Mutex<Vec<(usize, String, String, String)>>> = Arc::new(Mutex::new(Vec::new()));
     let mut set = tokio::task::JoinSet::new();
 
-    for (idx, (node_id, addr)) in target_nodes.iter().enumerate() {
-        let shard_data = shards[idx % shards.len()].clone();
+    for (idx, shard_data) in shards.into_iter().enumerate() {
+        let (node_id, addr) = &target_nodes[idx % target_nodes.len()];
         let p2p_service = p2p_service.clone();
         let node_id = node_id.clone();
         let addr = *addr;
@@ -230,8 +234,8 @@ async fn replicate_single_file(
     }
 
     let final_results = shard_results.lock().await;
-    if final_results.len() < MIN_NODES_REQUIRED {
-        return Err(format!("Only {}/{} shards stored. Minimum {} required.", final_results.len(), SHARD_COUNT, MIN_NODES_REQUIRED).into());
+    if final_results.len() < np2p::storage::DATA_SHARDS {
+        return Err(format!("Only {}/{} shards stored. Minimum {} required (for reconstruction).", final_results.len(), SHARD_COUNT, np2p::storage::DATA_SHARDS).into());
     }
 
     // 4. Update Database
