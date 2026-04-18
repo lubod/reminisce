@@ -66,6 +66,7 @@ services:
       - "8080"
     ports:
       - "5050:5050/udp" # P2P QUIC Ingestion & Sharding
+      - "5060:5060/udp" # P2P LAN Discovery (Server listens)
     volumes:
       - ./uploaded_images:/app/uploaded_images
       - ./uploaded_videos:/app/uploaded_videos
