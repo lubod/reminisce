@@ -26,6 +26,10 @@ pub fn start_tunnel_client(
             "[TUNNEL] Client starting — coordinator={} local_port={}",
             coordinator_addr, local_port
         );
+        // Brief delay before first registration attempt: ensures the coordinator has
+        // already run remove() for any stale entry from a prior connection, preventing
+        // a race where our insert() is wiped by the old task's cleanup.
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
         loop {
             let delay = match run_tunnel(&node, coordinator_addr, &node_id, &identity, local_port).await {
                 Ok(_) => { info!("[TUNNEL] Connection ended cleanly"); RECONNECT_DELAY_SECS }

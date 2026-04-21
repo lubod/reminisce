@@ -293,7 +293,7 @@ fn start_tcp_tunnel_listener(tunnel_port: u16, tunnels: TunnelMap, tls_acceptor:
                     Some(c) => c,
                     None => { warn!("[TUNNEL] No home server registered — dropping {}", client_addr); return; }
                 };
-                let (mut qs, mut qr) = match tunnel_conn.open_bi().await {
+                let (qs, qr) = match tunnel_conn.open_bi().await {
                     Ok(s) => s,
                     Err(e) => { warn!("[TUNNEL] open_bi failed: {}", e); return; }
                 };
@@ -449,7 +449,15 @@ async fn main() -> anyhow::Result<()> {
                     tunnels.write().unwrap().insert(node_id.clone(), conn.clone());
                     info!("[TUNNEL] Registered: {} from {}", node_id, remote_ip);
                     conn.closed().await;
-                    tunnels.write().unwrap().remove(&node_id);
+                    // Only remove if this is still the same connection we registered.
+                    // A reconnect may have replaced it already; removing a fresh entry
+                    // would leave TunnelMap empty and break the next Android request.
+                    {
+                        let mut map = tunnels.write().unwrap();
+                        if map.get(&node_id).map(|c| c.stable_id() == conn.stable_id()).unwrap_or(false) {
+                            map.remove(&node_id);
+                        }
+                    }
                     info!("[TUNNEL] Disconnected: {}", node_id);
                 } else if let Message::NodeChannelRegister { ref node_id } = first_msg {
                     // ── Channel connection: challenge-response authentication ───
