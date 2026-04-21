@@ -1,3 +1,9 @@
+//! Migrates P2P shards to their ideal nodes when node topology changes.
+//!
+//! After adding or removing a storage node the rendezvous hash assignments shift.
+//! This worker moves shards from their current location to the correct node so the
+//! distribution stays balanced. Triggered via POST /api/p2p/backup/rebalance.
+
 use crate::config::Config;
 use crate::media_replication_worker::{rendezvous_select_nodes, SHARD_COUNT, MIN_NODES_REQUIRED};
 use deadpool_postgres::Pool;
@@ -121,6 +127,18 @@ async fn rebalance_file(
     active_nodes: &[(String, SocketAddr)],
 ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
     let client = pool.get().await?;
+
+    // Skip segmented large files — per-segment rebalance not yet implemented.
+    let seg_row = client.query_opt(
+        "SELECT 1 FROM images WHERE hash = $1 AND p2p_segment_count > 1 \
+         UNION ALL \
+         SELECT 1 FROM videos WHERE hash = $1 AND p2p_segment_count > 1 \
+         LIMIT 1",
+        &[&file_hash]
+    ).await?;
+    if seg_row.is_some() {
+        return Ok(false);
+    }
 
     // Load current shard assignments
     let shard_rows = client.query(
@@ -284,7 +302,8 @@ async fn reshard_from_local(
         return Err(format!("Local file not found for hash {}", file_hash).into());
     };
 
-    let (shards, _enc_size) = StorageEngine::process_for_backup(&file_data, encryption_key)?;
+    // nonce_context = key: single-segment file, key is unique per file.
+    let (shards, _enc_size) = StorageEngine::process_for_backup(&file_data, encryption_key, encryption_key)?;
 
     if shard_index >= shards.len() {
         return Err(format!("Shard index {} out of range ({})", shard_index, shards.len()).into());

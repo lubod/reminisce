@@ -1,3 +1,9 @@
+//! Top-level P2P service: QUIC transport, peer registry, and message dispatch.
+//!
+//! P2PService owns the Node (QUIC listener/dialer), the PeerRegistry (in-memory
+//! address book), and the node identity (Ed25519 keypair). All higher-level
+//! operations (store shard, retrieve shard, announce) go through this facade.
+
 use std::net::SocketAddr;
 use std::sync::Arc;
 use crate::error::Result;

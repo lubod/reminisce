@@ -1,3 +1,9 @@
+//! In-memory peer registry mapping node IDs to socket addresses.
+//!
+//! Prefers LAN (private) addresses over public ones when both are known.
+//! Supports TTL-based eviction via remove_stale(). Thread-safe via RwLock.
+//! Populated by LAN UDP discovery broadcasts and coordinator peer syncs.
+
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, RwLock};
@@ -16,6 +22,13 @@ pub struct PeerRegistry {
     peers: Arc<RwLock<HashMap<String, PeerInfo>>>,
 }
 
+fn is_private_ip(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => v4.is_private() || v4.is_loopback() || v4.is_link_local(),
+        std::net::IpAddr::V6(v6) => v6.is_loopback(),
+    }
+}
+
 impl PeerRegistry {
     pub fn new() -> Self {
         Self::default()
@@ -23,6 +36,14 @@ impl PeerRegistry {
 
     pub fn upsert(&self, node_id: String, addr: SocketAddr) {
         let mut peers = self.peers.write().unwrap();
+        if let Some(existing) = peers.get_mut(&node_id) {
+            if is_private_ip(existing.addr.ip()) && !is_private_ip(addr.ip()) {
+                // Keep the working LAN address; only refresh last_seen so the
+                // entry does not expire while the coordinator keeps pinging.
+                existing.last_seen = Instant::now();
+                return;
+            }
+        }
         peers.insert(
             node_id.clone(),
             PeerInfo {

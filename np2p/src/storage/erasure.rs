@@ -1,3 +1,9 @@
+//! Reed-Solomon 3/5 erasure coding wrapper.
+//!
+//! Encodes data into DATA_SHARDS=3 data shards + PARITY_SHARDS=2 parity shards.
+//! Any 3 of the 5 shards are sufficient to recover the original data.
+//! Uses the galois_8 field via the reed-solomon-erasure crate.
+
 use reed_solomon_erasure::galois_8::ReedSolomon;
 use crate::error::{Np2pError, Result};
 

@@ -10,7 +10,7 @@ use crate::config::Config;
 use crate::db::MainDbPool;
 use crate::auth_utils::{ hash_password, verify_password };
 use crate::metrics::{USER_REGISTRATIONS_TOTAL, USER_LOGINS_TOTAL, USER_LOGIN_FAILURES_TOTAL};
-use crate::db_instrumentation::{instrumented_query_one, instrumented_query_opt, instrumented_execute};
+use crate::db_instrumentation::{instrumented_query_opt, instrumented_execute};
 
 // Claims structure with user information
 #[derive(Serialize, Deserialize, ToSchema, Clone)]
@@ -158,7 +158,10 @@ pub async fn setup_admin(
         Err(_) => return HttpResponse::InternalServerError().finish(),
     };
 
-    let row = client.query_one("SELECT COUNT(*) FROM users", &[]).await.unwrap();
+    let row = match client.query_one("SELECT COUNT(*) FROM users", &[]).await {
+        Ok(r) => r,
+        Err(_) => return HttpResponse::InternalServerError().finish(),
+    };
     let count: i64 = row.get(0);
     if count > 0 {
         return HttpResponse::Forbidden().json(serde_json::json!({

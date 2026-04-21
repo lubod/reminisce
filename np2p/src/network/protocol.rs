@@ -59,6 +59,19 @@ pub enum Message {
 
     /// Generic error message.
     Error { code: u16, message: String },
+
+    /// Streaming shard upload for large files: one stream per shard, followed by
+    /// StoreShardChunk messages (≤ 32 MB each), terminated by StoreShardStreamFinal.
+    StoreShardStreamInit {
+        file_hash: [u8; 32],
+        shard_index: u8,
+        total_shard_bytes: u64,
+        segment_count: u32,
+    },
+    StoreShardStreamAck { ready: bool },
+    StoreShardChunk { data: Vec<u8> },
+    StoreShardStreamFinal { shard_hash: [u8; 32] },
+    StoreShardStreamResponse { success: bool },
 }
 
 pub struct Protocol;
@@ -67,7 +80,7 @@ impl Protocol {
     pub async fn send(send: &mut quinn::SendStream, msg: &Message) -> crate::error::Result<()> {
         let bytes = bincode::serialize(msg)?;
         let len = bytes.len() as u32;
-        
+
         send.write_all(&len.to_be_bytes()).await?;
         send.write_all(&bytes).await?;
         Ok(())
@@ -78,13 +91,13 @@ impl Protocol {
         recv.read_exact(&mut len_buf).await?;
         let len = u32::from_be_bytes(len_buf) as usize;
 
-        if len > 100 * 1024 * 1024 { // 100MB limit
+        if len > 100 * 1024 * 1024 { // 100 MB limit
             return Err(crate::error::Np2pError::Protocol("Message too large".into()));
         }
 
         let mut buf = vec![0u8; len];
         recv.read_exact(&mut buf).await?;
-        
+
         let msg: Message = bincode::deserialize(&buf).map_err(|e| {
             // Distinguish unknown enum variant (version mismatch) from genuine corruption.
             if e.to_string().contains("expected a variant index") {

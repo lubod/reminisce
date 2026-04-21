@@ -47,7 +47,7 @@ impl ConnectionHandler {
                     let storage = self.storage.clone();
                     let identity = self.identity.clone();
                     let custom = self.custom_handler.clone();
-                    
+
                     tokio::spawn(async move {
                         if let Err(e) = Self::handle_stream(send, recv, storage, identity, custom).await {
                             if matches!(e, crate::error::Np2pError::UnknownMessage(_)) {
@@ -98,6 +98,55 @@ impl ConnectionHandler {
                 let success = storage.store(shard_hash, &data).await.is_ok();
                 let response = Message::StoreShardResponse { shard_hash, success };
                 Protocol::send(&mut send, &response).await?;
+            }
+
+            Message::StoreShardStreamInit { file_hash, shard_index, .. } => {
+                // Stable temp-file ID derived from (file_hash, shard_index) avoids collisions
+                // between concurrent uploads of different files or shards.
+                let temp_id: [u8; 32] = blake3::hash(
+                    &[file_hash.as_slice(), &[shard_index]].concat()
+                ).into();
+                let temp_path = storage.temp_path(&temp_id);
+
+                Protocol::send(&mut send, &Message::StoreShardStreamAck { ready: true }).await?;
+
+                // Accumulate BLAKE3 as chunks arrive — avoids re-reading the full shard at finalize.
+                let mut hasher = blake3::Hasher::new();
+                loop {
+                    match Protocol::receive(&mut recv).await {
+                        Ok(Message::StoreShardChunk { data }) => {
+                            hasher.update(&data);
+                            if let Err(e) = storage.store_stream_chunk(&temp_path, &data).await {
+                                error!("[CONN] Chunk write failed for shard {}: {}", shard_index, e);
+                                let _ = tokio::fs::remove_file(&temp_path).await;
+                                Protocol::send(&mut send, &Message::StoreShardStreamResponse { success: false }).await?;
+                                break;
+                            }
+                        }
+                        Ok(Message::StoreShardStreamFinal { shard_hash }) => {
+                            let computed: [u8; 32] = hasher.finalize().into();
+                            let ok = if computed == shard_hash {
+                                match storage.finalize_stream_temp(&temp_path, shard_hash).await {
+                                    Ok(()) => true,
+                                    Err(e) => {
+                                        error!("[CONN] finalize_stream_temp failed: {}", e);
+                                        false
+                                    }
+                                }
+                            } else {
+                                warn!("[CONN] Hash mismatch for shard {} — discarding temp file", shard_index);
+                                let _ = tokio::fs::remove_file(&temp_path).await;
+                                false
+                            };
+                            Protocol::send(&mut send, &Message::StoreShardStreamResponse { success: ok }).await?;
+                            break;
+                        }
+                        Ok(_) | Err(_) => {
+                            let _ = tokio::fs::remove_file(&temp_path).await;
+                            break;
+                        }
+                    }
+                }
             }
 
             Message::RetrieveShardRequest { shard_hash } => {

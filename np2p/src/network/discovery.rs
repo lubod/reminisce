@@ -6,7 +6,7 @@ use crate::network::peer_registry::PeerRegistry;
 
 pub const DEFAULT_DISCOVERY_PORT: u16 = 5060;
 const BROADCAST_INTERVAL_SECS: u64 = 10;
-const PEER_TTL_SECS: u64 = 30;
+const PEER_TTL_SECS: u64 = 90;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct DiscoveryAnnouncement {

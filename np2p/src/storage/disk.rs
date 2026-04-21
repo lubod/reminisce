@@ -1,9 +1,10 @@
 use std::path::{Path, PathBuf};
 use crate::error::Result;
 use tokio::fs;
+use tokio::io::AsyncWriteExt;
 
 /// Manages local disk storage for encrypted shards.
-/// Shards are stored in subdirectories based on their hash to avoid 
+/// Shards are stored in subdirectories based on their hash to avoid
 /// having thousands of files in a single folder.
 #[derive(Clone)]
 pub struct DiskStorage {
@@ -29,10 +30,18 @@ impl DiskStorage {
         self.base_path.join(prefix).join(rest)
     }
 
+    /// Returns the temp path used during a streaming shard upload.
+    /// Keyed by (file_hash || shard_index) so concurrent uploads don't collide.
+    pub fn temp_path(&self, temp_id: &[u8; 32]) -> PathBuf {
+        let hash_hex = hex::encode(temp_id);
+        let (prefix, rest) = hash_hex.split_at(2);
+        self.base_path.join(prefix).join(format!("{}.tmp", rest))
+    }
+
     /// Stores a shard on disk.
     pub async fn store(&self, shard_hash: [u8; 32], data: &[u8]) -> Result<()> {
         let path = self.get_shard_path(&shard_hash);
-        
+
         // Ensure parent directory exists
         if let Some(parent) = path.parent() {
             if !parent.exists() {
@@ -41,6 +50,35 @@ impl DiskStorage {
         }
 
         fs::write(path, data).await?;
+        Ok(())
+    }
+
+    /// Appends a chunk to the in-progress temp file for a streaming shard upload.
+    pub async fn store_stream_chunk(&self, temp_path: &Path, data: &[u8]) -> Result<()> {
+        if let Some(parent) = temp_path.parent() {
+            if !parent.exists() {
+                fs::create_dir_all(parent).await?;
+            }
+        }
+        let mut file = tokio::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(temp_path)
+            .await?;
+        file.write_all(data).await?;
+        Ok(())
+    }
+
+    /// Moves the verified temp file to its content-addressed final path.
+    /// The caller must verify the BLAKE3 hash before calling this.
+    pub async fn finalize_stream_temp(&self, temp_path: &Path, shard_hash: [u8; 32]) -> Result<()> {
+        let final_path = self.get_shard_path(&shard_hash);
+        if let Some(parent) = final_path.parent() {
+            if !parent.exists() {
+                fs::create_dir_all(parent).await?;
+            }
+        }
+        fs::rename(temp_path, final_path).await?;
         Ok(())
     }
 
@@ -79,18 +117,18 @@ mod tests {
     async fn test_disk_storage_roundtrip() {
         let tmp = tempdir().unwrap();
         let storage = DiskStorage::new(tmp.path()).await.unwrap();
-        
+
         let hash = [0xABu8; 32];
         let data = b"Some encrypted shard data";
-        
+
         // Store
         storage.store(hash, data).await.unwrap();
         assert!(storage.exists(hash));
-        
+
         // Get
         let retrieved = storage.get(hash).await.unwrap().expect("Shard missing");
         assert_eq!(retrieved, data);
-        
+
         // Delete
         storage.delete(hash).await.unwrap();
         assert!(!storage.exists(hash));
@@ -101,7 +139,7 @@ mod tests {
         let tmp = tempdir().unwrap();
         let storage = DiskStorage::new(tmp.path()).await.unwrap();
         let hash = [0xCDu8; 32];
-        
+
         let result = storage.get(hash).await.unwrap();
         assert!(result.is_none());
     }

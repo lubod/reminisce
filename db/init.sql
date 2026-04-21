@@ -108,6 +108,8 @@ ALTER TABLE images ADD COLUMN IF NOT EXISTS height INTEGER;
 ALTER TABLE images ADD COLUMN IF NOT EXISTS file_size_bytes INTEGER;
 ALTER TABLE images ADD COLUMN IF NOT EXISTS quality_score_generated_at TIMESTAMPTZ;
 ALTER TABLE images ADD COLUMN IF NOT EXISTS duplicates_checked_at TIMESTAMPTZ;
+ALTER TABLE images ADD COLUMN IF NOT EXISTS p2p_segment_count INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE images ADD COLUMN IF NOT EXISTS p2p_segment_enc_sizes BIGINT[] DEFAULT NULL;
 
 -- Pre-computed near-duplicate pairs (background worker populates this)
 CREATE TABLE IF NOT EXISTS image_duplicate_pairs (
@@ -389,3 +391,5 @@ CREATE INDEX IF NOT EXISTS idx_p2p_shards_file_hash ON p2p_shards(file_hash);
 CREATE INDEX IF NOT EXISTS idx_p2p_shards_node_id ON p2p_shards(node_id);
 
 ALTER TABLE videos ADD COLUMN IF NOT EXISTS file_size_bytes BIGINT;
+ALTER TABLE videos ADD COLUMN IF NOT EXISTS p2p_segment_count INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE videos ADD COLUMN IF NOT EXISTS p2p_segment_enc_sizes BIGINT[] DEFAULT NULL;

@@ -1,3 +1,10 @@
+//! Coordinator service: peer registry, QUIC relay, and reverse tunnel.
+//!
+//! Runs on a VPS. Storage nodes and home servers register here so they can find
+//! each other across NATs. Also proxies bidirectional QUIC streams between peers
+//! that cannot connect directly, and maintains a reverse tunnel so Android clients
+//! can reach the home server from outside the LAN.
+
 use std::collections::HashMap;
 use std::io::BufReader;
 use std::net::{IpAddr, SocketAddr};
@@ -248,7 +255,13 @@ async fn pipe<R, W>(
 {
     let to_home = tokio::io::copy(&mut client_read, &mut quic_send);
     let to_client = tokio::io::copy(&mut quic_recv, &mut client_write);
-    tokio::select! { _ = to_home => {}, _ = to_client => {} }
+    // 5-minute timeout: prevents stalled connections from holding QUIC streams open.
+    let timeout = tokio::time::sleep(std::time::Duration::from_secs(300));
+    tokio::select! {
+        _ = to_home => {}
+        _ = to_client => {}
+        _ = timeout => { warn!("[TUNNEL] Pipe timed out after 300s — closing"); }
+    }
 }
 
 /// Listen on a TCP port; pipe each connection to the home server via QUIC tunnel.

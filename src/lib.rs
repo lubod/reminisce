@@ -17,6 +17,7 @@ pub mod verification_worker;
 pub mod p2p_audit_worker;
 pub mod media_replication_worker;
 pub mod shard_rebalance_worker;
+pub mod p2p_restore;
 pub mod ai_worker;
 pub mod telemetry;
 pub mod metrics;
@@ -46,6 +47,7 @@ pub mod services {
     pub mod ingest;
     pub mod import_dir;
     pub mod p2p_status;
+    pub mod p2p_restore;
     pub mod proxy_manager;
     pub mod duplicates;
     pub mod quality;
@@ -153,6 +155,7 @@ pub use crate::services::import_dir::{import_directory, get_import_status};
         crate::services::label::remove_image_label,
         crate::services::import_dir::import_directory,
         crate::services::import_dir::get_import_status,
+        crate::services::p2p_restore::restore_p2p_file,
         crate::services::p2p_status::get_p2p_backup_status,
         crate::services::p2p_status::verify_p2p_backup,
         crate::services::p2p_status::list_p2p_backups,
@@ -606,6 +609,7 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
                     .service(services::label::remove_video_label)
                     .service(import_directory)
                     .service(get_import_status)
+                    .service(services::p2p_restore::restore_p2p_file)
                     .service(services::p2p_status::get_p2p_backup_status)
                     .service(services::p2p_status::verify_p2p_backup)
                     .service(services::p2p_status::list_p2p_backups)

@@ -117,8 +117,11 @@ async fn pipe_to_local(
     let client_to_server = tokio::io::copy(&mut quic_recv, &mut tcp_send);
     let server_to_client = tokio::io::copy(&mut tcp_recv, &mut quic_send);
 
+    // 5-minute timeout: prevents stalled Android connections from holding streams open.
+    let timeout = tokio::time::sleep(std::time::Duration::from_secs(300));
     tokio::select! {
         _ = client_to_server => {},
         _ = server_to_client => {},
+        _ = timeout => {},
     }
 }

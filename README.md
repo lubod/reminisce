@@ -10,7 +10,7 @@ Reminisce lets you back up photos and videos from your phone to your own server,
 - **Automatic descriptions** — SmolVLM-500M generates text descriptions for every photo (~5s per image)
 - **Face recognition** — InsightFace clusters faces into people; name them and search by person
 - **Location tagging** — GPS reverse-geocoding (offline PostGIS database, no API key required)
-- **P2P distributed storage** — files are erasure-coded and distributed across your own storage nodes, with no single point of failure
+- **P2P distributed storage** — files are erasure-coded (3/5 Reed-Solomon) and distributed across your own storage nodes, with no single point of failure
 - **Cross-device deduplication** — the same photo from multiple phones is stored once
 - **Android client** — automatic background backup from your phone
 - **AGPL v3** — fully open source, self-hostable, no telemetry
@@ -29,6 +29,17 @@ Android / Web client
    │     └── InsightFace — face detection (CPU)
    └── np2p storage nodes (QUIC/ChaCha20Poly1305)
 ```
+
+## Documentation
+
+| Document | Description |
+|----------|-------------|
+| [docs/architecture.md](docs/architecture.md) | System diagram, crate responsibilities, workers, auth |
+| [docs/p2p-backup.md](docs/p2p-backup.md) | P2P erasure coding, encryption, repair, restore |
+| [docs/database.md](docs/database.md) | Table reference, index strategy, migrations |
+| [docs/deployment.md](docs/deployment.md) | Docker setup, config reference, storage nodes, observability |
+| [DEV_SETUP.md](DEV_SETUP.md) | Local development guide |
+| Swagger UI | `http://localhost:8080/swagger-ui/` (live API explorer when running) |
 
 ## Quick Start (Docker)
 
@@ -51,6 +62,13 @@ docker compose up -d
 
 The web UI will be available at `https://localhost:28444` (self-signed cert).
 
+On first run, create the admin account:
+```bash
+curl -X POST http://localhost:8080/api/auth/setup \
+  -H 'Content-Type: application/json' \
+  -d '{"username": "admin", "password": "your-secure-password"}'
+```
+
 ## Development Setup
 
 See [DEV_SETUP.md](DEV_SETUP.md) for a full local development guide with hot-reload for both the Rust backend and React frontend.
@@ -69,22 +87,9 @@ See [DEV_SETUP.md](DEV_SETUP.md) for a full local development guide with hot-rel
 ./dev test
 ```
 
-## Configuration
-
-Copy `config-fullstack.yaml.example` to `config-fullstack.yaml` and set:
-
-| Key | Description |
-|-----|-------------|
-| `api_secret_key` | JWT signing key — `openssl rand -base64 32` |
-| `p2p_coordinator_addr` | Address of the coordinator node (e.g. `127.0.0.1:5055`) |
-| `p2p_namespace` | Namespace to isolate peer groups (e.g. `production`) |
-| `database_url` | PostgreSQL connection string |
-| `embedding_service_url` | URL of the AI service (default `http://localhost:8081`) |
-
 ## Security
 
 - **Generate a unique `api_secret_key`:** `openssl rand -base64 32`
-- **Change the default admin password** (`admin` / `admin123`) immediately after first login
 - **Don't expose port 8080** to the internet — run behind a VPN or firewall
 - **Encrypt storage node disks** (LUKS/FileVault) if physically accessible to others
 
@@ -101,12 +106,6 @@ The AI service runs as a Docker container (`lubod/reminisce-ai-server`) and expo
 | `POST /detect` | InsightFace buffalo_l | ~625ms |
 
 GPU acceleration is supported for AMD ROCm and CUDA. InsightFace runs on CPU to avoid ROCm ONNX crashes on RDNA3 iGPUs.
-
-## P2P Storage
-
-Files are split into shards using Reed-Solomon erasure coding (5-of-8 by default) and distributed across storage nodes. Each shard is encrypted with ChaCha20Poly1305. Any 5 of 8 nodes can reconstruct any file.
-
-See [np2p/DESIGN.md](np2p/DESIGN.md) for the full design document.
 
 ## License
 

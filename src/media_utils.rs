@@ -394,8 +394,8 @@ pub async fn list_thumbnails(
     let lat_value;
     let lon_value;
     if lon_param_idx.is_some() {
-        lat_value = location_lat.unwrap();
-        lon_value = location_lon.unwrap();
+        lat_value = location_lat.expect("lon_param_idx is only set when location_lat is Some");
+        lon_value = location_lon.expect("lon_param_idx is only set when location_lon is Some");
         params.push(&lon_value as &(dyn tokio_postgres::types::ToSql + Sync));
         params.push(&lat_value as &(dyn tokio_postgres::types::ToSql + Sync));
     }
@@ -586,8 +586,8 @@ pub async fn total_thumbnails(
     let lat_value;
     let lon_value;
     if lon_param_idx.is_some() {
-        lat_value = location_lat.unwrap();
-        lon_value = location_lon.unwrap();
+        lat_value = location_lat.expect("lon_param_idx is only set when location_lat is Some");
+        lon_value = location_lon.expect("lon_param_idx is only set when location_lon is Some");
         params.push(&lon_value as &(dyn tokio_postgres::types::ToSql + Sync));
         params.push(&lat_value as &(dyn tokio_postgres::types::ToSql + Sync));
     }

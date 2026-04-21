@@ -14,12 +14,16 @@ pub struct StorageEngine;
 
 impl StorageEngine {
     /// Prepares a file for distributed backup.
-    /// 1. Encrypts the data with the provided key.
+    /// 1. Encrypts the data with the provided key and deterministic nonce derived from .
     /// 2. Splits the encrypted data into 5 shards (3 data + 2 parity).
     /// Returns the 5 shards and the size of the encrypted blob (needed for reconstruction).
-    pub fn process_for_backup(data: &[u8], key: &[u8]) -> Result<(Vec<Vec<u8>>, usize)> {
+    ///
+    ///  must be unique per (file, key, segment). Pass  for single-segment
+    /// files (key is randomly generated once per file). For multi-segment files pass
+    ///  to avoid nonce reuse across segments.
+    pub fn process_for_backup(data: &[u8], key: &[u8], nonce_context: &[u8]) -> Result<(Vec<Vec<u8>>, usize)> {
         // 1. Encrypt
-        let encrypted = encryption::encrypt(data, key)?;
+        let encrypted = encryption::encrypt(data, key, nonce_context)?;
         let encrypted_size = encrypted.len();
 
         // 2. Shard
@@ -52,7 +56,7 @@ mod tests {
         let original_data = b"Distributed backup test with encryption and EC 3/5.";
         
         // Backup
-        let (shards, enc_size) = StorageEngine::process_for_backup(original_data, &key).unwrap();
+        let (shards, enc_size) = StorageEngine::process_for_backup(original_data, &key, &key).unwrap();
         assert_eq!(shards.len(), 5);
 
         // Simulate losing 2 storage nodes

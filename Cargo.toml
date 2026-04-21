@@ -16,6 +16,10 @@ path = "src/lib.rs"
 name = "reminisce"
 path = "src/main.rs"
 
+[[bin]]
+name = "p2p_restore"
+path = "src/bin/p2p_restore.rs"
+
 [dependencies]
 actix-web = { version = "4", features = ["rustls-0_21"] }
 serde = { version = "1.0", features = ["derive"] }
@@ -69,6 +73,7 @@ ed25519-dalek = { version = "2.0", features = ["rand_core"] }
 x25519-dalek = { version = "2.0", features = ["static_secrets"] }
 rand_core = { version = "0.6", features = ["getrandom"] }
 hex = "0.4"
+clap = { version = "4", features = ["derive"] }
 rustls = { version = "0.23.35", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 rustls-pemfile = "2.2.0"
 rustls-pki-types = "1.10.1"
@@ -145,3 +150,19 @@ path = "tests/import_dir_test.rs"
 [[test]]
 name = "ai_speed_test"
 path = "tests/ai_speed_test.rs"
+
+[[test]]
+name = "p2p_restore_test"
+path = "tests/p2p_restore_test.rs"
+
+[[test]]
+name = "media_replication_worker_test"
+path = "tests/media_replication_worker_test.rs"
+
+[[test]]
+name = "p2p_audit_worker_test"
+path = "tests/p2p_audit_worker_test.rs"
+
+[[test]]
+name = "shard_rebalance_worker_test"
+path = "tests/shard_rebalance_worker_test.rs"
