@@ -191,13 +191,32 @@ class ThumbnailHelper {
                     }
 
                 options.inJustDecodeBounds = false
-                val bitmap = BitmapFactory.decodeStream(inputStream2, null, options)
+                val rawBitmap = BitmapFactory.decodeStream(inputStream2, null, options)
                 inputStream2.close()
 
-                if (bitmap == null) {
+                if (rawBitmap == null) {
                     Log.e(TAG, "Failed to decode bitmap for thumbnail from URI: $uri")
                     return null
                 }
+
+                // Apply EXIF orientation — BitmapFactory.decodeStream does not auto-rotate.
+                val orientedBitmap = context.contentResolver.openInputStream(originalUri)?.use { exifStream ->
+                    val exif = ExifInterface(exifStream)
+                    val rotation = when (exif.getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)) {
+                        ExifInterface.ORIENTATION_ROTATE_90  -> 90f
+                        ExifInterface.ORIENTATION_ROTATE_180 -> 180f
+                        ExifInterface.ORIENTATION_ROTATE_270 -> 270f
+                        else -> 0f
+                    }
+                    if (rotation != 0f) {
+                        val matrix = android.graphics.Matrix().apply { postRotate(rotation) }
+                        val rotated = Bitmap.createBitmap(rawBitmap, 0, 0, rawBitmap.width, rawBitmap.height, matrix, true)
+                        rawBitmap.recycle()
+                        rotated
+                    } else {
+                        rawBitmap
+                    }
+                } ?: rawBitmap
 
                 // Determine format based on file extension
                 val format = when {
@@ -210,7 +229,7 @@ class ThumbnailHelper {
                 // Save thumbnail to file
                 val thumbnailFile = File(thumbnailDir, "thumb_$fileName")
 
-                processBitmapToThumbnail(bitmap, thumbnailFile, maxWidth, maxHeight, format, quality)
+                processBitmapToThumbnail(orientedBitmap, thumbnailFile, maxWidth, maxHeight, format, quality)
             } catch (e: Exception) {
                 Log.e(TAG, "Error generating image thumbnail from URI: $uri", e)
                 null

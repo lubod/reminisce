@@ -479,6 +479,84 @@ def describe_image_fast():
         return jsonify({'error': str(e)}), 500
 
 
+# ==================== ORIENTATION DETECTION ENDPOINT ====================
+
+@app.route('/orientation', methods=['POST'])
+def detect_orientation():
+    """Detect image orientation using Qwen2.5-VL.
+
+    Returns JSON: { orientation: str, orientation_value: int, raw: str }
+    orientation is one of: normal, rotated_90_cw, rotated_90_ccw, rotated_180
+    orientation_value maps to EXIF: 1, 6, 8, 3 respectively.
+    """
+    if vlm_model is None:
+        return jsonify({'error': 'VLM model not loaded'}), 503
+
+    try:
+        data = request.json
+        if not data or 'image' not in data:
+            return jsonify({'error': 'Missing image field'}), 400
+
+        try:
+            image = decode_image_to_pil(data['image'])
+        except Exception:
+            return jsonify({'error': 'Invalid image data'}), 400
+
+        if image.mode != 'RGB':
+            image = image.convert('RGB')
+        if image.width < 3 or image.height < 3:
+            return jsonify({'error': f'Image too small ({image.width}x{image.height}), minimum 3x3'}), 400
+
+        from qwen_vl_utils import process_vision_info
+
+        messages = [
+            {"role": "user", "content": [
+                {"type": "image", "image": image},
+                {"type": "text", "text": (
+                    "Is this image correctly oriented, or does it appear rotated? "
+                    "Use gravity cues: people standing upright, buildings vertical, "
+                    "horizon horizontal, text readable. "
+                    "Reply with ONLY one of: normal, rotated_90_cw, rotated_90_ccw, rotated_180. "
+                    "rotated_90_cw = needs 90 degree clockwise rotation to be upright. "
+                    "rotated_90_ccw = needs 90 degree counter-clockwise rotation to be upright."
+                )},
+            ]}
+        ]
+        text = vlm_processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        image_inputs, video_inputs = process_vision_info(messages)
+        inputs = vlm_processor(
+            text=[text], images=image_inputs, videos=video_inputs, return_tensors="pt"
+        ).to(device)
+
+        logger.info(f"Orientation detection: {image.width}x{image.height}")
+        with torch.no_grad():
+            generated_ids = vlm_model.generate(
+                **inputs,
+                max_new_tokens=12,
+                do_sample=False,
+                use_cache=True,
+            )
+
+        trimmed = [out[len(inp):] for inp, out in zip(inputs.input_ids, generated_ids)]
+        raw = vlm_processor.batch_decode(trimmed, skip_special_tokens=True)[0].strip().lower()
+
+        if 'rotated_90_ccw' in raw or ('90' in raw and 'ccw' in raw):
+            label, value = 'rotated_90_ccw', 8
+        elif 'rotated_90_cw' in raw or ('90' in raw and 'cw' in raw):
+            label, value = 'rotated_90_cw', 6
+        elif 'rotated_180' in raw or '180' in raw:
+            label, value = 'rotated_180', 3
+        else:
+            label, value = 'normal', 1
+
+        logger.info(f"Orientation: {label} (exif={value}) raw={raw!r}")
+        return jsonify({'orientation': label, 'orientation_value': value, 'raw': raw})
+
+    except Exception as e:
+        logger.error(f"Error in orientation detection: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
 # ==================== FACE DETECTION ENDPOINTS ====================
 
 @app.route('/detect', methods=['POST'])

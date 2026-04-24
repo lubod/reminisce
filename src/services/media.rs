@@ -43,7 +43,7 @@ pub async fn get_image(
     let row = if claims.role == "admin" {
         client
             .query_opt(
-                "SELECT name, place, ext FROM images WHERE hash = $1 AND deleted_at IS NULL LIMIT 1",
+                "SELECT name, place, ext, orientation, (exif IS NULL) AS no_exif FROM images WHERE hash = $1 AND deleted_at IS NULL LIMIT 1",
                 &[&hash_to_find]
             ).await
             .map_err(|e| {
@@ -53,7 +53,7 @@ pub async fn get_image(
     } else {
         client
             .query_opt(
-                "SELECT name, place, ext FROM images WHERE user_id = $1 AND hash = $2 AND deleted_at IS NULL LIMIT 1",
+                "SELECT name, place, ext, orientation, (exif IS NULL) AS no_exif FROM images WHERE user_id = $1 AND hash = $2 AND deleted_at IS NULL LIMIT 1",
                 &[&user_uuid, &hash_to_find]
             ).await
             .map_err(|e| {
@@ -66,6 +66,8 @@ pub async fn get_image(
         let original_name: String = row.get(0);
         let place: Option<String> = row.get(1);
         let extension: String = row.get(2);
+        let orientation: Option<i16> = row.get(3);
+        let no_exif: bool = row.get(4);
 
         let filename = format!("{}.{}", hash_to_find, extension);
         let sub_dir_path = utils::get_subdirectory_path(config.get_images_dir(), &hash_to_find);
@@ -76,6 +78,23 @@ pub async fn get_image(
 
         match tokio::fs::read(&image_path).await {
             Ok(data) => {
+                // Apply DB orientation for images that have no EXIF in the file.
+                // JPEG: inject a minimal EXIF APP1 block (no re-encode, zero quality loss).
+                // PNG:  rotate pixels and re-encode as PNG (lossless).
+                // Other formats (SVG, HEIC, …): serve as-is.
+                let data = match (no_exif, orientation) {
+                    (true, Some(o)) if o != 1 => {
+                        let ext_lc = extension.to_lowercase();
+                        if ext_lc == "jpg" || ext_lc == "jpeg" {
+                            crate::media_utils::inject_exif_orientation(&data, o as u16)
+                        } else if ext_lc == "png" {
+                            crate::media_utils::rotate_png_bytes(&data, o as u16).unwrap_or(data)
+                        } else {
+                            data
+                        }
+                    }
+                    _ => data,
+                };
                 info!("Serving image: {:?}", &image_path);
                 let mut response = HttpResponse::Ok();
                 response.content_type(mime_type.as_ref());

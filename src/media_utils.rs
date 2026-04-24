@@ -71,6 +71,75 @@ pub fn read_exif_orientation_from_path(path: &std::path::Path) -> Option<u16> {
         })
 }
 
+// ---- JPEG EXIF Orientation Injection ----------------------------------------
+
+/// Inject a minimal EXIF APP1 block carrying only the Orientation tag into a
+/// JPEG byte stream.  Returns the bytes unchanged if:
+///   - the input is not a JPEG (no SOI marker), or
+///   - an APP1 EXIF block is already present (shouldn't happen under the
+///     `exif IS NULL` DB guard, but safe to handle).
+///
+/// The injected block is 36 bytes inserted right after the 2-byte SOI marker.
+/// No decode/re-encode — pixel data is never touched.
+pub fn inject_exif_orientation(jpeg_bytes: &[u8], orientation: u16) -> Vec<u8> {
+    // Must start with JPEG SOI (FF D8)
+    if jpeg_bytes.len() < 4 || jpeg_bytes[0] != 0xFF || jpeg_bytes[1] != 0xD8 {
+        return jpeg_bytes.to_vec();
+    }
+
+    // Scan segments after SOI; bail out if an APP1 EXIF block already exists
+    let mut pos = 2usize;
+    while pos + 4 <= jpeg_bytes.len() {
+        if jpeg_bytes[pos] != 0xFF {
+            break;
+        }
+        let marker = jpeg_bytes[pos + 1];
+        if marker == 0xE1
+            && pos + 10 <= jpeg_bytes.len()
+            && &jpeg_bytes[pos + 4..pos + 10] == b"Exif\0\0"
+        {
+            return jpeg_bytes.to_vec();
+        }
+        let seg_len = u16::from_be_bytes([jpeg_bytes[pos + 2], jpeg_bytes[pos + 3]]) as usize;
+        if seg_len < 2 {
+            break;
+        }
+        pos += 2 + seg_len;
+    }
+
+    // Build a 36-byte minimal EXIF APP1 block (little-endian TIFF, 1 IFD entry)
+    let mut app1 = [0u8; 36];
+    app1[0..2].copy_from_slice(&[0xFF, 0xE1]);         // APP1 marker
+    app1[2..4].copy_from_slice(&[0x00, 0x22]);         // length = 34
+    app1[4..10].copy_from_slice(b"Exif\0\0");          // EXIF header
+    app1[10..12].copy_from_slice(&[0x49, 0x49]);       // "II" little-endian
+    app1[12..14].copy_from_slice(&[0x2A, 0x00]);       // TIFF magic
+    app1[14..18].copy_from_slice(&[0x08, 0x00, 0x00, 0x00]); // IFD0 at offset 8
+    app1[18..20].copy_from_slice(&[0x01, 0x00]);       // 1 IFD entry
+    app1[20..22].copy_from_slice(&[0x12, 0x01]);       // tag 0x0112 = Orientation
+    app1[22..24].copy_from_slice(&[0x03, 0x00]);       // type SHORT
+    app1[24..28].copy_from_slice(&[0x01, 0x00, 0x00, 0x00]); // count 1
+    app1[28] = (orientation & 0xFF) as u8;             // value low byte
+    app1[29] = (orientation >> 8) as u8;               // value high byte
+    // bytes 30-35 stay zero (SHORT padding + next-IFD offset)
+
+    let mut out = Vec::with_capacity(jpeg_bytes.len() + 36);
+    out.extend_from_slice(&jpeg_bytes[..2]); // SOI
+    out.extend_from_slice(&app1);
+    out.extend_from_slice(&jpeg_bytes[2..]);
+    out
+}
+
+/// Rotate a PNG's pixel data according to an EXIF orientation value and
+/// re-encode as PNG (lossless).  Returns `None` if the bytes cannot be decoded.
+pub fn rotate_png_bytes(png_bytes: &[u8], orientation: u16) -> Option<Vec<u8>> {
+    let img = image::load_from_memory(png_bytes).ok()?;
+    let rotated = apply_orientation_to_image(img, orientation);
+    let mut buf = std::io::Cursor::new(Vec::new());
+    rotated.write_to(&mut buf, image::ImageOutputFormat::Png).ok()?;
+    Some(buf.into_inner())
+}
+
 // ---- Path / Type Helpers ----------------------------------------------------
 
 /// Compute the BLAKE3 hash of a file, returning the hex string.

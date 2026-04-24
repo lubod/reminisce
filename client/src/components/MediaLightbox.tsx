@@ -310,11 +310,25 @@ export const MediaLightbox = observer(() => {
 
             if (exif.Orientation) {
                 const orientations: { [key: number]: string } = {
-                    1: 'Normal', 3: 'Rotated 180°', 6: 'Rotated 90° CW', 8: 'Rotated 90° CCW'
+                    1: 'Normal', 2: 'Flipped horizontal', 3: 'Rotated 180°',
+                    4: 'Flipped vertical', 5: 'Rotated 90° CCW + flip',
+                    6: 'Rotated 90° CW', 7: 'Rotated 90° CW + flip', 8: 'Rotated 90° CCW'
+                };
+                // kamadak-exif stores Orientation as a verbose display string, e.g.
+                // "row 0 at right and column 0 at top" — map those to numeric values.
+                const orientationStrings: { [key: string]: number } = {
+                    'row 0 at top and column 0 at left': 1,
+                    'row 0 at top and column 0 at right': 2,
+                    'row 0 at bottom and column 0 at right': 3,
+                    'row 0 at bottom and column 0 at left': 4,
+                    'row 0 at left and column 0 at top': 5,
+                    'row 0 at right and column 0 at top': 6,
+                    'row 0 at right and column 0 at bottom': 7,
+                    'row 0 at left and column 0 at bottom': 8,
                 };
                 const ori = typeof exif.Orientation === 'number'
                     ? exif.Orientation
-                    : parseInt(exif.Orientation, 10);
+                    : (orientationStrings[String(exif.Orientation)] ?? parseInt(exif.Orientation, 10));
                 formatted['Orientation'] = orientations[ori] || String(exif.Orientation);
             }
 

@@ -171,11 +171,10 @@ pub async fn process_image_file(
             &[&exif_str, user_id, &hash],
         ).await;
 
-        // Store orientation separately so thumbnail generation can avoid re-reading the file
-        let orientation: Option<i16> = exif_json.get("Orientation")
-            .and_then(|v| v.as_str())
-            .and_then(|s| s.parse::<i16>().ok());
-        if let Some(orient) = orientation {
+        // Store orientation — read the raw Short value directly from EXIF rather than
+        // parsing display_value() which returns descriptive strings like
+        // "row 0 at right and column 0 at top" that can never be parsed as i16.
+        if let Some(orient) = crate::media_utils::read_exif_orientation_from_path(&target_path).map(|o| o as i16) {
             let _ = client.execute(
                 "UPDATE images SET orientation = $1 WHERE user_id = $2 AND hash = $3 AND orientation IS NULL",
                 &[&orient, user_id, &hash],
