@@ -177,7 +177,7 @@ groups:
           description: "Node memory usage is above 90%."
 
       - alert: GPUHighUtilization
-        expr: DCGM_FI_DEV_GPU_UTIL > 90
+        expr: gpu_utilization_percent > 90
         for: 5m
         labels:
           severity: warning
@@ -188,7 +188,7 @@ groups:
 
       - alert: GPUHighMemory
         expr: |
-          (DCGM_FI_DEV_FB_USED / DCGM_FI_DEV_FB_TOTAL) * 100 > 90
+          (gpu_memory_used_bytes / gpu_memory_total_bytes) * 100 > 90
         for: 5m
         labels:
           severity: warning
@@ -196,6 +196,57 @@ groups:
         annotations:
           summary: "High GPU Memory Usage"
           description: "GPU memory usage is above 90%."
+
+      # ============================================================================
+      # Backup Health Alerts
+      # ============================================================================
+
+      - alert: BackupPeersUnavailable
+        expr: backup_peers_available == 0
+        for: 30m
+        labels:
+          severity: critical
+          component: backup
+        annotations:
+          summary: "No P2P backup peers available"
+          description: "No peers have been available for 30 minutes — photos are not being backed up"
+
+      - alert: BackupFailingSilently
+        expr: rate(backup_failures_total[1h]) > 0
+        for: 10m
+        labels:
+          severity: warning
+          component: backup
+        annotations:
+          summary: "P2P backup failures detected"
+          description: "{{ $value | humanize }} backup failures/sec in the last hour"
+
+      - alert: DiskFillRateHigh
+        expr: |
+          predict_linear(
+            node_filesystem_avail_bytes{mountpoint="/host/root"}[6h],
+            7 * 24 * 3600
+          ) < 0
+        for: 1h
+        labels:
+          severity: warning
+          component: system
+        annotations:
+          summary: "Disk projected to fill within 7 days"
+          description: "At current write rate, disk will be full in less than 7 days"
+
+      - alert: HighFileDescriptors
+        expr: |
+          process_open_fds{job="reminisce"}
+          /
+          process_max_fds{job="reminisce"} > 0.8
+        for: 5m
+        labels:
+          severity: warning
+          component: application
+        annotations:
+          summary: "High file descriptor usage"
+          description: "Using {{ $value | humanizePercentage }} of available file descriptors"
 
       # ============================================================================
       # Authentication / Security Alerts

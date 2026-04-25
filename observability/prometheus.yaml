@@ -17,6 +17,19 @@ scrape_configs:
   - job_name: 'postgres'
     static_configs:
       - targets: ['postgres-exporter:9187']
+    metric_relabel_configs:
+      # Keep pg_settings_max_connections (used by DB pool alerts), drop the rest (~200 static config values)
+      - source_labels: [__name__]
+        regex: 'pg_settings_.+'
+        target_label: __tmp_drop
+        replacement: '1'
+      - source_labels: [__name__]
+        regex: 'pg_settings_max_connections'
+        target_label: __tmp_drop
+        replacement: '0'
+      - source_labels: [__tmp_drop]
+        regex: '1'
+        action: drop
 
   - job_name: 'reminisce'
     metrics_path: '/metrics'
