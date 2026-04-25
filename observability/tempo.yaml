@@ -1,5 +1,8 @@
+stream_over_http_enabled: true
+
 server:
   http_listen_port: 3200
+  log_level: warn
 
 distributor:
   receivers:
@@ -10,22 +13,10 @@ distributor:
         http:
           endpoint: "0.0.0.0:4318"
 
-ingester:
-  trace_idle_period: 10s
-  max_block_bytes: 1_000_000
-  max_block_duration: 5m
-
-compactor:
-  compaction:
-    compaction_window: 1h
-    max_block_bytes: 100_000_000
-    block_retention: 336h         # 14 days (was 1h)
-    compacted_block_retention: 24h # 1 day (was 10m)
-
 storage:
   trace:
-    backend: local                     # backend configuration to use
-    wal:
-      path: /var/tempo/wal             # where to store the wal locally
+    backend: local
     local:
-      path: /var/tempo/blocks          # where to store the blocks locally
+      path: /var/tempo/blocks
+    wal:
+      path: /var/tempo/wal
