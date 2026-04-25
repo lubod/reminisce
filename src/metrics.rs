@@ -556,3 +556,62 @@ pub static FACE_DETECTION_PROCESSING_DELAY: Lazy<Histogram> = Lazy::new(|| {
         .buckets(vec![5.0, 10.0, 30.0, 60.0, 120.0, 300.0, 600.0, 1800.0, 3600.0])
     ).expect("Failed to register face_detection_processing_delay_seconds metric")
 });
+
+// ============================================================================
+// Startup Registration
+// ============================================================================
+
+/// Force-register every Lazy metric so they appear in /metrics at 0 from startup.
+/// Without this, counters and histograms only appear after their first increment,
+/// which causes Grafana dashboards to show "no data" instead of 0.
+pub fn init_metrics() {
+    Lazy::force(&USER_REGISTRATIONS_TOTAL);
+    Lazy::force(&USER_LOGINS_TOTAL);
+    Lazy::force(&USER_LOGIN_FAILURES_TOTAL);
+    Lazy::force(&ACTIVE_SESSIONS);
+    Lazy::force(&MEMORIES_CREATED_TOTAL);
+    Lazy::force(&MEMORIES_RETRIEVED_TOTAL);
+    Lazy::force(&MEMORIES_DELETED_TOTAL);
+    Lazy::force(&MEMORIES_SHARED_TOTAL);
+    Lazy::force(&DB_QUERY_DURATION);
+    Lazy::force(&DB_CONNECTION_ERRORS_TOTAL);
+    Lazy::force(&SLOW_QUERIES_TOTAL);
+    Lazy::force(&P2P_CONNECTIONS_TOTAL);
+    Lazy::force(&ACTIVE_P2P_SESSIONS);
+    Lazy::force(&NAT_TRAVERSAL_SUCCESS_TOTAL);
+    Lazy::force(&NAT_TRAVERSAL_FAILURES_TOTAL);
+    Lazy::force(&FILE_UPLOADS_TOTAL);
+    Lazy::force(&BYTES_UPLOADED_TOTAL);
+    Lazy::force(&UPLOAD_DURATION);
+    Lazy::force(&APPLICATION_ERRORS_TOTAL);
+    Lazy::force(&VALIDATION_ERRORS_TOTAL);
+    Lazy::force(&BACKUP_ATTEMPTS_TOTAL);
+    Lazy::force(&BACKUP_SUCCESS_TOTAL);
+    Lazy::force(&BACKUP_FAILURES_TOTAL);
+    Lazy::force(&BACKUP_SIZE_BYTES);
+    Lazy::force(&BACKUP_DURATION_SECONDS);
+    Lazy::force(&BACKUP_PEERS_AVAILABLE);
+    Lazy::force(&BACKUP_DEDUPLICATED_TOTAL);
+    Lazy::force(&BACKUP_RATE_LIMITED_TOTAL);
+    Lazy::force(&VERIFICATION_DURATION);
+    Lazy::force(&VERIFICATION_SUCCESS_TOTAL);
+    Lazy::force(&VERIFICATION_FAILURES_TOTAL);
+    Lazy::force(&AI_DESCRIPTION_DURATION);
+    Lazy::force(&AI_DESCRIPTION_SUCCESS_TOTAL);
+    Lazy::force(&AI_DESCRIPTION_FAILURES_TOTAL);
+    Lazy::force(&EMBEDDING_DURATION);
+    Lazy::force(&EMBEDDING_SUCCESS_TOTAL);
+    Lazy::force(&EMBEDDING_FAILURES_TOTAL);
+    Lazy::force(&FACE_DETECTION_DURATION);
+    Lazy::force(&FACE_DETECTION_SUCCESS_TOTAL);
+    Lazy::force(&FACE_DETECTION_FAILURES_TOTAL);
+    Lazy::force(&FACES_DETECTED_TOTAL);
+    Lazy::force(&FACE_CLUSTERING_DURATION);
+    Lazy::force(&THUMBNAIL_DURATION);
+    Lazy::force(&THUMBNAIL_SUCCESS_TOTAL);
+    Lazy::force(&THUMBNAIL_FAILURES_TOTAL);
+    Lazy::force(&THUMBNAIL_PROCESSING_DELAY);
+    Lazy::force(&AI_DESCRIPTION_PROCESSING_DELAY);
+    Lazy::force(&EMBEDDING_PROCESSING_DELAY);
+    Lazy::force(&FACE_DETECTION_PROCESSING_DELAY);
+}

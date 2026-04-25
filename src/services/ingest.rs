@@ -20,6 +20,7 @@ fn rename_or_copy(from: &Path, to: &Path) -> io::Result<()> {
 use chrono::{Utc};
 use crate::config::Config;
 use crate::db::{MainDbPool, GeotaggingDbPool};
+use crate::metrics::{FILE_UPLOADS_TOTAL, BYTES_UPLOADED_TOTAL};
 use crate::utils;
 use serde::{Serialize, Deserialize};
 use serde_json;
@@ -227,6 +228,11 @@ pub async fn process_image_file(
         }
     }
 
+    FILE_UPLOADS_TOTAL.inc();
+    if let Ok(meta) = fs::metadata(&target_path) {
+        BYTES_UPLOADED_TOTAL.inc_by(meta.len());
+    }
+
     Ok(IngestResult {
         hash: hash.to_string(),
         status: "success".to_string(),
@@ -302,6 +308,11 @@ pub async fn process_video_file(
              AND created_at > NOW() - INTERVAL '1 minute'",
             &[&dt, user_id, &hash],
         ).await;
+    }
+
+    FILE_UPLOADS_TOTAL.inc();
+    if let Ok(meta) = fs::metadata(&target_path) {
+        BYTES_UPLOADED_TOTAL.inc_by(meta.len());
     }
 
     Ok(IngestResult {

@@ -307,6 +307,7 @@ impl RootSpanBuilder for CustomRootSpanBuilder {
 
 pub async fn run_server(config: Config) -> std::io::Result<()> {
     info!("Server starting up with config file");
+    crate::metrics::init_metrics();
 
     if config.database_url.is_none() {
         error!("❌ Headless P2P storage node mode has been removed!");
