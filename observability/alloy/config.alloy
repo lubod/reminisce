@@ -29,16 +29,12 @@ discovery.docker "linux" {
   host = "unix:///var/run/docker.sock"
 }
 
-// Target logs from those containers
-loki.source.docker "default" {
-  host       = "unix:///var/run/docker.sock"
-  targets    = discovery.docker.linux.targets
-  forward_to = [loki.relabel.docker.receiver]
-}
-
-// Relabeling rules to make logs useful (extract container names)
-loki.relabel "docker" {
-  forward_to = [loki.write.default.receiver]
+// Relabel discovery targets to extract container name + stream.
+// Must use discovery.relabel here (not loki.relabel): __meta_docker_* labels
+// exist on discovery targets, not on log entries. loki.relabel would see empty
+// source labels, produce zero-label entries, and drop everything.
+discovery.relabel "docker" {
+  targets = discovery.docker.linux.targets
 
   rule {
     source_labels = ["__meta_docker_container_name"]
@@ -49,6 +45,13 @@ loki.relabel "docker" {
     source_labels = ["__meta_docker_container_log_stream"]
     target_label  = "stream"
   }
+}
+
+// Collect logs using relabeled targets so container/stream labels are set
+loki.source.docker "default" {
+  host       = "unix:///var/run/docker.sock"
+  targets    = discovery.relabel.docker.output
+  forward_to = [loki.write.default.receiver]
 }
 
 // Send logs to Loki

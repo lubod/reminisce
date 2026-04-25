@@ -157,7 +157,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "{container=\"reminisce-dev-prometheus\"}",
+          "expr": "{container=\"reminisce-prometheus\"}",
           "refId": "A"
         }
       ],
@@ -192,7 +192,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "{container=\"reminisce-dev-grafana\"}",
+          "expr": "{container=\"reminisce-grafana\"}",
           "refId": "A"
         }
       ],
@@ -227,7 +227,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "{container=\"reminisce-dev-db\"}",
+          "expr": "{container=\"reminisce-postgres\"}",
           "refId": "A"
         }
       ],
@@ -262,7 +262,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "{container=\"reminisce-dev-nginx\"}",
+          "expr": "{container=\"reminisce\"}",
           "refId": "A"
         }
       ],
@@ -332,7 +332,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "{container=\"reminisce-dev-loki\"}",
+          "expr": "{container=\"reminisce-loki\"}",
           "refId": "A"
         }
       ],
@@ -367,7 +367,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "{container=\"reminisce-dev-tempo\"}",
+          "expr": "{container=\"reminisce-tempo\"}",
           "refId": "A"
         }
       ],
