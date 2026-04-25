@@ -1,7 +1,7 @@
 services:
-  # === OBSERVABILITY STACK (SIMPLIFIED) ===
+  # === OBSERVABILITY STACK ===
 
-  # 1. THE COLLECTOR (Replaces Promtail & Node Exporter)
+  # 1. THE COLLECTOR (Host metrics + Docker logs + OTLP receiver)
   alloy:
     image: grafana/alloy:latest
     container_name: reminisce-alloy
@@ -18,9 +18,9 @@ services:
       "/etc/alloy/config.alloy"
     ]
     ports:
-      - "12345:12345" # Internal UI
-      - "4317:4317"   # OTLP gRPC (Traces)
-      - "4318:4318"   # OTLP HTTP (Traces)
+      - "12345:12345" # Alloy UI
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
     restart: unless-stopped
     deploy:
       resources:
@@ -34,15 +34,14 @@ services:
     container_name: reminisce-prometheus
     volumes:
       - ./observability/prometheus.yaml:/etc/prometheus/prometheus.yml:ro
+      - ./observability/alert-rules.yml:/etc/prometheus/alert-rules.yml:ro
       - prometheus_data:/prometheus
     ports:
       - "9090:9090"
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
-      - '--web.enable-remote-write-receiver' # Enable Alloy to push metrics to us
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      - '--web.enable-remote-write-receiver'
     restart: unless-stopped
     deploy:
       resources:
@@ -87,7 +86,7 @@ services:
           cpus: '0.5'
           memory: 1G
 
-  # 5. VISUALIZATION UI
+  # 5. VISUALIZATION
   grafana:
     image: grafana/grafana:latest
     container_name: reminisce-grafana
@@ -113,32 +112,50 @@ services:
           cpus: '0.5'
           memory: 512M
 
-  # === SPECIALIZED EXPORTERS (Keep these) ===
+  # 6. ALERTMANAGER
+  alertmanager:
+    image: prom/alertmanager:latest
+    container_name: reminisce-alertmanager
+    volumes:
+      - ./observability/alertmanager.yaml:/etc/alertmanager/alertmanager.yml:ro
+    expose:
+      - "9093"
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.1'
+          memory: 64M
 
+  # === SPECIALIZED EXPORTERS ===
+
+  # AMD ROCm GPU exporter (replaces nvidia/dcgm-exporter)
   gpu-exporter:
-    image: nvidia/dcgm-exporter:latest
+    image: python:3.12-slim
     container_name: reminisce-gpu-exporter
+    volumes:
+      - /opt/rocm:/opt/rocm:ro
+      - ./observability/rocm_exporter.py:/app/rocm_exporter.py:ro
+    devices:
+      - /dev/kfd:/dev/kfd
+      - /dev/dri:/dev/dri
     environment:
-      - DCGM_EXPORTER_NO_HOSTNAME=1
-    ports:
-      - "9400:9400"
+      - HSA_OVERRIDE_GFX_VERSION=11.5.0
+    command: ["python3", "/app/rocm_exporter.py"]
+    expose:
+      - "9400"
+    restart: unless-stopped
     deploy:
       resources:
         limits:
           cpus: '0.1'
           memory: 128M
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-    restart: unless-stopped
 
   postgres-exporter:
     image: prometheuscommunity/postgres-exporter:latest
     container_name: reminisce-postgres-exporter
     environment:
-      DATA_SOURCE_NAME: "postgresql://postgres:postgres@postgres:5432/reminisce_db?sslmode=disable"
+      DATA_SOURCE_NAME: "postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/reminisce_db?sslmode=disable"
     expose:
       - "9187"
     restart: unless-stopped
@@ -147,6 +164,11 @@ services:
         limits:
           cpus: '0.2'
           memory: 128M
+
+networks:
+  default:
+    external: true
+    name: reminisce_default
 
 volumes:
   tempo_data:
