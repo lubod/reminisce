@@ -1,7 +1,7 @@
 services:
   # === OBSERVABILITY STACK ===
 
-  # 1. THE COLLECTOR (Host metrics + Docker logs + OTLP receiver)
+  # 1. THE COLLECTOR (Host metrics + Docker logs)
   alloy:
     image: grafana/alloy:latest
     container_name: reminisce-alloy
@@ -19,8 +19,6 @@ services:
     ]
     ports:
       - "12345:12345" # Alloy UI
-      - "4317:4317"   # OTLP gRPC
-      - "4318:4318"   # OTLP HTTP
     restart: unless-stopped
     deploy:
       resources:
@@ -47,7 +45,7 @@ services:
       resources:
         limits:
           cpus: '0.5'
-          memory: 512M
+          memory: 256M
 
   # 3. LOGS DB
   loki:
@@ -65,28 +63,9 @@ services:
       resources:
         limits:
           cpus: '0.5'
-          memory: 512M
+          memory: 256M
 
-  # 4. TRACES DB
-  tempo:
-    image: grafana/tempo:latest
-    container_name: reminisce-tempo
-    command: [ "-config.file=/etc/tempo.yaml" ]
-    user: root
-    volumes:
-      - ./observability/tempo.yaml:/etc/tempo.yaml:ro
-      - tempo_data:/var/tempo
-    expose:
-      - "4317"
-      - "3200"
-    restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 1G
-
-  # 5. VISUALIZATION
+  # 4. VISUALIZATION
   grafana:
     image: grafana/grafana:latest
     container_name: reminisce-grafana
@@ -103,29 +82,13 @@ services:
       - "3000:3000"
     restart: unless-stopped
     depends_on:
-      - tempo
       - prometheus
       - loki
     deploy:
       resources:
         limits:
           cpus: '0.5'
-          memory: 512M
-
-  # 6. ALERTMANAGER
-  alertmanager:
-    image: prom/alertmanager:latest
-    container_name: reminisce-alertmanager
-    volumes:
-      - ./observability/alertmanager.yaml:/etc/alertmanager/alertmanager.yml:ro
-    expose:
-      - "9093"
-    restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          cpus: '0.1'
-          memory: 64M
+          memory: 1G
 
   # === SPECIALIZED EXPORTERS ===
 
@@ -149,7 +112,7 @@ services:
       resources:
         limits:
           cpus: '0.1'
-          memory: 128M
+          memory: 64M
 
   postgres-exporter:
     image: prometheuscommunity/postgres-exporter:latest
@@ -163,7 +126,7 @@ services:
       resources:
         limits:
           cpus: '0.2'
-          memory: 128M
+          memory: 64M
 
 networks:
   default:
@@ -171,7 +134,6 @@ networks:
     name: reminisce_default
 
 volumes:
-  tempo_data:
   grafana_data:
   prometheus_data:
   loki_data:

@@ -278,32 +278,6 @@ groups:
           summary: "High CPU usage detected"
           description: "CPU usage is {{ $value | humanizePercentage }} (threshold: 80%)"
 
-      # ============================================================================
-      # Business Metrics Alerts
-      # ============================================================================
-
-      - alert: NoUserRegistrations
-        expr: |
-          rate(user_registrations_total[24h]) == 0
-        for: 24h
-        labels:
-          severity: info
-          component: business
-        annotations:
-          summary: "No user registrations in 24 hours"
-          description: "There have been no new user registrations in the last 24 hours"
-
-      - alert: NoMemoriesCreated
-        expr: |
-          rate(memories_created_total[24h]) == 0
-        for: 24h
-        labels:
-          severity: info
-          component: business
-        annotations:
-          summary: "No memories created in 24 hours"
-          description: "No new memories have been created in the last 24 hours"
-
   # ============================================================================
   # Observability Stack Health
   # ============================================================================
