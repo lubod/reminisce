@@ -45,3 +45,4 @@ limits_config:
   ingestion_burst_size_mb: 200
   per_stream_rate_limit: 512M
   per_stream_rate_limit_burst: 1024M
+  max_line_size: 5242880  # 5MB — AI server logs contain base64 image payloads
