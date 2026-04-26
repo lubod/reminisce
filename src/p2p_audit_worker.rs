@@ -8,6 +8,10 @@ use crate::config::Config;
 use crate::media_replication_worker::{rendezvous_select_nodes, SHARD_COUNT, MIN_NODES_REQUIRED};
 use crate::shard_rebalance_worker::{find_file_info, upload_shard_to_node, lookup_node_addr};
 use log::{info, warn, error};
+use crate::metrics::{
+    P2P_SHARDS_AUDITED_TOTAL, P2P_SHARDS_REPAIRED_TOTAL,
+    P2P_SHARDS_REPAIR_FAILED_TOTAL, P2P_ORPHANED_SHARDS_CLEANED_TOTAL,
+};
 use deadpool_postgres::Pool;
 use np2p::network::{P2PService, Message, Protocol};
 use np2p::storage::StorageEngine;
@@ -122,6 +126,7 @@ async fn perform_audit(
             }
         }
 
+        P2P_SHARDS_AUDITED_TOTAL.inc();
         if success {
             let _ = client.execute(
                 "UPDATE p2p_shards SET last_checked_at = NOW() WHERE id = $1",
@@ -129,8 +134,12 @@ async fn perform_audit(
             ).await;
         } else {
             info!("Triggering repair for file {} (shard {} lost)", file_hash, shard_index);
-            if let Err(e) = repair_file(pool, config, p2p_service, &file_hash, shard_index as usize).await {
-                error!("Repair failed for {}: {}", file_hash, e);
+            match repair_file(pool, config, p2p_service, &file_hash, shard_index as usize).await {
+                Ok(_) => P2P_SHARDS_REPAIRED_TOTAL.inc(),
+                Err(e) => {
+                    error!("Repair failed for {}: {}", file_hash, e);
+                    P2P_SHARDS_REPAIR_FAILED_TOTAL.inc();
+                }
             }
         }
     }
@@ -183,6 +192,7 @@ async fn check_consistency(
     let deleted = cleanup_orphaned_shards(pool).await?;
     if deleted > 0 {
         info!("Consistency check: purged {} orphaned shard records for deleted files", deleted);
+        P2P_ORPHANED_SHARDS_CLEANED_TOTAL.inc_by(deleted);
     }
 
     let file_hashes = find_undersharded_files(pool, 10).await?;
@@ -196,8 +206,12 @@ async fn check_consistency(
     for file_hash in file_hashes {
         info!("Consistency check: Fixing missing shards for file {}", file_hash);
         for i in 0..SHARD_COUNT {
-            if let Err(e) = repair_file(pool, config, p2p_service, &file_hash, i).await {
-                error!("Consistency check: Failed to fix shard {} for {}: {}", i, file_hash, e);
+            match repair_file(pool, config, p2p_service, &file_hash, i).await {
+                Ok(_) => P2P_SHARDS_REPAIRED_TOTAL.inc(),
+                Err(e) => {
+                    error!("Consistency check: Failed to fix shard {} for {}: {}", i, file_hash, e);
+                    P2P_SHARDS_REPAIR_FAILED_TOTAL.inc();
+                }
             }
         }
     }

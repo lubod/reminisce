@@ -557,6 +557,57 @@ pub static FACE_DETECTION_PROCESSING_DELAY: Lazy<Histogram> = Lazy::new(|| {
     ).expect("Failed to register face_detection_processing_delay_seconds metric")
 });
 
+
+// ============================================================================
+// Duplicate Detection Metrics
+// ============================================================================
+
+pub static DUPLICATE_PAIRS_TOTAL: Lazy<IntGauge> = Lazy::new(|| {
+    register_int_gauge!(
+        "duplicate_pairs_total",
+        "Total known duplicate image pairs across all users"
+    ).expect("Failed to register duplicate_pairs_total metric")
+});
+
+pub static DUPLICATE_CHECKED_IMAGES: Lazy<IntGauge> = Lazy::new(|| {
+    register_int_gauge!(
+        "duplicate_checked_images",
+        "Number of images that have been checked for duplicates"
+    ).expect("Failed to register duplicate_checked_images metric")
+});
+
+// ============================================================================
+// P2P Shard Audit Metrics
+// ============================================================================
+
+pub static P2P_SHARDS_AUDITED_TOTAL: Lazy<IntCounter> = Lazy::new(|| {
+    register_int_counter!(
+        "p2p_shards_audited_total",
+        "Total P2P shards verified for integrity"
+    ).expect("Failed to register p2p_shards_audited_total metric")
+});
+
+pub static P2P_SHARDS_REPAIRED_TOTAL: Lazy<IntCounter> = Lazy::new(|| {
+    register_int_counter!(
+        "p2p_shards_repaired_total",
+        "Total P2P shards successfully repaired"
+    ).expect("Failed to register p2p_shards_repaired_total metric")
+});
+
+pub static P2P_SHARDS_REPAIR_FAILED_TOTAL: Lazy<IntCounter> = Lazy::new(|| {
+    register_int_counter!(
+        "p2p_shards_repair_failed_total",
+        "Total P2P shard repairs that failed"
+    ).expect("Failed to register p2p_shards_repair_failed_total metric")
+});
+
+pub static P2P_ORPHANED_SHARDS_CLEANED_TOTAL: Lazy<IntCounter> = Lazy::new(|| {
+    register_int_counter!(
+        "p2p_orphaned_shards_cleaned_total",
+        "Orphaned P2P shard rows purged for deleted files"
+    ).expect("Failed to register p2p_orphaned_shards_cleaned_total metric")
+});
+
 // ============================================================================
 // Startup Registration
 // ============================================================================
@@ -614,4 +665,10 @@ pub fn init_metrics() {
     Lazy::force(&AI_DESCRIPTION_PROCESSING_DELAY);
     Lazy::force(&EMBEDDING_PROCESSING_DELAY);
     Lazy::force(&FACE_DETECTION_PROCESSING_DELAY);
+    Lazy::force(&DUPLICATE_PAIRS_TOTAL);
+    Lazy::force(&DUPLICATE_CHECKED_IMAGES);
+    Lazy::force(&P2P_SHARDS_AUDITED_TOTAL);
+    Lazy::force(&P2P_SHARDS_REPAIRED_TOTAL);
+    Lazy::force(&P2P_SHARDS_REPAIR_FAILED_TOTAL);
+    Lazy::force(&P2P_ORPHANED_SHARDS_CLEANED_TOTAL);
 }

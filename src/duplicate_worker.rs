@@ -7,6 +7,7 @@ use tokio::sync::Mutex;
 
 use crate::db::MainDbPool;
 use crate::utils::run_worker_loop;
+use crate::metrics::{DUPLICATE_PAIRS_TOTAL, DUPLICATE_CHECKED_IMAGES};
 
 /// Shared status for the duplicate detection background worker.
 #[derive(Clone)]
@@ -99,6 +100,8 @@ async fn process_batch(
         s.checked_images = total_images - unchecked;
         s.total_pairs = pair_count;
     }
+    DUPLICATE_PAIRS_TOTAL.set(pair_count);
+    DUPLICATE_CHECKED_IMAGES.set(total_images - unchecked);
 
     if unchecked == 0 {
         {

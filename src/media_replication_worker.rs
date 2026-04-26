@@ -13,6 +13,10 @@ use std::path::PathBuf;
 use futures::stream::{self, StreamExt};
 use std::time::Duration;
 use crate::utils::{get_load_average, get_cpu_count, calculate_worker_concurrency};
+use crate::metrics::{
+    BACKUP_PEERS_AVAILABLE, BACKUP_ATTEMPTS_TOTAL, BACKUP_SUCCESS_TOTAL,
+    BACKUP_FAILURES_TOTAL, BACKUP_SIZE_BYTES, BACKUP_DURATION_SECONDS,
+};
 use np2p::network::{P2PService, Message, Protocol};
 use np2p::storage::StorageEngine;
 use tokio::sync::{Mutex, mpsc};
@@ -82,6 +86,8 @@ async fn replicate_all(
         .into_iter()
         .map(|p| (p.node_id, p.addr))
         .collect();
+
+    BACKUP_PEERS_AVAILABLE.set(nodes.len() as i64);
 
     if nodes.is_empty() {
         return Ok(false);
@@ -162,6 +168,7 @@ async fn replicate_batch(
             let success_counter = &successes;
 
             async move {
+                BACKUP_ATTEMPTS_TOTAL.inc();
                 match replicate_single_file(
                     &pool_clone,
                     &p2p_service_clone,
@@ -170,8 +177,14 @@ async fn replicate_batch(
                     &nodes_owned,
                     &file,
                 ).await {
-                    Ok(_) => { success_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed); },
-                    Err(e) => error!("Failed to replicate {}: {}", file.hash, e),
+                    Ok(_) => {
+                        success_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        BACKUP_SUCCESS_TOTAL.inc();
+                    }
+                    Err(e) => {
+                        error!("Failed to replicate {}: {}", file.hash, e);
+                        BACKUP_FAILURES_TOTAL.inc();
+                    }
                 }
             }
         })
@@ -200,9 +213,16 @@ async fn replicate_single_file(
     let metadata = tokio::fs::metadata(&file_path).await?;
     let file_size = metadata.len() as usize;
 
+    let start = std::time::Instant::now();
+
     // Route large files through the segmented streaming path to cap peak RAM at ~940 MB.
     if file_size > SEGMENT_THRESHOLD {
-        return replicate_large_file(pool, p2p_service, table, nodes, file, &file_path).await;
+        let res = replicate_large_file(pool, p2p_service, table, nodes, file, &file_path).await;
+        if res.is_ok() {
+            BACKUP_SIZE_BYTES.observe(file_size as f64);
+            BACKUP_DURATION_SECONDS.observe(start.elapsed().as_secs_f64());
+        }
+        return res;
     }
 
     // 1. Encrypt and Shard (entire file fits in memory for files ≤ 256 MB)
@@ -313,6 +333,8 @@ async fn replicate_single_file(
     trans.commit().await?;
 
     info!("Replicated {}: {} shards stored (rendezvous)", file.hash, final_results.len());
+    BACKUP_SIZE_BYTES.observe(file_size as f64);
+    BACKUP_DURATION_SECONDS.observe(start.elapsed().as_secs_f64());
     Ok(())
 }
 
