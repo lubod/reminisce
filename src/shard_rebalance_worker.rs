@@ -16,6 +16,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 const REBALANCE_BATCH_SIZE: i64 = 20;
+const UPLOAD_STREAM_THRESHOLD: usize = 64 * 1024 * 1024; // 64 MB — stay under Pi's 100 MB recv limit
+const UPLOAD_CHUNK_SIZE: usize = 32 * 1024 * 1024;       // 32 MB chunks
 
 /// Sync dynamically discovered peers into p2p_nodes.
 /// Upserts active nodes; marks any node not currently in the registry as inactive.
@@ -342,6 +344,7 @@ async fn retrieve_shard_from_node(
 }
 
 /// Upload a shard to a remote node.
+/// Uses streaming protocol for shards > 64 MB to stay under the Pi's 100 MB message limit.
 pub async fn upload_shard_to_node(
     p2p_service: &Arc<P2PService>,
     addr: SocketAddr,
@@ -351,23 +354,57 @@ pub async fn upload_shard_to_node(
         .map_err(|e| format!("Connection to {} failed: {}", addr, e))?;
 
     let shard_hash = blake3::hash(shard_data);
+    let shard_hash_bytes: [u8; 32] = shard_hash.into();
     let shard_hash_hex = shard_hash.to_hex().to_string();
 
-    let (mut send, mut recv) = conn.open_bi().await?;
-    let req = Message::StoreShardRequest {
-        shard_hash: shard_hash.into(),
-        data: shard_data.to_vec(),
-    };
-    Protocol::send(&mut send, &req).await.map_err(|e| e.to_string())?;
+    if shard_data.len() > UPLOAD_STREAM_THRESHOLD {
+        let (mut send, mut recv) = conn.open_bi().await?;
+        Protocol::send(&mut send, &Message::StoreShardStreamInit {
+            file_hash: shard_hash_bytes,
+            shard_index: 0,
+            total_shard_bytes: shard_data.len() as u64,
+            segment_count: 1,
+        }).await.map_err(|e| e.to_string())?;
 
-    match Protocol::receive(&mut recv).await.map_err(|e| e.to_string())? {
-        Message::StoreShardResponse { success: true, .. } => {
-            conn.close(0u32.into(), b"done");
-            Ok(shard_hash_hex)
+        match Protocol::receive(&mut recv).await.map_err(|e| e.to_string())? {
+            Message::StoreShardStreamAck { ready: true } => {}
+            other => return Err(format!("Unexpected stream ack from {}: {:?}", addr, other).into()),
         }
-        _ => {
-            conn.close(0u32.into(), b"done");
-            Err(format!("Node {} rejected shard", addr).into())
+
+        for chunk in shard_data.chunks(UPLOAD_CHUNK_SIZE) {
+            Protocol::send(&mut send, &Message::StoreShardChunk { data: chunk.to_vec() })
+                .await.map_err(|e| e.to_string())?;
+        }
+
+        Protocol::send(&mut send, &Message::StoreShardStreamFinal { shard_hash: shard_hash_bytes })
+            .await.map_err(|e| e.to_string())?;
+
+        match Protocol::receive(&mut recv).await.map_err(|e| e.to_string())? {
+            Message::StoreShardStreamResponse { success: true } => {
+                conn.close(0u32.into(), b"done");
+                Ok(shard_hash_hex)
+            }
+            _ => {
+                conn.close(0u32.into(), b"done");
+                Err(format!("Node {} rejected large shard (stream)", addr).into())
+            }
+        }
+    } else {
+        let (mut send, mut recv) = conn.open_bi().await?;
+        Protocol::send(&mut send, &Message::StoreShardRequest {
+            shard_hash: shard_hash_bytes,
+            data: shard_data.to_vec(),
+        }).await.map_err(|e| e.to_string())?;
+
+        match Protocol::receive(&mut recv).await.map_err(|e| e.to_string())? {
+            Message::StoreShardResponse { success: true, .. } => {
+                conn.close(0u32.into(), b"done");
+                Ok(shard_hash_hex)
+            }
+            _ => {
+                conn.close(0u32.into(), b"done");
+                Err(format!("Node {} rejected shard", addr).into())
+            }
         }
     }
 }
