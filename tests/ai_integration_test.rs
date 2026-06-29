@@ -122,9 +122,9 @@ async fn test_person_management_workflow() {
     let dummy_embedding = Vector::from(vec![0.1f32; 512]);
 
     client.execute(
-        "INSERT INTO faces (image_hash, image_deviceid, user_id, bbox_x, bbox_y, bbox_width, bbox_height, embedding, confidence, person_id, detected_at)
+        "INSERT INTO faces (image_hash, image_user_id, user_id, bbox_x, bbox_y, bbox_width, bbox_height, embedding, confidence, person_id, detected_at)
          VALUES ($1, $2, $3, 0, 0, 100, 100, $4, 0.99, $5, $6)",
-         &[&image_hash, &"test_device_id", &user_uuid, &dummy_embedding, &person_id, &Utc::now()]
+         &[&image_hash, &user_uuid, &user_uuid, &dummy_embedding, &person_id, &Utc::now()]
     ).await.unwrap();
 
     // Update person face count (usually done by worker, do it manually here)

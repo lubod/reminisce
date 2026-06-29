@@ -50,8 +50,8 @@ impl Node {
     }
 
     /// Connects to a remote node.
-    pub async fn connect(&self, addr: SocketAddr) -> Result<Connection> {
-        let conn = self.endpoint.connect(addr, "reminisce")?.await?;
+    pub async fn connect(&self, addr: SocketAddr, server_name: &str) -> Result<Connection> {
+        let conn = self.endpoint.connect(addr, server_name)?.await?;
         Ok(conn)
     }
 

@@ -186,7 +186,7 @@ async fn relay(
 
     let conn = match tokio::time::timeout(
         std::time::Duration::from_secs(10),
-        node.connect(target_addr),
+        node.connect(target_addr, target_node_id),
     ).await {
         Ok(Ok(c)) => c,
         Ok(Err(e)) => {

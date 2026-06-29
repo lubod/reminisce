@@ -39,7 +39,7 @@ impl P2PService {
     /// Connect directly to a known socket address.
     pub async fn connect_to_addr(&self, addr: SocketAddr) -> Result<quinn::Connection> {
         info!("[P2P] Connecting to {}", addr);
-        let res = tokio::time::timeout(Duration::from_secs(10), self.node.connect(addr)).await;
+        let res = tokio::time::timeout(Duration::from_secs(10), self.node.connect(addr, "reminisce")).await;
         match res {
             Ok(Ok(conn)) => {
                 info!("[P2P] Connected to {}", addr);
@@ -61,7 +61,22 @@ impl P2PService {
         let peer = self.registry.get(node_id).ok_or_else(|| {
             crate::error::Np2pError::Network(format!("Peer not in registry: {}", node_id))
         })?;
-        self.connect_to_addr(peer.addr).await
+        info!("[P2P] Connecting to peer {} at {}", node_id, peer.addr);
+        let res = tokio::time::timeout(Duration::from_secs(10), self.node.connect(peer.addr, node_id)).await;
+        match res {
+            Ok(Ok(conn)) => {
+                info!("[P2P] Connected to peer {} at {}", node_id, peer.addr);
+                Ok(conn)
+            }
+            Ok(Err(e)) => {
+                error!("[P2P] Connection to peer {} failed: {}", node_id, e);
+                Err(e.into())
+            }
+            Err(_) => {
+                error!("[P2P] Connection to peer {} timed out", node_id);
+                Err(crate::error::Np2pError::Network(format!("Timeout connecting to peer {}", node_id)))
+            }
+        }
     }
 
     /// Send a single request Message and receive a response.

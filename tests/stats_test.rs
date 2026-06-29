@@ -23,19 +23,19 @@ async fn test_get_stats() {
 
     // Images
     let user_id: uuid::Uuid = client.query_one("SELECT id FROM users WHERE username = 'user'", &[]).await.unwrap().get(0);
-    client.execute("INSERT INTO images (hash, name, ext, deviceid, description, verification_status) VALUES ($1, $2, $3, $4, $5, $6)",
-                   &[&"hash1", &"img1.jpg", &"jpg", &"dev1", &"a description", &1i32]).await.unwrap();
-    client.execute("INSERT INTO images (hash, name, ext, deviceid, embedding_generated_at) VALUES ($1, $2, $3, $4, NOW())",
-                   &[&"hash2", &"img2.jpg", &"jpg", &"dev1"]).await.unwrap();
-    client.execute("INSERT INTO images (hash, name, ext, deviceid) VALUES ($1, $2, $3, $4)",
-                   &[&"hash3", &"img3.jpg", &"jpg", &"dev2"]).await.unwrap();
+    client.execute("INSERT INTO images (user_id, hash, name, ext, deviceid, description, verification_status) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                   &[&user_id, &"hash1", &"img1.jpg", &"jpg", &"dev1", &"a description", &1i32]).await.unwrap();
+    client.execute("INSERT INTO images (user_id, hash, name, ext, deviceid, embedding_generated_at) VALUES ($1, $2, $3, $4, $5, NOW())",
+                   &[&user_id, &"hash2", &"img2.jpg", &"jpg", &"dev1"]).await.unwrap();
+    client.execute("INSERT INTO images (user_id, hash, name, ext, deviceid) VALUES ($1, $2, $3, $4, $5)",
+                   &[&user_id, &"hash3", &"img3.jpg", &"jpg", &"dev2"]).await.unwrap();
     client.execute("INSERT INTO starred_images (user_id, hash) VALUES ($1, $2)", &[&user_id, &"hash1"]).await.unwrap();
 
     // Videos
-    client.execute("INSERT INTO videos (hash, name, ext, deviceid, verification_status) VALUES ($1, $2, $3, $4, $5)",
-                   &[&"vhash1", &"vid1.mp4", &"mp4", &"dev1", &1i32]).await.unwrap();
-    client.execute("INSERT INTO videos (hash, name, ext, deviceid) VALUES ($1, $2, $3, $4)",
-                   &[&"vhash2", &"vid2.mp4", &"mp4", &"dev2"]).await.unwrap();
+    client.execute("INSERT INTO videos (user_id, hash, name, ext, deviceid, verification_status) VALUES ($1, $2, $3, $4, $5, $6)",
+                   &[&user_id, &"vhash1", &"vid1.mp4", &"mp4", &"dev1", &1i32]).await.unwrap();
+    client.execute("INSERT INTO videos (user_id, hash, name, ext, deviceid) VALUES ($1, $2, $3, $4, $5)",
+                   &[&user_id, &"vhash2", &"vid2.mp4", &"mp4", &"dev2"]).await.unwrap();
     client.execute("INSERT INTO starred_videos (user_id, hash) VALUES ($1, $2)", &[&user_id, &"vhash1"]).await.unwrap();
 
 

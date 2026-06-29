@@ -20,7 +20,7 @@ pub async fn relay_message(
 
     let conn = tokio::time::timeout(
         std::time::Duration::from_secs(10),
-        node.connect(coordinator_addr),
+        node.connect(coordinator_addr, "reminisce"),
     )
     .await
     .map_err(|_| crate::error::Np2pError::Network("Relay connect timed out".into()))??;
@@ -88,7 +88,7 @@ async fn run_once(
 ) -> crate::error::Result<usize> {
     let conn = tokio::time::timeout(
         std::time::Duration::from_secs(10),
-        node.connect(coordinator_addr),
+        node.connect(coordinator_addr, "reminisce"),
     )
     .await
     .map_err(|_| crate::error::Np2pError::Network("Coordinator connect timed out".into()))??;

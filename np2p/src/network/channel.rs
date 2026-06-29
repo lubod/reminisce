@@ -43,7 +43,7 @@ async fn run_channel(
 ) -> crate::error::Result<()> {
     let conn = tokio::time::timeout(
         std::time::Duration::from_secs(10),
-        node.connect(coordinator_addr),
+        node.connect(coordinator_addr, "reminisce"),
     )
     .await
     .map_err(|_| crate::error::Np2pError::Network("Channel connect timed out".into()))??;

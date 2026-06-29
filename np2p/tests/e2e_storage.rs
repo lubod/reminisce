@@ -41,7 +41,7 @@ async fn test_e2e_backup_and_restore() {
     assert_eq!(shards.len(), 5);
 
     // 4. Client: Connect and Store Shards
-    let conn = client_node.connect(server_addr).await.expect("Failed to connect");
+    let conn = client_node.connect(server_addr, "reminisce").await.expect("Failed to connect");
     
     // Store each shard in a separate stream (simulating parallel storage)
     for (i, shard_data) in shards.iter().enumerate() {

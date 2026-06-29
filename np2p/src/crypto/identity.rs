@@ -54,8 +54,17 @@ impl NodeIdentity {
         params.distinguished_name.push(rcgen::DnType::CommonName, format!("np2p-node-{}", node_id_hex));
         params.subject_alt_names = vec![rcgen::SanType::DnsName(node_id_hex.clone().try_into().unwrap())];
 
-        let rc_keypair = RcKeyPair::generate_for(&rcgen::PKCS_ED25519)
-            .map_err(|e| Np2pError::Crypto(format!("Failed to create rcgen keypair: {}", e)))?;
+        // Format raw secret key as PKCS#8 DER (48 bytes total)
+        let secret_bytes = self.signing_key.to_bytes();
+        let mut pkcs8 = Vec::with_capacity(48);
+        pkcs8.extend_from_slice(&[
+            0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20
+        ]);
+        pkcs8.extend_from_slice(&secret_bytes);
+
+        let private_key_der = rustls_pki_types::PrivatePkcs8KeyDer::from(pkcs8);
+        let rc_keypair = RcKeyPair::from_pkcs8_der_and_sign_algo(&private_key_der, &rcgen::PKCS_ED25519)
+            .map_err(|e| Np2pError::Crypto(format!("Failed to load rcgen keypair: {}", e)))?;
 
         let cert = params.self_signed(&rc_keypair)
             .map_err(|e| Np2pError::Crypto(format!("Failed to generate cert: {}", e)))?;
@@ -74,7 +83,7 @@ impl NodeIdentity {
 
         let mut client_config = rustls::ClientConfig::builder()
             .dangerous()
-            .with_custom_certificate_verifier(Arc::new(SkipServerVerification))
+            .with_custom_certificate_verifier(Arc::new(VerifyNodeCertificate))
             .with_no_client_auth();
         client_config.alpn_protocols = vec![b"np2p".to_vec()];
 
@@ -91,7 +100,6 @@ impl NodeIdentity {
     }
 }
 
-/// Verify an Ed25519 signature produced by `node_id_bytes` over `msg`.
 /// Verify an Ed25519 signature produced by the node whose public key is `node_id_bytes` over `msg`.
 pub fn verify_signature(node_id_bytes: &[u8], msg: &[u8], signature_bytes: &[u8]) -> bool {
     let Ok(key_bytes) = <[u8; 32]>::try_from(node_id_bytes) else { return false };
@@ -101,41 +109,117 @@ pub fn verify_signature(node_id_bytes: &[u8], msg: &[u8], signature_bytes: &[u8]
     key.verify(msg, &sig).is_ok()
 }
 
-/// A verifier that skips standard CA verification but could be used to verify Node IDs.
-#[derive(Debug)]
-struct SkipServerVerification;
+/// Extract Ed25519 public key bytes from raw DER encoded X.509 certificate.
+fn extract_public_key(cert_der: &[u8]) -> Option<[u8; 32]> {
+    let oid = [0x06, 0x03, 0x2b, 0x65, 0x70]; // Ed25519 OID
+    for pos in 0..cert_der.len().saturating_sub(oid.len() + 3 + 32) {
+        if &cert_der[pos..pos+oid.len()] == oid
+           && cert_der[pos + oid.len()] == 0x03 // BIT STRING
+           && cert_der[pos + oid.len() + 1] == 0x21 // Length 33
+           && cert_der[pos + oid.len() + 2] == 0x00 // Unused bits 0
+        {
+            let mut key = [0u8; 32];
+            key.copy_from_slice(&cert_der[pos + oid.len() + 3 .. pos + oid.len() + 35]);
+            return Some(key);
+        }
+    }
+    None
+}
 
-impl ServerCertVerifier for SkipServerVerification {
+/// A verifier that verifies Node self-signed certificates against the expected Node ID.
+#[derive(Debug)]
+struct VerifyNodeCertificate;
+
+impl ServerCertVerifier for VerifyNodeCertificate {
     fn verify_server_cert(
         &self,
-        _end_entity: &CertificateDer<'_>,
+        end_entity: &CertificateDer<'_>,
         _intermediates: &[CertificateDer<'_>],
-        _server_name: &ServerName<'_>,
+        server_name: &ServerName<'_>,
         _ocsp_response: &[u8],
         _now: UnixTime,
     ) -> std::result::Result<ServerCertVerified, rustls::Error> {
+        let cert_bytes = end_entity.as_ref();
+        let pubkey = extract_public_key(cert_bytes)
+            .ok_or_else(|| rustls::Error::General("Invalid or missing Ed25519 public key in certificate".into()))?;
+
+        // If the server_name is a hex-encoded Node ID (64 chars), verify it matches the public key
+        if let ServerName::DnsName(dns_name) = server_name {
+            let name_str = dns_name.as_ref();
+            if name_str.len() == 64 && name_str.chars().all(|c| c.is_ascii_hexdigit()) {
+                let expected_key_bytes = hex::decode(name_str)
+                    .map_err(|_| rustls::Error::General("Failed to decode server name as hex".into()))?;
+                if pubkey != expected_key_bytes.as_slice() {
+                    return Err(rustls::Error::General("Certificate public key does not match expected Node ID".into()));
+                }
+            }
+        }
+        
         Ok(ServerCertVerified::assertion())
     }
 
     fn verify_tls12_signature(
         &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
     ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+        rustls::crypto::verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &rustls::crypto::ring::default_provider().signature_verification_algorithms,
+        )
     }
 
     fn verify_tls13_signature(
         &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
     ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+        rustls::crypto::verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &rustls::crypto::ring::default_provider().signature_verification_algorithms,
+        )
     }
 
     fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
         vec![rustls::SignatureScheme::ED25519]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_print_cert_der() {
+        let identity = NodeIdentity::generate();
+        let _ = identity.generate_tls_config().unwrap();
+        let node_id_hex = hex::encode(identity.node_id());
+        let mut params = CertificateParams::default();
+        params.distinguished_name = DistinguishedName::new();
+        params.distinguished_name.push(rcgen::DnType::CommonName, format!("np2p-node-{}", node_id_hex));
+        params.subject_alt_names = vec![rcgen::SanType::DnsName(node_id_hex.clone().try_into().unwrap())];
+
+        let secret_bytes = identity.signing_key.to_bytes();
+        let mut pkcs8 = Vec::with_capacity(48);
+        pkcs8.extend_from_slice(&[
+            0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20
+        ]);
+        pkcs8.extend_from_slice(&secret_bytes);
+
+        let private_key_der = rustls_pki_types::PrivatePkcs8KeyDer::from(pkcs8);
+        let rc_keypair = RcKeyPair::from_pkcs8_der_and_sign_algo(&private_key_der, &rcgen::PKCS_ED25519).unwrap();
+        let cert = params.self_signed(&rc_keypair).unwrap();
+        let cert_der = cert.der();
+
+        let extracted = extract_public_key(cert_der);
+        println!("EXTRACTED: {:?}", extracted.map(hex::encode));
+        println!("EXPECTED : {}", hex::encode(identity.node_id()));
+        assert_eq!(extracted.unwrap(), identity.node_id());
     }
 }
