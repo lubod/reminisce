@@ -329,6 +329,8 @@ async fn toggle_media_star_inner(
     user_uuid: &uuid::Uuid,
     is_admin: bool,
 ) -> Result<HttpResponse, actix_web::Error> {
+    crate::utils::validate_table_name(media_table);
+    crate::utils::validate_table_name(starred_table);
     let mut client = utils::get_db_client(pool).await?;
 
     let transaction = client.transaction().await.map_err(|e| {
@@ -504,6 +506,7 @@ pub async fn get_device_ids(
     let mut device_set = HashSet::new();
 
     for table in &["images", "videos"] {
+        crate::utils::validate_table_name(table);
         let (query, params): (String, Vec<&(dyn tokio_postgres::types::ToSql + Sync)>) = if is_admin {
             (format!("SELECT DISTINCT deviceid FROM {} WHERE deviceid IS NOT NULL AND deleted_at IS NULL", table), vec![])
         } else {
@@ -710,6 +713,7 @@ async fn soft_restore_media(
     hash: &str,
     user_id: &uuid::Uuid,
 ) -> Result<HttpResponse, actix_web::Error> {
+    crate::utils::validate_table_name(table);
     let client = utils::get_db_client(pool).await?;
 
     let result = client
@@ -795,6 +799,7 @@ async fn soft_delete_media(
     hash: &str,
     user_id: &uuid::Uuid,
 ) -> Result<HttpResponse, actix_web::Error> {
+    crate::utils::validate_table_name(table);
     let client = utils::get_db_client(pool).await?;
 
     let result = client

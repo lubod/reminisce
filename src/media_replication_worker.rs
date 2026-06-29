@@ -324,6 +324,8 @@ async fn replicate_single_file(
     let mut manifest_hasher = blake3::Hasher::new();
     for (_, _, _, shard_hash) in final_results.iter() { manifest_hasher.update(shard_hash.as_bytes()); }
     let manifest_hash = manifest_hasher.finalize().to_hex().to_string();
+
+    crate::utils::validate_table_name(table);
     let update_query = format!(
         "UPDATE {} SET p2p_synced_at = NOW(), p2p_shard_hash = $1, p2p_encryption_key = $2, p2p_encrypted_size = $3 WHERE hash = $4",
         table
