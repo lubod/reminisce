@@ -160,7 +160,13 @@ pub async fn setup_admin(
 
     let row = match client.query_one("SELECT COUNT(*) FROM users", &[]).await {
         Ok(r) => r,
-        Err(_) => return HttpResponse::InternalServerError().finish(),
+        Err(e) => {
+            log::error!("Failed to query user count during setup: {}", e);
+            return HttpResponse::InternalServerError().json(serde_json::json!({
+                "status": "error",
+                "message": "Database query failed"
+            }));
+        }
     };
     let count: i64 = row.get(0);
     if count > 0 {
