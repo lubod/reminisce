@@ -1,4 +1,5 @@
 use serde::{Serialize, Deserialize};
+use crate::crypto::ShardToken;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum Message {
@@ -7,11 +8,11 @@ pub enum Message {
     HandshakeAck { node_id: [u8; 32] },
 
     /// Request to store an encrypted shard.
-    StoreShardRequest { shard_hash: [u8; 32], data: Vec<u8> },
+    StoreShardRequest { shard_hash: [u8; 32], data: Vec<u8>, token: ShardToken },
     StoreShardResponse { shard_hash: [u8; 32], success: bool },
 
     /// Request to retrieve an encrypted shard.
-    RetrieveShardRequest { shard_hash: [u8; 32] },
+    RetrieveShardRequest { shard_hash: [u8; 32], token: ShardToken },
     RetrieveShardResponse { shard_hash: [u8; 32], data: Option<Vec<u8>> },
 
     /// Periodic heartbeat to maintain NAT mappings and report status.

@@ -257,9 +257,12 @@ async fn replicate_single_file(
             match p2p_service.connect_to_addr(addr).await {
                 Ok(conn) => {
                     let (mut send, mut recv) = conn.open_bi().await.map_err(|e| e.to_string())?;
+                    let shard_hash_bytes = blake3::hash(&shard_data).into();
+                    let token = p2p_service.identity().create_shard_token(&shard_hash_bytes);
                     let req = Message::StoreShardRequest {
-                        shard_hash: blake3::hash(&shard_data).into(),
+                        shard_hash: shard_hash_bytes,
                         data: shard_data,
+                        token,
                     };
                     Protocol::send(&mut send, &req).await.map_err(|e| e.to_string())?;
                     let resp = Protocol::receive(&mut recv).await.map_err(|e| e.to_string())?;

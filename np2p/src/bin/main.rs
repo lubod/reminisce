@@ -36,6 +36,10 @@ struct Args {
     /// Namespace for coordinator peer isolation (e.g. "production", "dev")
     #[arg(long, default_value = "default")]
     namespace: String,
+
+    /// Authorized home server Node ID (hex format) allowed to store/retrieve shards.
+    #[arg(long)]
+    authorized_node_id: Option<String>,
 }
 
 #[tokio::main]
@@ -106,6 +110,12 @@ async fn main() -> anyhow::Result<()> {
         info!("No coordinator configured — LAN discovery only");
     }
 
+    let authorized_owner_id = args.authorized_node_id.as_ref().map(|s| {
+        let mut key = [0u8; 32];
+        hex::decode_to_slice(s, &mut key).expect("Invalid authorized_node_id hex format");
+        key
+    });
+
     let service = Arc::new(service);
     let identity_arc = Arc::new(identity);
 
@@ -113,10 +123,12 @@ async fn main() -> anyhow::Result<()> {
         if let Some(incoming) = service.node().accept().await {
             let storage_clone = storage.clone();
             let identity_clone = identity_arc.clone();
+            let allowed_owner = authorized_owner_id;
             tokio::spawn(async move {
                 match incoming.await {
                     Ok(conn) => {
-                        let handler = ConnectionHandler::new(conn, storage_clone, identity_clone);
+                        let handler = ConnectionHandler::new(conn, storage_clone, identity_clone)
+                            .with_allowed_owner(allowed_owner);
                         handler.run().await;
                     }
                     Err(e) => warn!("Incoming connection failed: {}", e),

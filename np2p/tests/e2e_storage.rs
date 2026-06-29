@@ -30,7 +30,7 @@ async fn test_e2e_backup_and_restore() {
 
     // 2. Setup Client (Home Server)
     let client_id = NodeIdentity::generate();
-    let client_node = Node::new("127.0.0.1:0".parse().unwrap(), client_id).unwrap();
+    let client_node = Node::new("127.0.0.1:0".parse().unwrap(), client_id.clone()).unwrap();
     
     // Original data to backup
     let original_data = b"E2E test data for np2p distributed backup system.";
@@ -48,9 +48,11 @@ async fn test_e2e_backup_and_restore() {
         let (mut send, mut recv) = conn.open_bi().await.unwrap();
         
         let shard_hash = blake3::hash(shard_data).into();
+        let token = client_id.create_shard_token(&shard_hash);
         let store_req = Message::StoreShardRequest {
             shard_hash,
             data: shard_data.clone(),
+            token,
         };
         
         Protocol::send(&mut send, &store_req).await.unwrap();
@@ -71,7 +73,8 @@ async fn test_e2e_backup_and_restore() {
         let (mut send, mut recv) = conn.open_bi().await.unwrap();
         
         let shard_hash = blake3::hash(&shards[i]).into();
-        let retrieve_req = Message::RetrieveShardRequest { shard_hash };
+        let token = client_id.create_shard_token(&shard_hash);
+        let retrieve_req = Message::RetrieveShardRequest { shard_hash, token };
         
         Protocol::send(&mut send, &retrieve_req).await.unwrap();
         let resp = Protocol::receive(&mut recv).await.unwrap();

@@ -19,6 +19,7 @@ pub struct ConnectionHandler {
     storage: DiskStorage,
     identity: Arc<NodeIdentity>,
     custom_handler: Option<Arc<dyn P2PHandler>>,
+    pub allowed_owner_id: Option<[u8; 32]>,
 }
 
 impl ConnectionHandler {
@@ -28,6 +29,7 @@ impl ConnectionHandler {
             storage,
             identity,
             custom_handler: None,
+            allowed_owner_id: None,
         }
     }
 
@@ -36,10 +38,16 @@ impl ConnectionHandler {
         self
     }
 
+    pub fn with_allowed_owner(mut self, allowed_owner_id: Option<[u8; 32]>) -> Self {
+        self.allowed_owner_id = allowed_owner_id;
+        self
+    }
+
     /// The main loop for handling a connection.
     /// Accepts incoming bidirectional streams and processes messages.
     pub async fn run(self) {
         info!("[CONN] Handling connection from {}", self.connection.remote_address());
+        let allowed_owner = self.allowed_owner_id;
 
         loop {
             match self.connection.accept_bi().await {
@@ -49,7 +57,7 @@ impl ConnectionHandler {
                     let custom = self.custom_handler.clone();
 
                     tokio::spawn(async move {
-                        if let Err(e) = Self::handle_stream(send, recv, storage, identity, custom).await {
+                        if let Err(e) = Self::handle_stream(send, recv, storage, identity, custom, allowed_owner).await {
                             if matches!(e, crate::error::Np2pError::UnknownMessage(_)) {
                                 debug!("[CONN] Unknown message from peer (version mismatch): {}", e);
                             } else {
@@ -72,6 +80,7 @@ impl ConnectionHandler {
         storage: DiskStorage,
         identity: Arc<NodeIdentity>,
         custom_handler: Option<Arc<dyn P2PHandler>>,
+        allowed_owner_id: Option<[u8; 32]>,
     ) -> Result<()> {
         let msg = Protocol::receive(&mut recv).await?;
 
@@ -94,8 +103,13 @@ impl ConnectionHandler {
                 Protocol::send(&mut send, &response).await?;
             }
 
-            Message::StoreShardRequest { shard_hash, data } => {
-                let success = storage.store(shard_hash, &data).await.is_ok();
+            Message::StoreShardRequest { shard_hash, data, token } => {
+                let success = if crate::crypto::verify_shard_token(&token, &shard_hash, allowed_owner_id.as_ref()) {
+                    storage.store(shard_hash, &data).await.is_ok()
+                } else {
+                    warn!("StoreShardRequest: token verification failed for shard {}", hex::encode(shard_hash));
+                    false
+                };
                 let response = Message::StoreShardResponse { shard_hash, success };
                 Protocol::send(&mut send, &response).await?;
             }
@@ -149,10 +163,19 @@ impl ConnectionHandler {
                 }
             }
 
-            Message::RetrieveShardRequest { shard_hash } => {
-                let data = storage.get(shard_hash).await?;
-                let response = Message::RetrieveShardResponse { shard_hash, data };
-                Protocol::send(&mut send, &response).await?;
+            Message::RetrieveShardRequest { shard_hash, token } => {
+                if crate::crypto::verify_shard_token(&token, &shard_hash, allowed_owner_id.as_ref()) {
+                    let data = storage.get(shard_hash).await?;
+                    let response = Message::RetrieveShardResponse { shard_hash, data };
+                    Protocol::send(&mut send, &response).await?;
+                } else {
+                    warn!("RetrieveShardRequest: token verification failed for shard {}", hex::encode(shard_hash));
+                    let response = Message::Error {
+                        code: 401,
+                        message: "Unauthorized shard retrieval".to_string(),
+                    };
+                    Protocol::send(&mut send, &response).await?;
+                }
             }
 
             Message::Heartbeat { available_space_bytes } => {

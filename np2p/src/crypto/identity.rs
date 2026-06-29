@@ -44,6 +44,23 @@ impl NodeIdentity {
         self.signing_key.sign(msg).to_bytes().to_vec()
     }
 
+    /// Create a signed ShardToken for a given shard hash.
+    pub fn create_shard_token(&self, shard_hash: &[u8; 32]) -> ShardToken {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .unwrap_or(std::time::Duration::from_secs(0))
+            .as_secs();
+        let mut msg_to_sign = Vec::new();
+        msg_to_sign.extend_from_slice(shard_hash);
+        msg_to_sign.extend_from_slice(&timestamp.to_be_bytes());
+        let signature = self.sign(&msg_to_sign);
+        ShardToken {
+            owner_node_id: self.node_id(),
+            timestamp,
+            signature,
+        }
+    }
+
     pub fn generate_tls_config(&self) -> Result<(quinn::ServerConfig, quinn::ClientConfig)> {
         // Install default crypto provider for rustls 0.23+
         let _ = rustls::crypto::ring::default_provider().install_default();
@@ -189,6 +206,42 @@ impl ServerCertVerifier for VerifyNodeCertificate {
     fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
         vec![rustls::SignatureScheme::ED25519]
     }
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize, Clone, PartialEq, Eq)]
+pub struct ShardToken {
+    pub owner_node_id: [u8; 32],
+    pub timestamp: u64,
+    pub signature: Vec<u8>,
+}
+
+pub fn verify_shard_token(
+    token: &ShardToken,
+    shard_hash: &[u8; 32],
+    allowed_owner_id: Option<&[u8; 32]>,
+) -> bool {
+    // 1. Check if owner_node_id is allowed
+    if let Some(allowed) = allowed_owner_id {
+        if &token.owner_node_id != allowed {
+            return false;
+        }
+    }
+
+    // 2. Check if timestamp is recent (prevent replay attacks, 5 minutes window)
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .unwrap_or(std::time::Duration::from_secs(0))
+        .as_secs();
+    if now.saturating_sub(token.timestamp) > 300 && token.timestamp.saturating_sub(now) > 300 {
+        return false;
+    }
+
+    // 3. Verify Ed25519 signature
+    let mut msg_to_sign = Vec::new();
+    msg_to_sign.extend_from_slice(shard_hash);
+    msg_to_sign.extend_from_slice(&token.timestamp.to_be_bytes());
+    
+    verify_signature(&token.owner_node_id, &msg_to_sign, &token.signature)
 }
 
 #[cfg(test)]

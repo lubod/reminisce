@@ -328,7 +328,8 @@ async fn retrieve_shard_from_node(
     shard_hash_bytes.copy_from_slice(&decoded);
 
     let (mut send, mut recv) = conn.open_bi().await?;
-    Protocol::send(&mut send, &Message::RetrieveShardRequest { shard_hash: shard_hash_bytes }).await
+    let token = p2p_service.identity().create_shard_token(&shard_hash_bytes);
+    Protocol::send(&mut send, &Message::RetrieveShardRequest { shard_hash: shard_hash_bytes, token }).await
         .map_err(|e| e.to_string())?;
 
     match Protocol::receive(&mut recv).await.map_err(|e| e.to_string())? {
@@ -391,9 +392,11 @@ pub async fn upload_shard_to_node(
         }
     } else {
         let (mut send, mut recv) = conn.open_bi().await?;
+        let token = p2p_service.identity().create_shard_token(&shard_hash_bytes);
         Protocol::send(&mut send, &Message::StoreShardRequest {
             shard_hash: shard_hash_bytes,
             data: shard_data.to_vec(),
+            token,
         }).await.map_err(|e| e.to_string())?;
 
         match Protocol::receive(&mut recv).await.map_err(|e| e.to_string())? {

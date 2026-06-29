@@ -1,3 +1,3 @@
 pub mod identity;
 
-pub use identity::{NodeIdentity, NODE_ID_LENGTH, verify_signature, extract_public_key};
+pub use identity::{NodeIdentity, NODE_ID_LENGTH, verify_signature, extract_public_key, ShardToken, verify_shard_token};
