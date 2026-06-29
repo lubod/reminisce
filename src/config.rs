@@ -35,6 +35,8 @@ pub struct Config {
     pub enable_media_backup: Arc<AtomicBool>,
     #[serde(default)]
     pub external_ip: Option<String>,
+    #[serde(default)]
+    pub allowed_import_dirs: Option<Vec<String>>,
 
     // Database connection pool configuration
     #[serde(default = "default_db_pool_max_size")]

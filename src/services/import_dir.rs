@@ -102,10 +102,35 @@ pub async fn import_directory(
     };
 
     let root_path = PathBuf::from(&path_string);
-    if !root_path.exists() {
-        warn!("Import path does not exist: {:?}", root_path);
-        return Ok(HttpResponse::BadRequest().json(serde_json::json!({
-            "error": format!("Path does not exist: {:?}", root_path)
+    let canonical_root = match fs::canonicalize(&root_path).await {
+        Ok(p) => p,
+        Err(e) => {
+            warn!("Failed to canonicalize import path {:?}: {}", root_path, e);
+            return Ok(HttpResponse::BadRequest().json(serde_json::json!({
+                "error": format!("Invalid path or path access denied: {:?}", root_path)
+            })));
+        }
+    };
+
+    let mut is_allowed = false;
+    if let Some(ref allowed_dirs) = config.allowed_import_dirs {
+        for dir in allowed_dirs {
+            if let Ok(allowed_path) = std::fs::canonicalize(dir) {
+                if canonical_root.starts_with(&allowed_path) {
+                    is_allowed = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    if !is_allowed {
+        warn!(
+            "Import path {:?} (canonicalized: {:?}) is not in the allowed import directories list",
+            root_path, canonical_root
+        );
+        return Ok(HttpResponse::Forbidden().json(serde_json::json!({
+            "error": "Access denied: import path is not allowed by configuration"
         })));
     }
 
@@ -132,7 +157,7 @@ pub async fn import_directory(
 
     tokio::spawn(async move {
         run_import(
-            root_path, recursive, device_id, user_uuid, label_mode,
+            canonical_root, recursive, device_id, user_uuid, label_mode,
             pool_task, geotagging_pool_task, config_task,
             job_store_task, job_id_task,
         ).await;
