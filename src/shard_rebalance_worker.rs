@@ -200,7 +200,7 @@ async fn migrate_shard(
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     let client = pool.get().await?;
 
-    let file_info = find_file_info(&client, file_hash).await?;
+    let file_info = find_file_info(&client, file_hash, config.get_api_key()).await?;
 
     let shard_data = match file_info {
         Some((ext, Some(key), _enc_size)) => {
@@ -250,6 +250,7 @@ pub async fn lookup_node_addr(pool: &Pool, p2p_service: &Arc<P2PService>, node_i
 pub async fn find_file_info(
     client: &tokio_postgres::Client,
     file_hash: &str,
+    api_secret: &str,
 ) -> Result<Option<(String, Option<Vec<u8>>, Option<i32>)>, Box<dyn std::error::Error + Send + Sync>> {
     // Try images first
     let row = client.query_opt(
@@ -259,8 +260,12 @@ pub async fn find_file_info(
 
     if let Some(row) = row {
         let ext: String = row.get(0);
-        let key: Option<Vec<u8>> = row.get(1);
+        let key_enc: Option<Vec<u8>> = row.get(1);
         let enc_size: Option<i32> = row.get(2);
+        let key = match key_enc {
+            Some(k) => Some(crate::utils::decrypt_key(&k, api_secret)?),
+            None => None,
+        };
         return Ok(Some((ext, key, enc_size)));
     }
 
@@ -272,8 +277,12 @@ pub async fn find_file_info(
 
     if let Some(row) = row {
         let ext: String = row.get(0);
-        let key: Option<Vec<u8>> = row.get(1);
+        let key_enc: Option<Vec<u8>> = row.get(1);
         let enc_size: Option<i32> = row.get(2);
+        let key = match key_enc {
+            Some(k) => Some(crate::utils::decrypt_key(&k, api_secret)?),
+            None => None,
+        };
         return Ok(Some((ext, key, enc_size)));
     }
 

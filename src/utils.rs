@@ -74,3 +74,63 @@ pub fn validate_table_name(table: &str) {
         panic!("CRITICAL SECURITY: Invalid database table name dynamic query interpolation attempted: {}", table);
     }
 }
+
+/// Encrypt a 32-byte key with a master key derived from the API secret key.
+pub fn encrypt_key(key: &[u8; 32], api_secret: &str) -> Vec<u8> {
+    use chacha20poly1305::aead::{Aead, KeyInit};
+    use chacha20poly1305::{ChaCha20Poly1305, Nonce};
+    use sha2::{Sha256, Digest};
+    use rand::RngCore;
+
+    let mut hasher = Sha256::new();
+    hasher.update(api_secret.as_bytes());
+    let master_key = hasher.finalize();
+
+    let cipher = ChaCha20Poly1305::new_from_slice(&master_key).unwrap();
+    
+    // Generate a random 12-byte nonce
+    let mut nonce_bytes = [0u8; 12];
+    let mut rng = rand::rng();
+    rng.fill_bytes(&mut nonce_bytes);
+    let nonce = Nonce::from_slice(&nonce_bytes);
+
+    let ciphertext = cipher.encrypt(nonce, key.as_ref()).expect("Encryption failed");
+    
+    // Combine nonce + ciphertext
+    let mut result = Vec::with_capacity(12 + ciphertext.len());
+    result.extend_from_slice(&nonce_bytes);
+    result.extend_from_slice(&ciphertext);
+    result
+}
+
+/// Decrypt a key using the API secret key.
+/// Falls back to returning the key as-is if it is not encrypted (e.g. legacy data).
+pub fn decrypt_key(encrypted_key: &[u8], api_secret: &str) -> Result<Vec<u8>, String> {
+    use chacha20poly1305::aead::{Aead, KeyInit};
+    use chacha20poly1305::{ChaCha20Poly1305, Nonce};
+    use sha2::{Sha256, Digest};
+
+    if encrypted_key.len() == 32 {
+        // Legacy plaintext key
+        return Ok(encrypted_key.to_vec());
+    }
+
+    if encrypted_key.len() < 12 {
+        return Err("Encrypted key is too short".to_string());
+    }
+
+    let mut hasher = Sha256::new();
+    hasher.update(api_secret.as_bytes());
+    let master_key = hasher.finalize();
+
+    let cipher = ChaCha20Poly1305::new_from_slice(&master_key)
+        .map_err(|e| format!("Failed to initialize cipher: {}", e))?;
+
+    let nonce_bytes = &encrypted_key[0..12];
+    let ciphertext = &encrypted_key[12..];
+    let nonce = Nonce::from_slice(nonce_bytes);
+
+    let decrypted = cipher.decrypt(nonce, ciphertext)
+        .map_err(|e| format!("Decryption failed: {}", e))?;
+    Ok(decrypted)
+}

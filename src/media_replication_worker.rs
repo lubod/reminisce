@@ -167,6 +167,8 @@ async fn replicate_batch(
             let nodes_owned = nodes.to_vec();
             let success_counter = &successes;
 
+            let api_secret = config.get_api_key().to_string();
+
             async move {
                 BACKUP_ATTEMPTS_TOTAL.inc();
                 match replicate_single_file(
@@ -176,6 +178,7 @@ async fn replicate_batch(
                     &table_owned,
                     &nodes_owned,
                     &file,
+                    &api_secret,
                 ).await {
                     Ok(_) => {
                         success_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -200,6 +203,7 @@ async fn replicate_single_file(
     table: &str,
     nodes: &[(String, SocketAddr)],
     file: &MediaToReplicate,
+    api_secret: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let file_path = PathBuf::from(base_dir)
         .join(&file.hash[0..2])
@@ -322,7 +326,7 @@ async fn replicate_single_file(
 
     // Mark as synced and store the encryption key + encrypted size for future re-sharding
     let enc_size_i32 = _enc_size as i32;
-    let key_bytes: &[u8] = &encryption_key;
+    let encrypted_key = crate::utils::encrypt_key(&encryption_key, api_secret);
     // Compute a manifest hash: BLAKE3 over all stored shard hashes concatenated.
     let mut manifest_hasher = blake3::Hasher::new();
     for (_, _, _, shard_hash) in final_results.iter() { manifest_hasher.update(shard_hash.as_bytes()); }
@@ -333,7 +337,7 @@ async fn replicate_single_file(
         "UPDATE {} SET p2p_synced_at = NOW(), p2p_shard_hash = $1, p2p_encryption_key = $2, p2p_encrypted_size = $3 WHERE hash = $4",
         table
     );
-    trans.execute(&update_query, &[&manifest_hash, &key_bytes, &enc_size_i32, &file.hash]).await?;
+    trans.execute(&update_query, &[&manifest_hash, &encrypted_key, &enc_size_i32, &file.hash]).await?;
 
     trans.commit().await?;
 
