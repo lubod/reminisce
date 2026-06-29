@@ -69,6 +69,7 @@ services:
       - face_dev_model_cache:/root/.insightface
       - ./ai/ai_service.py:/app/ai_service.py
     environment:
+      - API_SECRET_KEY=${API_SECRET_KEY:-}
       - HSA_OVERRIDE_GFX_VERSION=11.5.0
       - TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1
       - ROCBLAS_USE_HIPBLASLT=1

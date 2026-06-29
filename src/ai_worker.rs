@@ -519,6 +519,7 @@ async fn get_image_description(
     info!("Sending request to AI service at: {}", ai_url);
     let response = client
         .post(&ai_url)
+        .bearer_auth(config.get_api_key())
         .json(&request)
         .send()
         .await

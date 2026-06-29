@@ -45,6 +45,8 @@ services:
     volumes:
       - ai_model_cache:/root/.cache/huggingface
       - face_model_cache:/root/.insightface
+    environment:
+      - API_SECRET_KEY=${API_SECRET_KEY:-}
     #GPU#devices:
     #GPU#  - /dev/dri:/dev/dri
     #GPU#environment:

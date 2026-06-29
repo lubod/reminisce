@@ -961,6 +961,7 @@ pub async fn enhance_image(
     let ai_url = format!("{}/enhance", config.embedding_service_url);
     let ai_resp = http_client
         .post(&ai_url)
+        .bearer_auth(config.get_api_key())
         .json(&serde_json::json!({"image": base64_image, "mode": mode}))
         .send()
         .await

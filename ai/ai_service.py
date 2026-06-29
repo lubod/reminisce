@@ -36,7 +36,29 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+import os
+from functools import wraps
+
 app = Flask(__name__)
+app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50MB limit to prevent OOM (C11)
+
+def require_api_key(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        expected_key = os.environ.get('API_SECRET_KEY') or os.environ.get('REMINISCE_API_SECRET_KEY')
+        if expected_key:
+            auth_header = request.headers.get('Authorization')
+            api_key = None
+            if auth_header and auth_header.startswith('Bearer '):
+                api_key = auth_header.split(" ")[1]
+            if not api_key:
+                api_key = request.headers.get('X-API-Key')
+            if not api_key:
+                return jsonify({'error': 'Unauthorized: Missing API Key'}), 401
+            if api_key != expected_key:
+                return jsonify({'error': 'Unauthorized: Invalid API Key'}), 401
+        return f(*args, **kwargs)
+    return decorated
 
 # Global model references
 siglip_model = None
@@ -220,6 +242,7 @@ def decode_image_to_bgr(base64_string):
 # ==================== EMBEDDING ENDPOINTS ====================
 
 @app.route('/embed/image', methods=['POST'])
+@require_api_key
 def embed_image():
     """Generate image embedding from base64 encoded image."""
     if siglip_model is None:
@@ -267,6 +290,7 @@ def embed_image():
 
 
 @app.route('/embed/text', methods=['POST'])
+@require_api_key
 def embed_text():
     """Generate text embedding from search query."""
     if siglip_model is None:
@@ -310,6 +334,7 @@ QUALITY_TEXTS = [
 ]
 
 @app.route('/quality', methods=['POST'])
+@require_api_key
 def quality_score():
     """Compute quality signals for an image: aesthetic score, sharpness, resolution."""
     if siglip_model is None:
@@ -361,6 +386,7 @@ def quality_score():
 # ==================== DESCRIPTION ENDPOINTS ====================
 
 @app.route('/describe/qwen', methods=['POST'])
+@require_api_key
 def describe_image():
     """Generate image description using Qwen2.5-VL (high quality, ~29s)."""
     if vlm_model is None:
@@ -421,6 +447,7 @@ def describe_image():
 
 
 @app.route('/describe', methods=['POST'])
+@require_api_key
 def describe_image_fast():
     """Generate image description using SmolVLM-500M (default, ~5.6s)."""
     if smolvlm_model is None:
@@ -560,6 +587,7 @@ def detect_orientation():
 # ==================== FACE DETECTION ENDPOINTS ====================
 
 @app.route('/detect', methods=['POST'])
+@require_api_key
 def detect_faces():
     """Detect faces in image and return bounding boxes + embeddings + confidence."""
     if face_app is None:
@@ -621,6 +649,7 @@ def detect_faces():
 # ==================== ENHANCE ENDPOINT ====================
 
 @app.route('/enhance', methods=['POST'])
+@require_api_key
 def enhance_image_endpoint():
     """Enhance an image: fix exposure, denoise, sharpen, restore faded colors.
 

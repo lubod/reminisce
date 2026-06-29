@@ -40,6 +40,7 @@ pub async fn detect_faces(
 
     let response = client
         .post(&url)
+        .bearer_auth(config.get_api_key())
         .json(&request)
         .send()
         .await
