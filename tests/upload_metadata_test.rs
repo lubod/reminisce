@@ -18,11 +18,14 @@ async fn test_upload_image_metadata_success() {
 
     let config = utils::create_test_config();
 
+    let user_id = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+
     // Insert a dummy image record with verification_status = 1 (verified)
     client
         .execute(
-            "INSERT INTO images (hash, name, exif, created_at, type, deviceid, ext, has_thumbnail, verification_status) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+            "INSERT INTO images (user_id, hash, name, exif, created_at, type, deviceid, ext, has_thumbnail, verification_status) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
             &[
+                &user_id,
                 &TEST_IMAGE_HASH,
                 &TEST_IMAGE_NAME,
                 &None::<&str>,
@@ -77,7 +80,7 @@ async fn test_upload_image_metadata_success() {
     let body: serde_json::Value = test::read_body_json(response).await;
     assert_eq!(body["status"], "success");
 
-    // Verify that a new record was created for the new device
+    // Verify that the images table still has 1 record for this user/hash with updated name
     let rows = client
         .query(
             "SELECT name, deviceid FROM images WHERE hash = $1",
@@ -86,10 +89,19 @@ async fn test_upload_image_metadata_success() {
         .await
         .expect("Failed to query database");
 
-    assert_eq!(rows.len(), 2);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].get::<_, &str>("name"), new_name);
 
-    let new_device_row = rows.iter().find(|row| row.get::<_, String>("deviceid") == "new_device_id").unwrap();
-    assert_eq!(new_device_row.get::<_, &str>("name"), new_name);
+    // Verify that the new device source is registered in media_sources
+    let sources = client
+        .query(
+            "SELECT device_id FROM media_sources WHERE hash = $1",
+            &[&TEST_IMAGE_HASH],
+        )
+        .await
+        .expect("Failed to query media_sources");
+    assert_eq!(sources.len(), 1);
+    assert_eq!(sources[0].get::<_, String>("device_id"), "new_device_id");
 
     // Clean up
     client

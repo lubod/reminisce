@@ -18,11 +18,14 @@ async fn test_list_image_thumbnails() {
     // Clean up any existing test data first
     client.execute("DELETE FROM images WHERE hash = $1", &[&common::TEST_THUMBNAILS_HASH]).await.ok();
 
+    let user_id = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+
     // Insert test data
     client
         .execute(
-            "INSERT INTO images (hash, name, exif, created_at, type, deviceid, ext, has_thumbnail) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+            "INSERT INTO images (user_id, hash, name, exif, created_at, type, deviceid, ext, has_thumbnail) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
             &[
+                &user_id,
                 &common::TEST_THUMBNAILS_HASH,
                 &common::TEST_IMAGE_NAME,
                 &None::<&str>,
@@ -127,6 +130,8 @@ async fn test_list_image_thumbnails_invalid_token() {
 #[actix_web::test]
 #[serial]
 async fn test_get_thumbnail_success() {
+    let (pool, _test_db) = setup_test_database_with_instance().await;
+    let main_pool = common::utils::wrap_main_pool(pool.clone());
     let config = common::utils::create_test_config();
     // Create thumbnail file for test
     let subdir = &common::TEST_IMAGE_HASH[..2];
@@ -137,7 +142,10 @@ async fn test_get_thumbnail_success() {
     fs::write(&thumb_path, &test_image_data).unwrap();
 
     let app = test::init_service(
-        App::new().app_data(web::Data::new(config.clone())).service(get_thumbnail)
+        App::new()
+            .app_data(web::Data::new(main_pool.clone()))
+            .app_data(web::Data::new(config.clone()))
+            .service(get_thumbnail)
     ).await;
 
     let token = common::utils::create_test_jwt_token().await;
@@ -161,10 +169,15 @@ async fn test_get_thumbnail_success() {
 #[actix_web::test]
 #[serial]
 async fn test_get_thumbnail_not_found() {
+    let (pool, _test_db) = setup_test_database_with_instance().await;
+    let main_pool = common::utils::wrap_main_pool(pool.clone());
     let config = common::utils::create_test_config();
 
     let app = test::init_service(
-        App::new().app_data(web::Data::new(config.clone())).service(get_thumbnail)
+        App::new()
+            .app_data(web::Data::new(main_pool.clone()))
+            .app_data(web::Data::new(config.clone()))
+            .service(get_thumbnail)
     ).await;
 
     let token = common::utils::create_test_jwt_token().await;
@@ -218,11 +231,14 @@ async fn test_list_video_thumbnails() {
     // Clean up any existing test data first
     client.execute("DELETE FROM videos WHERE hash = $1", &[&common::TEST_VIDEO_HASH]).await.ok();
 
+    let user_id = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+
     // Insert test data
     client
         .execute(
-            "INSERT INTO videos (hash, name, metadata, created_at, type, deviceid, ext, has_thumbnail) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+            "INSERT INTO videos (user_id, hash, name, metadata, created_at, type, deviceid, ext, has_thumbnail) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
             &[
+                &user_id,
                 &common::TEST_VIDEO_HASH,
                 &common::TEST_VIDEO_NAME,
                 &None::<&str>,
@@ -383,11 +399,14 @@ async fn test_list_all_media_thumbnails() {
     client.execute("DELETE FROM images WHERE hash = $1", &[&common::TEST_THUMBNAILS_HASH]).await.ok();
     client.execute("DELETE FROM videos WHERE hash = $1", &[&common::TEST_VIDEO_HASH]).await.ok();
 
+    let user_id = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+
     // Insert an image
     client
         .execute(
-            "INSERT INTO images (hash, name, exif, created_at, type, deviceid, ext, has_thumbnail) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+            "INSERT INTO images (user_id, hash, name, exif, created_at, type, deviceid, ext, has_thumbnail) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
             &[
+                &user_id,
                 &common::TEST_THUMBNAILS_HASH,
                 &common::TEST_IMAGE_NAME,
                 &None::<&str>,
@@ -403,8 +422,9 @@ async fn test_list_all_media_thumbnails() {
     // Insert a video
     client
         .execute(
-            "INSERT INTO videos (hash, name, metadata, created_at, type, deviceid, ext, has_thumbnail) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+            "INSERT INTO videos (user_id, hash, name, metadata, created_at, type, deviceid, ext, has_thumbnail) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
             &[
+                &user_id,
                 &common::TEST_VIDEO_HASH,
                 &common::TEST_VIDEO_NAME,
                 &None::<&str>,

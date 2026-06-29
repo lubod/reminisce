@@ -88,6 +88,7 @@ async fn handle_stream(
     msg: Message,
     mut send: quinn::SendStream,
     mut recv: quinn::RecvStream,
+    conn: quinn::Connection,
     remote_ip: IpAddr,
     peers: PeerMap,
     peer_ttl_secs: u64,
@@ -96,12 +97,35 @@ async fn handle_stream(
 ) {
     let response = match msg {
         Message::RegisterNode { node_id, quic_port, namespace } => {
-            info!("[COORD] Register: node_id={} ns={} ip={} quic_port={}", node_id, namespace, remote_ip, quic_port);
-            peers.write().unwrap().insert(
-                (namespace.clone(), node_id.clone()),
-                PeerEntry { node_id, ip: remote_ip, quic_port, last_seen: Instant::now() },
-            );
-            Message::PeerList { peers: current_peer_list(&peers, &namespace, peer_ttl_secs) }
+            // Verify that the node_id matches the peer certificate's public key (C2)
+            let mut verified = false;
+            if let Some(peer_identity) = conn.peer_identity() {
+                if let Some(certs) = peer_identity.downcast_ref::<Vec<rustls_pki_types::CertificateDer<'static>>>() {
+                    if let Some(cert) = certs.first() {
+                        let cert_bytes: &[u8] = cert.as_ref();
+                        if let Some(pubkey) = np2p::crypto::extract_public_key(cert_bytes) {
+                            let pubkey_hex = hex::encode(pubkey);
+                            if pubkey_hex == node_id {
+                                verified = true;
+                            } else {
+                                warn!("[COORD] Node ID mismatch: claimed {}, certificate has {}", node_id, pubkey_hex);
+                            }
+                        }
+                    }
+                }
+            }
+
+            if !verified {
+                warn!("[COORD] Rejecting RegisterNode from {} - identity verification failed", remote_ip);
+                Message::Error { code: 401, message: "Identity verification failed".into() }
+            } else {
+                info!("[COORD] Register: node_id={} ns={} ip={} quic_port={}", node_id, namespace, remote_ip, quic_port);
+                peers.write().unwrap().insert(
+                    (namespace.clone(), node_id.clone()),
+                    PeerEntry { node_id, ip: remote_ip, quic_port, last_seen: Instant::now() },
+                );
+                Message::PeerList { peers: current_peer_list(&peers, &namespace, peer_ttl_secs) }
+            }
         }
 
         Message::GetPeers { namespace } => {
@@ -498,7 +522,7 @@ async fn main() -> anyhow::Result<()> {
                     // ── Normal P2P connection ─────────────────────────────────
                     // Handle first message, then loop for more streams
                     tokio::spawn(handle_stream(
-                        first_msg, first_send, first_recv,
+                        first_msg, first_send, first_recv, conn.clone(),
                         remote_ip, peers.clone(), ttl, node_for_task.clone(), channels.clone(),
                     ));
 
@@ -509,7 +533,8 @@ async fn main() -> anyhow::Result<()> {
                                 let peers = peers.clone();
                                 let node = node_for_task.clone();
                                 let channels = channels.clone();
-                                tokio::spawn(handle_stream(msg, send, recv, remote_ip, peers, ttl, node, channels));
+                                let conn_clone = conn.clone();
+                                tokio::spawn(handle_stream(msg, send, recv, conn_clone, remote_ip, peers, ttl, node, channels));
                             }
                             Err(_) => break,
                         }

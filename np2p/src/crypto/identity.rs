@@ -110,7 +110,7 @@ pub fn verify_signature(node_id_bytes: &[u8], msg: &[u8], signature_bytes: &[u8]
 }
 
 /// Extract Ed25519 public key bytes from raw DER encoded X.509 certificate.
-fn extract_public_key(cert_der: &[u8]) -> Option<[u8; 32]> {
+pub fn extract_public_key(cert_der: &[u8]) -> Option<[u8; 32]> {
     let oid = [0x06, 0x03, 0x2b, 0x65, 0x70]; // Ed25519 OID
     for pos in 0..cert_der.len().saturating_sub(oid.len() + 3 + 32) {
         if &cert_der[pos..pos+oid.len()] == oid

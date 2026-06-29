@@ -20,3 +20,4 @@ rustls = { version = "0.23", features = ["ring", "std"] }
 tokio-rustls = "0.26"
 rustls-pemfile = "2"
 quinn = { version = "0.11", default-features = false, features = ["rustls", "runtime-tokio"] }
+rustls-pki-types = "1.0"
