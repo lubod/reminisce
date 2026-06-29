@@ -309,6 +309,23 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
     info!("Server starting up with config file");
     crate::metrics::init_metrics();
 
+    // Validate API Secret Key strength
+    let api_secret = config.api_secret_key.as_deref().unwrap_or("");
+    if api_secret.is_empty() {
+        error!("❌ api_secret_key is missing or empty in configuration!");
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "api_secret_key is required",
+        ));
+    }
+    if api_secret.len() < 32 {
+        error!("❌ api_secret_key is too weak! Must be at least 32 characters.");
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "api_secret_key must be at least 32 characters long",
+        ));
+    }
+
     if config.database_url.is_none() {
         error!("❌ Headless P2P storage node mode has been removed!");
         return Err(std::io::Error::new(

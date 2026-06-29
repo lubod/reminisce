@@ -97,7 +97,7 @@ async fn test_get_stats() {
         encode(
             &Header::new(Algorithm::HS512),
             &claims,
-            &EncodingKey::from_secret("test_secret".as_ref()),
+            &EncodingKey::from_secret("test_secret_key_which_is_at_least_32_bytes_long".as_ref()),
         ).unwrap()
     };
     let req = test::TestRequest::get()

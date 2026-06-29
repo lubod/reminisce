@@ -9,7 +9,7 @@ pub fn create_test_config() -> config::Config {
     config::Config {
         database_url: Some("".to_string()),
         geotagging_database_url: "postgres://postgres:postgres@localhost:5435/geotagging_db".to_string(),
-        api_secret_key: Some("test_secret".to_string()),
+        api_secret_key: Some("test_secret_key_which_is_at_least_32_bytes_long".to_string()),
         images_dir: Some("uploaded_images_test".to_string()),
         videos_dir: Some("uploaded_videos_test".to_string()),
         enable_local_geocoding: true,
@@ -49,7 +49,7 @@ pub fn create_test_config() -> config::Config {
 
 #[allow(dead_code)]
 pub async fn create_test_jwt_token() -> String {
-    let shared_secret = "test_secret";
+    let shared_secret = "test_secret_key_which_is_at_least_32_bytes_long";
 
     use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 

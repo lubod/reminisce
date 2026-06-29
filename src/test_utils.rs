@@ -218,7 +218,7 @@ mod tests {
                 &[&test_user_id, &"test_device", &"test_hash", &"test_name.jpg", &"jpg", &"camera", &false],
             )
             .await;
-        assert!(result.is_ok());
+        result.expect("Failed to insert image");
 
         let rows = client
             .query("SELECT hash, name FROM images WHERE user_id = $1 AND hash = $2", &[&test_user_id, &"test_hash"])
@@ -248,7 +248,7 @@ mod tests {
                 &[&test_user_id, &"test_device", &"test_hash", &"test_name.jpg", &"jpg", &"camera", &false],
             )
             .await;
-        assert!(result.is_ok());
+        result.expect("Failed to insert image");
 
         let rows = client
             .query("SELECT hash, name FROM images WHERE user_id = $1 AND hash = $2", &[&test_user_id, &"test_hash"])
