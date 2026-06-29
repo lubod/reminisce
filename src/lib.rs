@@ -543,8 +543,30 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
 
     let shared_system = web::Data::new(services::system_stats::start_system_monitor());
 
+    let server_config = config.clone();
     HttpServer::new(move || {
-        let cors = actix_cors::Cors::permissive();
+        let cors = if server_config.environment.as_deref() == Some("production") {
+            let mut cors = actix_cors::Cors::default()
+                .allowed_methods(vec!["GET", "POST", "PATCH", "DELETE", "OPTIONS"])
+                .allowed_headers(vec![
+                    actix_web::http::header::AUTHORIZATION,
+                    actix_web::http::header::ACCEPT,
+                    actix_web::http::header::CONTENT_TYPE,
+                ])
+                .supports_credentials()
+                .max_age(3600);
+
+            if let Some(ref origin) = server_config.main_server_url {
+                cors = cors.allowed_origin(origin);
+            }
+            if let Some(ref origin) = server_config.p2p_tunnel_public_url {
+                cors = cors.allowed_origin(origin);
+            }
+
+            cors
+        } else {
+            actix_cors::Cors::permissive()
+        };
 
         App::new()
             .wrap(TracingLogger::<CustomRootSpanBuilder>::new())
