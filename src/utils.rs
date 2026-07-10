@@ -65,13 +65,15 @@ pub fn parse_peer_addr(peer: &str) -> Result<std::net::SocketAddr, String> {
 
 /// Assert that the given table name is one of the strictly whitelisted database tables.
 /// This prevents SQL injection patterns when database tables must be dynamically interpolated.
-pub fn validate_table_name(table: &str) {
+pub fn validate_table_name(table: &str) -> Result<(), &'static str> {
     let allowed = [
         "images", "videos", "starred_images", "starred_videos", 
         "p2p_shards", "users", "persons", "faces", "image_labels", "video_labels"
     ];
     if !allowed.contains(&table) {
-        panic!("CRITICAL SECURITY: Invalid database table name dynamic query interpolation attempted: {}", table);
+        Err("CRITICAL SECURITY: Invalid database table name dynamic query interpolation attempted")
+    } else {
+        Ok(())
     }
 }
 

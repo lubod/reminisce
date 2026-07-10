@@ -313,7 +313,7 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
                             AI_DESCRIPTION_PROCESSING_DELAY.observe(delay_secs);
                             info!("Got AI description for {} {} (took {:.2}s): {}", file_type, hash, duration.as_secs_f64(), desc);
                             let table_name = if file_type == "image" { "images" } else { "videos" };
-                            crate::utils::validate_table_name(table_name);
+                            crate::utils::validate_table_name(table_name).unwrap();
                             let query = format!("UPDATE {} SET description = $1 WHERE hash = $2 AND user_id = $3", table_name);
                             if let Err(e) = client.execute(&query, &[&desc, &hash, &user_id]).await {
                                 error!("Failed to update description for {} {}: {}", file_type, hash, e);
@@ -328,7 +328,7 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
                             // Mark permanent failures (400 Bad Request) so they aren't retried
                             if e.contains("400 Bad Request") {
                                 let table_name = if file_type == "image" { "images" } else { "videos" };
-                                crate::utils::validate_table_name(table_name);
+                                crate::utils::validate_table_name(table_name).unwrap();
                                 let query = format!("UPDATE {} SET description = $1 WHERE hash = $2 AND user_id = $3", table_name);
                                 let _ = client.execute(&query, &[&"[skipped]", &hash, &user_id]).await;
                             }
@@ -519,7 +519,7 @@ async fn get_image_description(
     info!("Sending request to AI service at: {}", ai_url);
     let response = client
         .post(&ai_url)
-        .bearer_auth(config.get_api_key())
+        .bearer_auth(config.get_api_key().unwrap())
         .json(&request)
         .send()
         .await

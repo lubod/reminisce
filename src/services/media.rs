@@ -329,8 +329,8 @@ async fn toggle_media_star_inner(
     user_uuid: &uuid::Uuid,
     is_admin: bool,
 ) -> Result<HttpResponse, actix_web::Error> {
-    crate::utils::validate_table_name(media_table);
-    crate::utils::validate_table_name(starred_table);
+    crate::utils::validate_table_name(media_table).map_err(actix_web::error::ErrorBadRequest)?;
+    crate::utils::validate_table_name(starred_table).map_err(actix_web::error::ErrorBadRequest)?;
     let mut client = utils::get_db_client(pool).await?;
 
     let transaction = client.transaction().await.map_err(|e| {
@@ -506,7 +506,7 @@ pub async fn get_device_ids(
     let mut device_set = HashSet::new();
 
     for table in &["images", "videos"] {
-        crate::utils::validate_table_name(table);
+        crate::utils::validate_table_name(table).unwrap();
         let (query, params): (String, Vec<&(dyn tokio_postgres::types::ToSql + Sync)>) = if is_admin {
             (format!("SELECT DISTINCT deviceid FROM {} WHERE deviceid IS NOT NULL AND deleted_at IS NULL", table), vec![])
         } else {
@@ -713,7 +713,7 @@ async fn soft_restore_media(
     hash: &str,
     user_id: &uuid::Uuid,
 ) -> Result<HttpResponse, actix_web::Error> {
-    crate::utils::validate_table_name(table);
+    crate::utils::validate_table_name(table).map_err(actix_web::error::ErrorBadRequest)?;
     let client = utils::get_db_client(pool).await?;
 
     let result = client
@@ -799,7 +799,7 @@ async fn soft_delete_media(
     hash: &str,
     user_id: &uuid::Uuid,
 ) -> Result<HttpResponse, actix_web::Error> {
-    crate::utils::validate_table_name(table);
+    crate::utils::validate_table_name(table).map_err(actix_web::error::ErrorBadRequest)?;
     let client = utils::get_db_client(pool).await?;
 
     let result = client
@@ -961,7 +961,7 @@ pub async fn enhance_image(
     let ai_url = format!("{}/enhance", config.embedding_service_url);
     let ai_resp = http_client
         .post(&ai_url)
-        .bearer_auth(config.get_api_key())
+        .bearer_auth(config.get_api_key().unwrap())
         .json(&serde_json::json!({"image": base64_image, "mode": mode}))
         .send()
         .await

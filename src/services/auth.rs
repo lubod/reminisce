@@ -287,7 +287,7 @@ pub async fn user_login(
             let token = encode(
                 &Header::new(Algorithm::HS512),
                 &claims,
-                &EncodingKey::from_secret(config.get_api_key().as_bytes())
+                &EncodingKey::from_secret(config.get_api_key().unwrap().as_bytes())
             );
 
             match token {

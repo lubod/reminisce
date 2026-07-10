@@ -63,11 +63,21 @@ pub async fn ensure_user_exists(
 pub fn authenticate_request(
     req: &HttpRequest,
     handler_name: &str,
-    api_secret_env: &str,
+    api_secret_env: Result<&str, &'static str>,
 ) -> Result<Claims, HttpResponse> {
     if let Some(peer_addr) = req.peer_addr() {
         info!("{} request from: {}", handler_name, peer_addr);
     }
+
+    let api_secret = match api_secret_env {
+        Ok(s) => s,
+        Err(e) => {
+            log::error!("Authentication failed: {}", e);
+            return Err(HttpResponse::InternalServerError().json(serde_json::json!({
+                "error": e
+            })));
+        }
+    };
 
     let mut token = None;
 
@@ -95,7 +105,7 @@ pub fn authenticate_request(
         let validation = Validation::new(Algorithm::HS512);
         match jsonwebtoken::decode::<Claims>(
             &token_str,
-            &DecodingKey::from_secret(api_secret_env.as_ref()),
+            &DecodingKey::from_secret(api_secret.as_bytes()),
             &validation,
         ) {
             Ok(token_data) => {

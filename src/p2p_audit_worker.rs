@@ -317,7 +317,7 @@ async fn repair_file(
 
     // Single-segment file path
     // Try re-sharding from local file if encryption key is stored
-    let file_info = find_file_info(&client, file_hash, config.get_api_key()).await?;
+    let file_info = find_file_info(&client, file_hash, config.get_api_key().unwrap()).await?;
 
     match file_info {
         Some((ext, Some(key), _enc_size)) => {

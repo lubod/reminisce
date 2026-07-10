@@ -200,7 +200,7 @@ async fn migrate_shard(
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     let client = pool.get().await?;
 
-    let file_info = find_file_info(&client, file_hash, config.get_api_key()).await?;
+    let file_info = find_file_info(&client, file_hash, config.get_api_key().unwrap()).await?;
 
     let shard_data = match file_info {
         Some((ext, Some(key), _enc_size)) => {

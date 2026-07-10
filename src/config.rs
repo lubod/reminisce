@@ -162,6 +162,9 @@ impl Config {
         let contents = fs::read_to_string(path)?;
         let mut config: Config = serde_yaml::from_str(&contents)?;
 
+        // Validate API key at startup
+        config.get_api_key().map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+
         // Initialize AI processing settings with defaults
         config.enable_ai_descriptions = Arc::new(AtomicBool::new(true));
         config.enable_embeddings = Arc::new(AtomicBool::new(true));
@@ -172,8 +175,10 @@ impl Config {
         Ok(config)
     }
 
-    pub fn get_api_key(&self) -> &str {
-        self.api_secret_key.as_deref().unwrap_or("")
+    pub fn get_api_key(&self) -> Result<&str, &'static str> {
+        self.api_secret_key.as_deref()
+            .filter(|s| !s.is_empty())
+            .ok_or("API secret key is not configured — authentication is disabled")
     }
 
     pub fn get_images_dir(&self) -> &str {

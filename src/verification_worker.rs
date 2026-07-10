@@ -179,7 +179,7 @@ async fn verify_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) ->
                                 );
                                 // Update verification status to -1 (failed)
                                 let table_name = if file_type == "image" { "images" } else { "videos" };
-                                crate::utils::validate_table_name(table_name);
+                                crate::utils::validate_table_name(table_name).unwrap();
                                 let query =
                                     format!("UPDATE {} SET last_verified_at = NOW(), verification_status = -1 WHERE hash = $1 AND user_id = $2", table_name);
                                 if let Err(db_err) = client.execute(&query, &[&hash, &user_id]).await {
@@ -233,7 +233,7 @@ async fn verify_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) ->
 
                         // Mark as verified immediately and update thumbnail status
                         let table_name = if file_type == "image" { "images" } else { "videos" };
-                        crate::utils::validate_table_name(table_name);
+                        crate::utils::validate_table_name(table_name).unwrap();
                         let query = format!("UPDATE {} SET last_verified_at = NOW(), verification_status = 1, has_thumbnail = $3 WHERE hash = $1 AND user_id = $2", table_name);
                         if let Err(e) = client.execute(&query, &[&hash, &user_id, &has_thumbnail]).await {
                             error!("Failed to update verification_status for {} {}: {}", file_type, hash, e);
@@ -257,7 +257,7 @@ async fn verify_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) ->
                         info!("Skipping AI description and embedding generation for unverified file: {}", hash);
                         // Update verification status to -1 (failed)
                         let table_name = if file_type == "image" { "images" } else { "videos" };
-                        crate::utils::validate_table_name(table_name);
+                        crate::utils::validate_table_name(table_name).unwrap();
                         let query =
                             format!("UPDATE {} SET last_verified_at = NOW(), verification_status = -1 WHERE hash = $1 AND user_id = $2", table_name);
                         if let Err(e) = client.execute(&query, &[&hash, &user_id]).await {
@@ -275,7 +275,7 @@ async fn verify_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) ->
                     error!("Failed to open {} file for verification {}: {}", file_type, hash, e);
                     // Update verification status to -1 (failed)
                     let table_name = if file_type == "image" { "images" } else { "videos" };
-                    crate::utils::validate_table_name(table_name);
+                    crate::utils::validate_table_name(table_name).unwrap();
                     let query =
                         format!("UPDATE {} SET last_verified_at = NOW(), verification_status = -1 WHERE hash = $1 AND user_id = $2", table_name);
                     if let Err(db_err) = client.execute(&query, &[&hash, &user_id]).await {

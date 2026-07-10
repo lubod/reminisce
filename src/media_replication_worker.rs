@@ -167,7 +167,7 @@ async fn replicate_batch(
             let nodes_owned = nodes.to_vec();
             let success_counter = &successes;
 
-            let api_secret = config.get_api_key().to_string();
+            let api_secret = config.get_api_key().unwrap().to_string();
 
             async move {
                 BACKUP_ATTEMPTS_TOTAL.inc();
@@ -332,7 +332,7 @@ async fn replicate_single_file(
     for (_, _, _, shard_hash) in final_results.iter() { manifest_hasher.update(shard_hash.as_bytes()); }
     let manifest_hash = manifest_hasher.finalize().to_hex().to_string();
 
-    crate::utils::validate_table_name(table);
+    crate::utils::validate_table_name(table).unwrap();
     let update_query = format!(
         "UPDATE {} SET p2p_synced_at = NOW(), p2p_shard_hash = $1, p2p_encryption_key = $2, p2p_encrypted_size = $3 WHERE hash = $4",
         table

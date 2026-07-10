@@ -29,7 +29,7 @@ pub async fn get_quality_score(image_data: &[u8], config: &Config) -> Result<Qua
 
     let response = client
         .post(&url)
-        .bearer_auth(config.get_api_key())
+        .bearer_auth(config.get_api_key().unwrap())
         .json(&serde_json::json!({"image": base64_image}))
         .send()
         .await

@@ -46,17 +46,19 @@ def require_api_key(f):
     @wraps(f)
     def decorated(*args, **kwargs):
         expected_key = os.environ.get('API_SECRET_KEY') or os.environ.get('REMINISCE_API_SECRET_KEY')
-        if expected_key:
-            auth_header = request.headers.get('Authorization')
-            api_key = None
-            if auth_header and auth_header.startswith('Bearer '):
-                api_key = auth_header.split(" ")[1]
-            if not api_key:
-                api_key = request.headers.get('X-API-Key')
-            if not api_key:
-                return jsonify({'error': 'Unauthorized: Missing API Key'}), 401
-            if api_key != expected_key:
-                return jsonify({'error': 'Unauthorized: Invalid API Key'}), 401
+        if not expected_key:
+            return jsonify({'error': 'Server misconfigured: API_SECRET_KEY not set'}), 500
+
+        auth_header = request.headers.get('Authorization')
+        api_key = None
+        if auth_header and auth_header.startswith('Bearer '):
+            api_key = auth_header.split(" ")[1]
+        if not api_key:
+            api_key = request.headers.get('X-API-Key')
+        if not api_key:
+            return jsonify({'error': 'Unauthorized: Missing API Key'}), 401
+        if api_key != expected_key:
+            return jsonify({'error': 'Unauthorized: Invalid API Key'}), 401
         return f(*args, **kwargs)
     return decorated
 
