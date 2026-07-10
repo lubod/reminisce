@@ -83,7 +83,7 @@ async fn metrics_handler() -> HttpResponse {
     }
 }
 
-pub use crate::services::auth::{register_user, user_login, setup_status, setup_admin, Claims};
+pub use crate::services::auth::{register_user, user_login, user_logout, get_me, setup_status, setup_admin, Claims};
 pub use crate::services::user_management::{list_users, create_user, update_user, delete_user};
 pub use crate::services::health::{ping, health_check, HealthCheckResponse};
 pub use crate::services::existence_check::{check_image_exists, check_video_exists};
@@ -601,6 +601,8 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
                 web::scope("/api")
                     .service(register_user)
                     .service(user_login)
+                    .service(user_logout)
+                    .service(get_me)
                     .service(setup_status)
                     .service(setup_admin)
                     .service(list_users)

@@ -1,4 +1,4 @@
-use actix_web::{ get, post, web, HttpResponse };
+use actix_web::{ get, post, web, HttpResponse, HttpRequest };
 use jsonwebtoken::{ encode, Algorithm, EncodingKey, Header };
 use log::{ info, warn };
 use serde::{ Deserialize, Serialize };
@@ -30,23 +30,23 @@ pub struct Claims {
 }
 
 use actix_web::{FromRequest, dev::Payload, Error as ActixError};
-use futures_util::future::{Ready, ok, err};
+use futures_util::future::{ready, LocalBoxFuture};
 
 impl FromRequest for Claims {
     type Error = ActixError;
-    type Future = Ready<Result<Self, Self::Error>>;
+    type Future = LocalBoxFuture<'static, Result<Self, Self::Error>>;
 
     fn from_request(req: &actix_web::HttpRequest, _payload: &mut Payload) -> Self::Future {
         // Get the API secret from Config app data
         let secret = if let Some(config) = req.app_data::<web::Data<Config>>() {
             config.api_secret_key.clone().unwrap_or_default()
         } else {
-            return err(actix_web::error::ErrorInternalServerError("Config not available"));
+            return Box::pin(ready(Err(actix_web::error::ErrorInternalServerError("Config not available"))));
         };
 
-        // Extract token from Authorization header or query parameter
+        // Extract token from:
+        // 1. Authorization header
         let mut token = None;
-
         if let Some(auth_header) = req.headers().get("Authorization") {
             if let Ok(auth_str) = auth_header.to_str() {
                 if auth_str.starts_with("Bearer ") {
@@ -55,6 +55,14 @@ impl FromRequest for Claims {
             }
         }
 
+        // 2. Cookie 'access_token'
+        if token.is_none() {
+            if let Some(cookie) = req.cookie("access_token") {
+                token = Some(cookie.value().to_string());
+            }
+        }
+
+        // 3. Query parameter 'token'
         if token.is_none() {
             if let Ok(query) = web::Query::<std::collections::HashMap<String, String>>::from_query(req.query_string()) {
                 if let Some(t) = query.get("token") {
@@ -63,20 +71,55 @@ impl FromRequest for Claims {
             }
         }
 
-        match token {
-            Some(token_str) => {
-                let validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::HS512);
-                match jsonwebtoken::decode::<Claims>(
-                    &token_str,
-                    &jsonwebtoken::DecodingKey::from_secret(secret.as_ref()),
-                    &validation,
-                ) {
-                    Ok(token_data) => ok(token_data.claims),
-                    Err(_) => err(actix_web::error::ErrorUnauthorized("Invalid token")),
+        let pool = req.app_data::<web::Data<MainDbPool>>().cloned();
+
+        let fut = async move {
+            let token_str = match token {
+                Some(t) => t,
+                None => return Err(actix_web::error::ErrorUnauthorized("Authentication required")),
+            };
+
+            let validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::HS512);
+            let token_data = jsonwebtoken::decode::<Claims>(
+                &token_str,
+                &jsonwebtoken::DecodingKey::from_secret(secret.as_ref()),
+                &validation,
+            ).map_err(|_| actix_web::error::ErrorUnauthorized("Invalid token"))?;
+
+            let claims = token_data.claims;
+            let user_uuid = uuid::Uuid::parse_str(&claims.user_id)
+                .map_err(|_| actix_web::error::ErrorUnauthorized("Invalid user ID in token"))?;
+
+            if let Some(pool) = pool {
+                let client = pool.0.get().await.map_err(|e| {
+                    log::error!("FromRequest DB connection error: {:?}", e);
+                    actix_web::error::ErrorInternalServerError("Database connection failed")
+                })?;
+                let row = client.query_opt(
+                    "SELECT role, is_active FROM users WHERE id = $1",
+                    &[&user_uuid]
+                ).await.map_err(|e| {
+                    log::error!("FromRequest DB query error: {:?}", e);
+                    actix_web::error::ErrorInternalServerError("Database error")
+                })?;
+
+                if let Some(row) = row {
+                    let is_active: bool = row.get("is_active");
+                    if !is_active {
+                        return Err(actix_web::error::ErrorUnauthorized("Account is disabled"));
+                    }
+                    let mut claims_updated = claims;
+                    claims_updated.role = row.get("role");
+                    Ok(claims_updated)
+                } else {
+                    Err(actix_web::error::ErrorUnauthorized("User not found"))
                 }
+            } else {
+                Ok(claims)
             }
-            None => err(actix_web::error::ErrorUnauthorized("Authentication required")),
-        }
+        };
+
+        Box::pin(fut)
     }
 }
 
@@ -305,7 +348,18 @@ pub async fn user_login(
                     // Increment successful login metrics
                     USER_LOGINS_TOTAL.inc();
 
-                    HttpResponse::Ok().json(serde_json::json!({
+                    let is_secure = config.environment.as_deref() != Some("development") && config.environment.as_deref() != Some("dev");
+                    let cookie = actix_web::cookie::Cookie::build("access_token", t.clone())
+                        .path("/")
+                        .http_only(true)
+                        .same_site(actix_web::cookie::SameSite::Lax)
+                        .secure(is_secure)
+                        .max_age(actix_web::cookie::time::Duration::days(7))
+                        .finish();
+
+                    let mut response = HttpResponse::Ok();
+                    response.cookie(cookie);
+                    response.json(serde_json::json!({
                         "access_token": t,
                         "user": {
                             "id": user_id.to_string(),
@@ -342,4 +396,47 @@ pub async fn user_login(
             }))
         }
     }
+}
+
+// User logout endpoint (clears HttpOnly cookie)
+#[post("/auth/logout")]
+pub async fn user_logout() -> HttpResponse {
+    let cookie = actix_web::cookie::Cookie::build("access_token", "")
+        .path("/")
+        .http_only(true)
+        .same_site(actix_web::cookie::SameSite::Lax)
+        .max_age(actix_web::cookie::time::Duration::ZERO)
+        .finish();
+
+    let mut response = HttpResponse::Ok();
+    response.cookie(cookie);
+    response.json(serde_json::json!({
+        "status": "ok",
+        "message": "Logged out successfully"
+    }))
+}
+
+// User details endpoint (returns currently authenticated user session)
+#[get("/auth/me")]
+pub async fn get_me(req: HttpRequest, claims: Claims) -> HttpResponse {
+    let mut token = String::new();
+    if let Some(auth_header) = req.headers().get("Authorization") {
+        if let Ok(auth_str) = auth_header.to_str() {
+            if auth_str.starts_with("Bearer ") {
+                token = auth_str.trim_start_matches("Bearer ").to_string();
+            }
+        }
+    }
+    if token.is_empty() {
+        if let Some(cookie) = req.cookie("access_token") {
+            token = cookie.value().to_string();
+        }
+    }
+
+    HttpResponse::Ok().json(serde_json::json!({
+        "id": claims.user_id,
+        "username": claims.username,
+        "role": claims.role,
+        "access_token": token
+    }))
 }

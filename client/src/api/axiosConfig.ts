@@ -2,6 +2,7 @@ import axios from "axios";
 
 const instance = axios.create({
   baseURL: "/api", // All requests will be prefixed with /api
+  withCredentials: true,
 });
 
 // Add a request interceptor to include the token in headers

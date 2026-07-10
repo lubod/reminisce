@@ -20,9 +20,9 @@ export interface ManagedUser {
 }
 
 export class AuthStore {
-    token: string | null = localStorage.getItem("token");
+    token: string | null = null; // Memory-only token to prevent XSS localStorage theft (H2)
     user: User | null = JSON.parse(localStorage.getItem("user") || "null");
-    isAuthenticated: boolean = !!this.token;
+    isAuthenticated: boolean = false;
     needsSetup: boolean = false;
     initialized: boolean = false;
     rootStore: RootStore;
@@ -38,18 +38,17 @@ export class AuthStore {
             const res = await api.get("/auth/setup-status");
             this.needsSetup = res.data.needs_setup;
             if (this.needsSetup) {
-                // No users exist — any cached token is invalid
-                this.setToken(null);
                 this.setUser(null);
-            } else if (this.token) {
-                // Validate the cached token by hitting an authenticated endpoint
+                this.setToken(null);
+            } else {
+                // Fetch currently authenticated user session and token
                 try {
-                    await api.get("/users");
+                    const meRes = await api.get("/auth/me");
+                    this.setUser(meRes.data);
+                    this.setToken(meRes.data.access_token);
                 } catch (err) {
-                    if (axios.isAxiosError(err) && err.response?.status === 401) {
-                        this.setToken(null);
-                        this.setUser(null);
-                    }
+                    this.setUser(null);
+                    this.setToken(null);
                 }
             }
         } catch {
@@ -97,20 +96,23 @@ export class AuthStore {
         }
     };
 
-    logout = () => {
+    logout = async () => {
+        try {
+            await api.post("/auth/logout");
+        } catch (e) {
+            console.error("Logout request failed", e);
+        }
         this.setToken(null);
         this.setUser(null);
     };
 
     setToken = (token: string | null) => {
         this.token = token;
-        this.isAuthenticated = !!token;
-        if (token) localStorage.setItem("token", token);
-        else localStorage.removeItem("token");
     };
 
     setUser = (user: User | null) => {
         this.user = user;
+        this.isAuthenticated = !!user;
         if (user) localStorage.setItem("user", JSON.stringify(user));
         else localStorage.removeItem("user");
     };
