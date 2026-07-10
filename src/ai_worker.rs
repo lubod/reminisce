@@ -413,7 +413,7 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
                     let _quality_permit = quality_sem_clone.acquire().await.unwrap();
                     info!("Starting quality scoring for image: {}", hash);
                     let file_size = std::fs::metadata(&file_path)
-                        .map(|m| m.len() as i32)
+                        .map(|m| m.len().min(i32::MAX as u64) as i32)
                         .unwrap_or(0);
                     match tokio::fs::read(&file_path).await {
                         Ok(image_data) => {
