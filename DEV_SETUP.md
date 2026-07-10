@@ -129,6 +129,9 @@ The `./dev` script is your primary tool for development:
 - **API (Direct):** http://localhost:8080
 - **Swagger UI:** http://localhost:8080/swagger-ui/
 - **Grafana:** http://localhost:3000
+- **Postgres Database:** `localhost:25432` (user: `postgres`, password: `postgres`, db: `reminisce_db`)
+- **Geotagging Database:** `localhost:5435` (user: `postgres`, password: `postgres`, db: `geotagging_db`)
+
 
 ---
 

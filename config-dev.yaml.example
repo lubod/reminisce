@@ -1,8 +1,8 @@
 # Development configuration — copy to config-dev.yaml and fill in your values
 # Databases run in Docker, exposed to localhost
 
-# Main database (running in Docker on port 5432)
-database_url: "postgres://postgres:postgres@localhost:5432/reminisce_db"
+# Main database (running in Docker on port 25432)
+database_url: "postgres://postgres:postgres@localhost:25432/reminisce_db"
 
 # Geotagging database (running in Docker on port 5435)
 geotagging_database_url: "postgres://postgres:postgres@localhost:5435/geotagging_db"

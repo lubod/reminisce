@@ -2,8 +2,8 @@
 # All services run in Docker containers. Backend uses host network.
 # Databases and AI services are port-mapped to localhost.
 
-# Main database (Docker, port-mapped to host)
-database_url: "postgres://postgres:postgres@localhost:5432/reminisce_db"
+# Main database (Docker, port-mapped to host on 25432)
+database_url: "postgres://postgres:postgres@localhost:25432/reminisce_db"
 
 # Geotagging database (Docker, port-mapped to host on 5435)
 geotagging_database_url: "postgres://postgres:postgres@localhost:5435/geotagging_db"
