@@ -25,6 +25,7 @@ pub mod metrics;
 pub mod duplicate_worker;
 pub mod test_utils;
 pub mod metrics_collector;
+pub mod rate_limit;
 
 pub mod services {
     pub mod auth;
@@ -542,6 +543,7 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
         .unwrap();
 
     let shared_system = web::Data::new(services::system_stats::start_system_monitor());
+    let rate_limiter = rate_limit::RateLimiter::new();
 
     let server_config = config.clone();
     HttpServer::new(move || {
@@ -581,6 +583,7 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
             .wrap(TracingLogger::<CustomRootSpanBuilder>::new())
             .wrap(prom_metrics.clone())
             .wrap(cors)
+            .wrap(rate_limiter.clone())
             .app_data(web::Data::new(main_pool.clone()))
             .app_data(web::Data::new(geo_pool.clone()))
             .app_data(config_data.clone())
