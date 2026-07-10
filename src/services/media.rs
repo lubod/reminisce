@@ -506,7 +506,7 @@ pub async fn get_device_ids(
     let mut device_set = HashSet::new();
 
     for table in &["images", "videos"] {
-        crate::utils::validate_table_name(table).unwrap();
+        crate::utils::validate_table_name(table).map_err(actix_web::error::ErrorBadRequest)?;
         let (query, params): (String, Vec<&(dyn tokio_postgres::types::ToSql + Sync)>) = if is_admin {
             (format!("SELECT DISTINCT deviceid FROM {} WHERE deviceid IS NOT NULL AND deleted_at IS NULL", table), vec![])
         } else {
