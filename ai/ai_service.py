@@ -211,7 +211,7 @@ def load_models():
     # InsightFace models are small and fast enough on CPU (~200ms/image)
     logger.info("Loading InsightFace (buffalo_l) on CPU...")
     try:
-        face_app = FaceAnalysis(name='buffalo_l', root='/root/.insightface', providers=['CPUExecutionProvider'])
+        face_app = FaceAnalysis(name='buffalo_l', root='/app/.insightface', providers=['CPUExecutionProvider'])
         face_app.prepare(ctx_id=-1, det_size=(640, 640))
         logger.info("InsightFace initialized successfully on CPU")
     except Exception as e:

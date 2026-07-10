@@ -38,14 +38,22 @@ RUN gcc -shared -fPIC -o /app/libhipblas_fix.so /app/hipblas_v2_shim.c -ldl
 
 # Create InsightFace model directory and pre-download models
 # This prevents downloading at runtime which can timeout or fail
-RUN mkdir -p /root/.insightface/models && \
+RUN mkdir -p /app/.insightface/models && \
     python -c "import insightface; \
     from insightface.app import FaceAnalysis; \
-    app = FaceAnalysis(name='buffalo_l', root='/root/.insightface'); \
+    app = FaceAnalysis(name='buffalo_l', root='/app/.insightface'); \
     app.prepare(ctx_id=-1)" || true
 
 # Copy service file
 COPY ai_service.py .
+
+# Create a non-privileged user and group, change ownership
+RUN groupadd -g 10002 ai_user && \
+    useradd -u 10002 -g ai_user -m -s /sbin/nologin ai_user && \
+    chown -R ai_user:ai_user /app
+
+# Switch to the non-privileged user
+USER ai_user:ai_user
 
 # Expose port (single port for all services)
 EXPOSE 8081

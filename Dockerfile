@@ -44,13 +44,23 @@ RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
+# Create a non-privileged user and group
+RUN groupadd -g 10001 reminisce && \
+    useradd -u 10001 -g reminisce -m -s /sbin/nologin reminisce
+
 WORKDIR /app
 
 # Copy binary from builder
 COPY --from=builder /app/bin/reminisce /usr/local/bin/reminisce
 
+# Set permissions
+RUN chown -R reminisce:reminisce /app
+
 EXPOSE 8080
 EXPOSE 5050/udp
+
+# Switch to the non-privileged user
+USER reminisce:reminisce
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD curl -f http://localhost:8080/health || exit 1
