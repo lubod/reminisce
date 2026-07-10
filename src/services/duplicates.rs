@@ -102,7 +102,6 @@ impl UnionFind {
 /// enrich with metadata from the images table.
 async fn build_groups(
     pairs: Vec<(String, String, f32)>,   // (hash_a, hash_b, similarity)
-    is_admin: bool,
     user_uuid: uuid::Uuid,
     client: &deadpool_postgres::Object,
 ) -> Result<Vec<DuplicateGroup>, Box<dyn std::error::Error>> {
@@ -144,24 +143,13 @@ async fn build_groups(
 
     // Fetch metadata for all involved hashes in one query
     let hash_refs: Vec<&str> = hashes.iter().map(|s| s.as_str()).collect();
-    let meta_rows = if is_admin {
-        client.query(
-            "SELECT DISTINCT ON (hash) hash, name, created_at, \
-                    aesthetic_score, sharpness_score, width, height, file_size_bytes \
-             FROM images \
-             WHERE hash = ANY($1) AND deleted_at IS NULL \
-             ORDER BY hash, added_at",
-            &[&hash_refs],
-        ).await?
-    } else {
-        client.query(
-            "SELECT hash, name, created_at, \
-                    aesthetic_score, sharpness_score, width, height, file_size_bytes \
-             FROM images \
-             WHERE hash = ANY($1) AND user_id = $2 AND deleted_at IS NULL",
-            &[&hash_refs, &user_uuid],
-        ).await?
-    };
+    let meta_rows = client.query(
+        "SELECT hash, name, created_at, \
+                aesthetic_score, sharpness_score, width, height, file_size_bytes \
+         FROM images \
+         WHERE hash = ANY($1) AND user_id = $2 AND deleted_at IS NULL",
+        &[&hash_refs, &user_uuid],
+    ).await?;
 
     let mut meta_map: HashMap<String, DuplicateImage> = HashMap::new();
     for row in &meta_rows {
@@ -227,7 +215,6 @@ pub async fn get_duplicates(
     let offset = (page - 1) * limit;
 
     let user_uuid = utils::parse_user_uuid(&claims.user_id)?;
-    let is_admin = claims.role == "admin";
     let client = utils::get_db_client(&pool.0).await?;
 
     let threshold_f32 = threshold as f32;
@@ -235,21 +222,12 @@ pub async fn get_duplicates(
     let mut pairs: Vec<(String, String, f32)> = Vec::new();
 
     // ── Near-duplicates from pre-computed pairs table ──
-    let near_rows = if is_admin {
-        client.query(
-            "SELECT hash_a, hash_b, similarity \
-             FROM image_duplicate_pairs \
-             WHERE similarity >= $1",
-            &[&threshold_f32],
-        ).await
-    } else {
-        client.query(
-            "SELECT hash_a, hash_b, similarity \
-             FROM image_duplicate_pairs \
-             WHERE user_id = $1 AND similarity >= $2",
-            &[&user_uuid, &threshold_f32],
-        ).await
-    }.map_err(|e| {
+    let near_rows = client.query(
+        "SELECT hash_a, hash_b, similarity \
+         FROM image_duplicate_pairs \
+         WHERE user_id = $1 AND similarity >= $2",
+        &[&user_uuid, &threshold_f32],
+    ).await.map_err(|e| {
         error!("get_duplicates: near-dup query failed: {}", e);
         actix_web::error::ErrorInternalServerError("Database error")
     })?;
@@ -261,7 +239,7 @@ pub async fn get_duplicates(
     let mut all_groups: Vec<DuplicateGroup> = Vec::new();
 
     if !pairs.is_empty() {
-        let near_groups = build_groups(pairs, is_admin, user_uuid, &client)
+        let near_groups = build_groups(pairs, user_uuid, &client)
             .await
             .map_err(|e| {
                 error!("get_duplicates: build_groups failed: {}", e);

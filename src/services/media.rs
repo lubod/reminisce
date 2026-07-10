@@ -39,28 +39,15 @@ pub async fn get_image(
     let client = utils::get_db_client(&pool.0).await?;
     let user_uuid = utils::parse_user_uuid(&claims.user_id)?;
 
-    // For admin users, allow access to any image; for regular users, filter by user_id
-    let row = if claims.role == "admin" {
-        client
-            .query_opt(
-                "SELECT name, place, ext, orientation, (exif IS NULL) AS no_exif FROM images WHERE hash = $1 AND deleted_at IS NULL LIMIT 1",
-                &[&hash_to_find]
-            ).await
-            .map_err(|e| {
-                error!("Failed to query image from database: {}", e);
-                actix_web::error::ErrorInternalServerError("Failed to retrieve image info")
-            })?
-    } else {
-        client
-            .query_opt(
-                "SELECT name, place, ext, orientation, (exif IS NULL) AS no_exif FROM images WHERE user_id = $1 AND hash = $2 AND deleted_at IS NULL LIMIT 1",
-                &[&user_uuid, &hash_to_find]
-            ).await
-            .map_err(|e| {
-                error!("Failed to query image from database: {}", e);
-                actix_web::error::ErrorInternalServerError("Failed to retrieve image info")
-            })?
-    };
+    let row = client
+        .query_opt(
+            "SELECT name, place, ext, orientation, (exif IS NULL) AS no_exif FROM images WHERE user_id = $1 AND hash = $2 AND deleted_at IS NULL LIMIT 1",
+            &[&user_uuid, &hash_to_find]
+        ).await
+        .map_err(|e| {
+            error!("Failed to query image from database: {}", e);
+            actix_web::error::ErrorInternalServerError("Failed to retrieve image info")
+        })?;
 
     if let Some(row) = row {
         let original_name: String = row.get(0);
@@ -153,28 +140,15 @@ pub async fn get_video(
     let client = utils::get_db_client(&pool.0).await?;
     let user_uuid = utils::parse_user_uuid(&claims.user_id)?;
 
-    // For admin users, allow access to any video; for regular users, filter by user_id
-    let row = if claims.role == "admin" {
-        client
-            .query_opt(
-                "SELECT name, ext FROM videos WHERE hash = $1 AND deleted_at IS NULL LIMIT 1",
-                &[&hash_to_find]
-            ).await
-            .map_err(|e| {
-                error!("Failed to query video from database: {}", e);
-                actix_web::error::ErrorInternalServerError("Failed to retrieve video info")
-            })?
-    } else {
-        client
-            .query_opt(
-                "SELECT name, ext FROM videos WHERE user_id = $1 AND hash = $2 AND deleted_at IS NULL LIMIT 1",
-                &[&user_uuid, &hash_to_find]
-            ).await
-            .map_err(|e| {
-                error!("Failed to query video from database: {}", e);
-                actix_web::error::ErrorInternalServerError("Failed to retrieve video info")
-            })?
-    };
+    let row = client
+        .query_opt(
+            "SELECT name, ext FROM videos WHERE user_id = $1 AND hash = $2 AND deleted_at IS NULL LIMIT 1",
+            &[&user_uuid, &hash_to_find]
+        ).await
+        .map_err(|e| {
+            error!("Failed to query video from database: {}", e);
+            actix_web::error::ErrorInternalServerError("Failed to retrieve video info")
+        })?;
 
     if let Some(row) = row {
         let original_name: String = row.get(0);
@@ -264,28 +238,15 @@ pub async fn get_image_metadata(
     let user_uuid = utils::parse_user_uuid(&claims.user_id)?;
     let client = utils::get_db_client(&pool.0).await?;
 
-    // For admin users, allow access to any image; for regular users, filter by user_id
-    let row = if claims.role == "admin" {
-        client
-            .query_opt(
-                "SELECT i.hash, i.name, i.description, i.place, i.created_at, i.exif, CASE WHEN s.hash IS NOT NULL THEN true ELSE false END as starred FROM images i LEFT JOIN starred_images s ON i.hash = s.hash AND s.user_id = $1 WHERE i.hash = $2 AND i.deleted_at IS NULL LIMIT 1",
-                &[&user_uuid, &hash_to_find]
-            ).await
-            .map_err(|e| {
-                error!("Failed to query image metadata from database: {}", e);
-                actix_web::error::ErrorInternalServerError("Failed to retrieve image metadata")
-            })?
-    } else {
-        client
-            .query_opt(
-                "SELECT i.hash, i.name, i.description, i.place, i.created_at, i.exif, CASE WHEN s.hash IS NOT NULL THEN true ELSE false END as starred FROM images i LEFT JOIN starred_images s ON i.hash = s.hash AND s.user_id = $1 WHERE i.user_id = $1 AND i.hash = $2 AND i.deleted_at IS NULL LIMIT 1",
-                &[&user_uuid, &hash_to_find]
-            ).await
-            .map_err(|e| {
-                error!("Failed to query image metadata from database: {}", e);
-                actix_web::error::ErrorInternalServerError("Failed to retrieve image metadata")
-            })?
-    };
+    let row = client
+        .query_opt(
+            "SELECT i.hash, i.name, i.description, i.place, i.created_at, i.exif, CASE WHEN s.hash IS NOT NULL THEN true ELSE false END as starred FROM images i LEFT JOIN starred_images s ON i.hash = s.hash AND s.user_id = $1 WHERE i.user_id = $1 AND i.hash = $2 AND i.deleted_at IS NULL LIMIT 1",
+            &[&user_uuid, &hash_to_find]
+        ).await
+        .map_err(|e| {
+            error!("Failed to query image metadata from database: {}", e);
+            actix_web::error::ErrorInternalServerError("Failed to retrieve image metadata")
+        })?;
 
     if let Some(row) = row {
         let metadata = ImageMetadata {
@@ -327,7 +288,6 @@ async fn toggle_media_star_inner(
     starred_table: &str,
     hash: &str,
     user_uuid: &uuid::Uuid,
-    is_admin: bool,
 ) -> Result<HttpResponse, actix_web::Error> {
     crate::utils::validate_table_name(media_table).map_err(actix_web::error::ErrorBadRequest)?;
     crate::utils::validate_table_name(starred_table).map_err(actix_web::error::ErrorBadRequest)?;
@@ -339,22 +299,17 @@ async fn toggle_media_star_inner(
     })?;
 
     // Verify the media exists and user has access
-    let exists = if is_admin {
-        transaction
-            .query_opt(&format!("SELECT 1 FROM {} WHERE hash = $1 AND deleted_at IS NULL LIMIT 1", media_table), &[&hash])
-            .await
-    } else {
-        transaction
-            .query_opt(
-                &format!("SELECT 1 FROM {} WHERE user_id = $1 AND hash = $2 AND deleted_at IS NULL LIMIT 1", media_table),
-                &[user_uuid, &hash]
-            )
-            .await
-    }.map_err(|e| {
-        error!("Failed to check {} existence: {}", media_table, e);
-        actix_web::error::ErrorInternalServerError("Database error")
-    })?
-    .is_some();
+    let exists = transaction
+        .query_opt(
+            &format!("SELECT 1 FROM {} WHERE user_id = $1 AND hash = $2 AND deleted_at IS NULL LIMIT 1", media_table),
+            &[user_uuid, &hash]
+        )
+        .await
+        .map_err(|e| {
+            error!("Failed to check {} existence: {}", media_table, e);
+            actix_web::error::ErrorInternalServerError("Database error")
+        })?
+        .is_some();
 
     if !exists {
         warn!("{} not found or access denied for hash: '{}'", media_table, hash);
@@ -439,7 +394,7 @@ pub async fn toggle_image_star(
     };
     let user_uuid = utils::parse_user_uuid(&claims.user_id)?;
     let hash = path.into_inner();
-    toggle_media_star_inner(&pool.0, "images", "starred_images", &hash, &user_uuid, claims.role == "admin").await
+    toggle_media_star_inner(&pool.0, "images", "starred_images", &hash, &user_uuid).await
 }
 
 #[utoipa::path(
@@ -467,7 +422,7 @@ pub async fn toggle_video_star(
     };
     let user_uuid = utils::parse_user_uuid(&claims.user_id)?;
     let hash = path.into_inner();
-    toggle_media_star_inner(&pool.0, "videos", "starred_videos", &hash, &user_uuid, claims.role == "admin").await
+    toggle_media_star_inner(&pool.0, "videos", "starred_videos", &hash, &user_uuid).await
 }
 
 #[derive(Serialize, ToSchema)]
@@ -500,19 +455,13 @@ pub async fn get_device_ids(
 
     let client = utils::get_db_client(&pool.0).await?;
     let user_uuid = utils::parse_user_uuid(&claims.user_id)?;
-    let is_admin = claims.role == "admin";
-
-    // Build queries dynamically: admin sees all, non-admin filtered by user_id
+    // Build queries: always filter by user_id
     let mut device_set = HashSet::new();
 
     for table in &["images", "videos"] {
         crate::utils::validate_table_name(table).map_err(actix_web::error::ErrorBadRequest)?;
-        let (query, params): (String, Vec<&(dyn tokio_postgres::types::ToSql + Sync)>) = if is_admin {
-            (format!("SELECT DISTINCT deviceid FROM {} WHERE deviceid IS NOT NULL AND deleted_at IS NULL", table), vec![])
-        } else {
-            (format!("SELECT DISTINCT deviceid FROM {} WHERE user_id = $1 AND deviceid IS NOT NULL AND deleted_at IS NULL", table),
-             vec![&user_uuid as &(dyn tokio_postgres::types::ToSql + Sync)])
-        };
+        let query = format!("SELECT DISTINCT deviceid FROM {} WHERE user_id = $1 AND deviceid IS NOT NULL AND deleted_at IS NULL", table);
+        let params = vec![&user_uuid as &(dyn tokio_postgres::types::ToSql + Sync)];
 
         let rows = client.query(&query, &params).await.map_err(|e| {
             error!("Failed to query {} device IDs: {}", table, e);
@@ -604,10 +553,8 @@ pub async fn get_random_image(
         params.push(&label_ids_vec as &(dyn tokio_postgres::types::ToSql + Sync));
     }
 
-    if claims.role != "admin" {
-        conditions.push(format!("i.user_id = ${}", params.len() + 1));
-        params.push(&user_uuid as &(dyn tokio_postgres::types::ToSql + Sync));
-    }
+    conditions.push(format!("i.user_id = ${}", params.len() + 1));
+    params.push(&user_uuid as &(dyn tokio_postgres::types::ToSql + Sync));
 
     if !conditions.is_empty() {
         sql.push_str(" WHERE ");
@@ -920,17 +867,10 @@ pub async fn enhance_image(
     let client = utils::get_db_client(&pool.0).await?;
     let user_uuid = utils::parse_user_uuid(&claims.user_id)?;
 
-    let row = if claims.role == "admin" {
-        client.query_opt(
-            "SELECT ext FROM images WHERE hash = $1 AND deleted_at IS NULL LIMIT 1",
-            &[&hash],
-        ).await
-    } else {
-        client.query_opt(
-            "SELECT ext FROM images WHERE user_id = $1 AND hash = $2 AND deleted_at IS NULL LIMIT 1",
-            &[&user_uuid, &hash],
-        ).await
-    }.map_err(|e| {
+    let row = client.query_opt(
+        "SELECT ext FROM images WHERE user_id = $1 AND hash = $2 AND deleted_at IS NULL LIMIT 1",
+        &[&user_uuid, &hash],
+    ).await.map_err(|e| {
         error!("DB error in enhance_image: {}", e);
         actix_web::error::ErrorInternalServerError("Database error")
     })?;
@@ -1031,17 +971,10 @@ pub async fn save_enhanced_image(
     let user_uuid = utils::parse_user_uuid(&claims.user_id)?;
 
     // Fetch the original image name and date so we can preserve them
-    let row = if claims.role == "admin" {
-        client.query_opt(
-            "SELECT name, created_at FROM images WHERE hash = $1 AND deleted_at IS NULL LIMIT 1",
-            &[&original_hash],
-        ).await
-    } else {
-        client.query_opt(
-            "SELECT name, created_at FROM images WHERE user_id = $1 AND hash = $2 AND deleted_at IS NULL LIMIT 1",
-            &[&user_uuid, &original_hash],
-        ).await
-    }.map_err(|e| {
+    let row = client.query_opt(
+        "SELECT name, created_at FROM images WHERE user_id = $1 AND hash = $2 AND deleted_at IS NULL LIMIT 1",
+        &[&user_uuid, &original_hash],
+    ).await.map_err(|e| {
         error!("DB error in save_enhanced_image: {}", e);
         actix_web::error::ErrorInternalServerError("Database error")
     })?;

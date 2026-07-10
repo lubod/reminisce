@@ -599,17 +599,37 @@ pub async fn get_thumbnail(
     pool: web::Data<crate::db::MainDbPool>,
     config: web::Data<Config>
 ) -> Result<HttpResponse, actix_web::Error> {
-    if
-        let Err(response) = utils::authenticate_request(
-            &req,
-            "get_thumbnail",
-            config.get_api_key()
-        )
-    {
-        return Ok(response);
-    }
+    let claims = match utils::authenticate_request(
+        &req,
+        "get_thumbnail",
+        config.get_api_key()
+    ) {
+        Ok(claims) => claims,
+        Err(response) => return Ok(response),
+    };
 
     let media_hash = path.into_inner();
+    let user_uuid = utils::parse_user_uuid(&claims.user_id)?;
+    let client = utils::get_db_client(&pool.0).await?;
+
+    let exists = client.query_one(
+        "SELECT EXISTS (
+            SELECT 1 FROM images WHERE user_id = $1 AND hash = $2 AND deleted_at IS NULL
+            UNION ALL
+            SELECT 1 FROM videos WHERE user_id = $1 AND hash = $2 AND deleted_at IS NULL
+        )",
+        &[&user_uuid, &media_hash]
+    ).await.map_err(|e| {
+        log::error!("Failed to verify media ownership for thumbnail: {}", e);
+        actix_web::error::ErrorInternalServerError("Database error")
+    })?.get::<_, bool>(0);
+
+    if !exists {
+        return Ok(HttpResponse::NotFound().json(serde_json::json!({
+            "status": "error",
+            "message": "Thumbnail not found"
+        })));
+    }
     let thumb_filename = format!("{}.thumb.jpg", &media_hash);
 
     // First try to find thumbnail in images directory with subdirectory structure
