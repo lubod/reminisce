@@ -13,6 +13,8 @@ import { useStore } from "./stores/RootStore";
 import { observer } from "mobx-react-lite";
 import { Loader } from "lucide-react";
 
+import { ErrorBoundary } from "./components/ErrorBoundary";
+
 const ProtectedRoute = observer(({ children }: { children: ReactNode }) => {
   const { authStore } = useStore();
   if (!authStore.initialized) return null;
@@ -38,27 +40,29 @@ const App = observer(() => {
   }
 
   return (
-    <Router>
-      <Routes>
-        <Route path="/login" element={<LoginForm />} />
-        <Route
-          path="/"
-          element={
-            <ProtectedRoute>
-              <Layout />
-            </ProtectedRoute>
-          }
-        >
-          <Route index element={<Dashboard />} />
-          <Route path="media" element={<MediaBrowser />} />
-          <Route path="people" element={<People />} />
-          <Route path="people/:personId" element={<People />} />
-          <Route path="present" element={<PresentationMode />} />
-          <Route path="duplicates" element={<DuplicatesBrowser />} />
-          <Route path="trash" element={<TrashBrowser />} />
-        </Route>
-      </Routes>
-    </Router>
+    <ErrorBoundary>
+      <Router>
+        <Routes>
+          <Route path="/login" element={<LoginForm />} />
+          <Route
+            path="/"
+            element={
+              <ProtectedRoute>
+                <Layout />
+              </ProtectedRoute>
+            }
+          >
+            <Route index element={<Dashboard />} />
+            <Route path="media" element={<MediaBrowser />} />
+            <Route path="people" element={<People />} />
+            <Route path="people/:personId" element={<People />} />
+            <Route path="present" element={<PresentationMode />} />
+            <Route path="duplicates" element={<DuplicatesBrowser />} />
+            <Route path="trash" element={<TrashBrowser />} />
+          </Route>
+        </Routes>
+      </Router>
+    </ErrorBoundary>
   );
 });
 

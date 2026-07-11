@@ -43,17 +43,29 @@ pub async fn health_check(
     let database = match main_pool.0.get().await {
         Ok(c) => match c.query_one("SELECT 1", &[]).await {
             Ok(_) => "connected".to_string(),
-            Err(e) => format!("query_failed: {}", e),
+            Err(e) => {
+                log::error!("Database health query failed: {}", e);
+                "unhealthy".to_string()
+            }
         },
-        Err(e) => format!("connection_failed: {}", e),
+        Err(e) => {
+            log::error!("Database health connection failed: {}", e);
+            "unhealthy".to_string()
+        }
     };
 
     let geotagging_database = match geo_pool.0.get().await {
         Ok(c) => match c.query_one("SELECT 1", &[]).await {
             Ok(_) => "connected".to_string(),
-            Err(e) => format!("query_failed: {}", e),
+            Err(e) => {
+                log::error!("Geotagging database health query failed: {}", e);
+                "unhealthy".to_string()
+            }
         },
-        Err(e) => format!("connection_failed: {}", e),
+        Err(e) => {
+            log::error!("Geotagging database health connection failed: {}", e);
+            "unhealthy".to_string()
+        }
     };
 
     let ai_url = format!("{}/health", config.embedding_service_url.trim_end_matches('/'));
@@ -62,9 +74,18 @@ pub async fn health_check(
         reqwest::get(&ai_url),
     ).await {
         Ok(Ok(r)) if r.status().is_success() => "connected".to_string(),
-        Ok(Ok(r)) => format!("error: {}", r.status()),
-        Ok(Err(e)) => format!("connection_failed: {}", e),
-        Err(_) => "timeout".to_string(),
+        Ok(Ok(r)) => {
+            log::error!("AI service health check returned error: {}", r.status());
+            "unhealthy".to_string()
+        }
+        Ok(Err(e)) => {
+            log::error!("AI service health check connection failed: {}", e);
+            "unhealthy".to_string()
+        }
+        Err(_) => {
+            log::error!("AI service health check timeout");
+            "timeout".to_string()
+        }
     };
 
     let healthy = database == "connected"

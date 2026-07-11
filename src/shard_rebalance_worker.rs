@@ -56,6 +56,7 @@ pub async fn start_rebalance_worker(
     pool: Pool,
     config: Config,
     p2p_service: Arc<P2PService>,
+    shutdown_token: tokio_util::sync::CancellationToken,
 ) {
     info!("Shard Rebalance Worker started");
 
@@ -68,6 +69,7 @@ pub async fn start_rebalance_worker(
         "Shard Rebalance Worker",
         min_dur,
         max_dur,
+        shutdown_token,
         move || {
             let pool = pool.clone();
             let config = config.clone();

@@ -154,7 +154,7 @@ def load_models():
 
     # Load SigLIP2 for embeddings (drop-in replacement with better multilingual + spatial understanding)
     logger.info("Loading SigLIP2 model...")
-    siglip_model_name = "google/siglip2-so400m-patch14-384"
+    siglip_model_name = os.environ.get("SIGLIP_MODEL_NAME", "google/siglip2-so400m-patch14-384")
 
     try:
         siglip_dtype = torch.float16 if device == "cuda" else torch.float32
@@ -170,7 +170,7 @@ def load_models():
     # Visual tokens capped at 256 max (down from 16384 default) — biggest perf lever on iGPU
     # bfloat16 preferred over float16 for ROCm (matches training dtype, less conversion)
     logger.info("Loading Qwen2.5-VL-3B-Instruct model for descriptions...")
-    vlm_model_name = "Qwen/Qwen2.5-VL-3B-Instruct"
+    vlm_model_name = os.environ.get("VLM_MODEL_NAME", "Qwen/Qwen2.5-VL-3B-Instruct")
     try:
         from transformers import Qwen2_5_VLForConditionalGeneration
         vlm_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
@@ -194,7 +194,7 @@ def load_models():
     # Load SmolVLM-500M for fast descriptions (parallel to Qwen2.5-VL)
     # 500M params vs 3B — ~64 visual tokens per patch vs 256+, target <5s per image
     logger.info("Loading SmolVLM-500M-Instruct model for fast descriptions...")
-    smolvlm_model_name = "HuggingFaceTB/SmolVLM-500M-Instruct"
+    smolvlm_model_name = os.environ.get("SMOLVLM_MODEL_NAME", "HuggingFaceTB/SmolVLM-500M-Instruct")
     try:
         smolvlm_model = SmolVLMForConditionalGeneration.from_pretrained(
             smolvlm_model_name,
@@ -287,8 +287,8 @@ def embed_image():
         return jsonify({'embedding': embedding, 'dimension': len(embedding)})
 
     except Exception as e:
-        logger.error(f"Error: {e}", exc_info=True)
-        return jsonify({'error': str(e)}), 500
+        logger.error(f"Error in embed_image: {e}", exc_info=True)
+        return jsonify({'error': 'Internal server error during image embedding generation'}), 500
 
 
 @app.route('/embed/text', methods=['POST'])
@@ -324,8 +324,8 @@ def embed_text():
         return jsonify({'embedding': embedding, 'dimension': len(embedding), 'text': text})
 
     except Exception as e:
-        logger.error(f"Error: {e}", exc_info=True)
-        return jsonify({'error': str(e)}), 500
+        logger.error(f"Error in embed_text: {e}", exc_info=True)
+        return jsonify({'error': 'Internal server error during text embedding generation'}), 500
 
 
 # ==================== QUALITY SCORING ENDPOINT ====================
@@ -382,7 +382,7 @@ def quality_score():
 
     except Exception as e:
         logger.error(f"Error in quality_score: {e}", exc_info=True)
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Internal server error during quality score calculation'}), 500
 
 
 # ==================== DESCRIPTION ENDPOINTS ====================
@@ -445,7 +445,7 @@ def describe_image():
 
     except Exception as e:
         logger.error(f"Error describing image: {e}", exc_info=True)
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Internal server error during image description'}), 500
 
 
 @app.route('/describe', methods=['POST'])
@@ -505,7 +505,7 @@ def describe_image_fast():
 
     except Exception as e:
         logger.error(f"Error in fast description: {e}", exc_info=True)
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Internal server error during fast image description'}), 500
 
 
 # ==================== ORIENTATION DETECTION ENDPOINT ====================
@@ -645,7 +645,7 @@ def detect_faces():
 
     except Exception as e:
         logger.error(f"Error detecting faces: {e}", exc_info=True)
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Internal server error during face detection'}), 500
 
 
 # ==================== ENHANCE ENDPOINT ====================
@@ -758,7 +758,7 @@ def enhance_image_endpoint():
 
     except Exception as e:
         logger.error(f"Error in enhance: {e}", exc_info=True)
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': 'Internal server error during image enhancement'}), 500
 
 
 # ==================== HEALTH & INFO ENDPOINTS ====================

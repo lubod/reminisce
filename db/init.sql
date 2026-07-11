@@ -397,3 +397,12 @@ CREATE INDEX IF NOT EXISTS idx_p2p_shards_node_id ON p2p_shards(node_id);
 ALTER TABLE videos ADD COLUMN IF NOT EXISTS file_size_bytes BIGINT;
 ALTER TABLE videos ADD COLUMN IF NOT EXISTS p2p_segment_count INTEGER NOT NULL DEFAULT 1;
 ALTER TABLE videos ADD COLUMN IF NOT EXISTS p2p_segment_enc_sizes BIGINT[] DEFAULT NULL;
+
+-- Composite index for get_persons/get_person face join query plan coverage
+CREATE INDEX IF NOT EXISTS idx_faces_person_image ON faces(person_id, image_user_id, image_hash);
+
+-- Composite covering index for get_duplicates lookup query optimization
+CREATE INDEX IF NOT EXISTS idx_dup_pairs_user_sim_covering ON image_duplicate_pairs(user_id, similarity DESC, hash_a, hash_b);
+
+-- Composite index to optimize starred images queries
+CREATE INDEX IF NOT EXISTS idx_starred_images_user_hash_starred ON starred_images(user_id, hash);

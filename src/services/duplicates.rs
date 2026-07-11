@@ -223,10 +223,12 @@ pub async fn get_duplicates(
 
     // ── Near-duplicates from pre-computed pairs table ──
     let near_rows = client.query(
-        "SELECT hash_a, hash_b, similarity \
-         FROM image_duplicate_pairs \
-         WHERE user_id = $1 AND similarity >= $2 \
-         ORDER BY similarity DESC \
+        "SELECT p.hash_a, p.hash_b, p.similarity \
+         FROM image_duplicate_pairs p \
+         INNER JOIN images ia ON p.hash_a = ia.hash AND ia.user_id = p.user_id AND ia.deleted_at IS NULL \
+         INNER JOIN images ib ON p.hash_b = ib.hash AND ib.user_id = p.user_id AND ib.deleted_at IS NULL \
+         WHERE p.user_id = $1 AND p.similarity >= $2 \
+         ORDER BY p.similarity DESC \
          LIMIT 2000",
         &[&user_uuid, &threshold_f32],
     ).await.map_err(|e| {

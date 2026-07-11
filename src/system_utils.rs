@@ -125,6 +125,7 @@ pub async fn run_worker_loop<F, Fut>(
     name: &str,
     min_interval: Duration,
     max_interval: Duration,
+    shutdown_token: tokio_util::sync::CancellationToken,
     mut task: F,
 ) where
     F: FnMut() -> Fut,
@@ -132,31 +133,55 @@ pub async fn run_worker_loop<F, Fut>(
 {
     let mut current_interval = min_interval;
 
-    loop {
+    while !shutdown_token.is_cancelled() {
         // Run the task in a spawned task to isolate and catch any potential panics
-        let handle = tokio::spawn(task());
-        match handle.await {
-            Ok(Ok(did_work)) => {
-                if did_work {
-                    current_interval = min_interval;
-                } else {
-                    current_interval = (current_interval * 2).min(max_interval);
+        let mut handle = tokio::spawn(task());
+
+        tokio::select! {
+            _ = shutdown_token.cancelled() => {
+                info!("Shutdown requested. Worker '{}' stopping gracefully...", name);
+                if let Err(e) = handle.await {
+                    log::warn!("Worker '{}' did not finish cleanly on shutdown: {:?}", name, e);
                 }
+                break;
             }
-            Ok(Err(e)) => {
-                error!("Worker '{}' failed: {}", name, e);
-                current_interval = (current_interval * 2).min(max_interval);
-            }
-            Err(join_err) => {
-                if join_err.is_panic() {
-                    error!("Worker '{}' panicked! Panic caught to prevent process crash.", name);
-                } else {
-                    error!("Worker '{}' task was cancelled or failed to join: {}", name, join_err);
+            res = &mut handle => {
+                match res {
+                    Ok(Ok(did_work)) => {
+                        if did_work {
+                            current_interval = min_interval;
+                        } else {
+                            current_interval = (current_interval * 2).min(max_interval);
+                        }
+                    }
+                    Ok(Err(e)) => {
+                        error!("Worker '{}' failed: {}", name, e);
+                        current_interval = (current_interval * 2).min(max_interval);
+                    }
+                    Err(join_err) => {
+                        if join_err.is_panic() {
+                            error!("Worker '{}' panicked! Panic caught to prevent process crash.", name);
+                        } else {
+                            error!("Worker '{}' task was cancelled or failed to join: {}", name, join_err);
+                        }
+                        current_interval = (current_interval * 2).min(max_interval);
+                    }
                 }
-                current_interval = (current_interval * 2).min(max_interval);
             }
         }
 
-        sleep(current_interval).await;
+        if shutdown_token.is_cancelled() {
+            break;
+        }
+
+        // Sleep, but abort sleep immediately if shutdown is cancelled
+        tokio::select! {
+            _ = shutdown_token.cancelled() => {
+                info!("Shutdown requested during sleep. Worker '{}' exiting.", name);
+                break;
+            }
+            _ = sleep(current_interval) => {}
+        }
     }
+    info!("Worker '{}' has stopped.", name);
 }

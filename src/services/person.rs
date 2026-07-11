@@ -117,7 +117,8 @@ pub async fn get_persons(
     let base_query = "SELECT p.id, p.name, p.face_count, p.created_at, p.updated_at,
                     f.image_hash, f.image_user_id, f.bbox_x, f.bbox_y, f.bbox_width, f.bbox_height, p.representative_face_id
              FROM persons p
-             LEFT JOIN faces f ON p.representative_face_id = f.id";
+             LEFT JOIN faces f ON p.representative_face_id = f.id
+             LEFT JOIN images i ON f.image_hash = i.hash AND f.image_user_id = i.user_id AND i.deleted_at IS NULL";
 
     let rows = client.query(
         &format!("{} WHERE p.user_id = $1 ORDER BY p.face_count DESC, p.updated_at DESC LIMIT $2 OFFSET $3", base_query),

@@ -9,14 +9,21 @@ pub async fn start_metrics_collector(
     main_pool: web::Data<MainDbPool>,
     _geo_pool: web::Data<GeotaggingDbPool>, // Kept for future use
     config: web::Data<crate::config::Config>,
+    shutdown_token: tokio_util::sync::CancellationToken,
 ) {
     let mut interval = time::interval(Duration::from_secs(15));
 
     loop {
-        interval.tick().await;
-
-        // 1. Collect DB Pool Metrics
-        collect_pool_metrics(&main_pool, config.db_pool_max_size);
+        tokio::select! {
+            _ = shutdown_token.cancelled() => {
+                log::info!("Metrics collector stopping gracefully...");
+                break;
+            }
+            _ = interval.tick() => {
+                // 1. Collect DB Pool Metrics
+                collect_pool_metrics(&main_pool, config.db_pool_max_size);
+            }
+        }
     }
 }
 

@@ -30,6 +30,8 @@ rand = "0.9"
 jsonwebtoken = "8"
 deadpool-postgres = "0.10"
 tokio-postgres = { version = "0.7", features = ["with-chrono-0_4", "with-uuid-0_8"] }
+native-tls = "0.2"
+postgres-native-tls = "0.5"
 pgvector = { version = "0.4", features = ["postgres"] }
 actix-multipart = "0.6"
 actix-cors = "0.6"

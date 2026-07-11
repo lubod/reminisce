@@ -53,7 +53,11 @@ async fn resize_image_for_ai(image_data: Vec<u8>, max_dim: u32) -> Result<Vec<u8
         .map_err(|e| format!("Blocking task failed: {}", e))?
 }
 
-pub async fn start_ai_worker(pool: web::Data<MainDbPool>, config: web::Data<Config>) {
+pub async fn start_ai_worker(
+    pool: web::Data<MainDbPool>,
+    config: web::Data<Config>,
+    shutdown_token: tokio_util::sync::CancellationToken,
+) {
     info!("AI worker started.");
     
     let pool = pool.clone();
@@ -64,6 +68,7 @@ pub async fn start_ai_worker(pool: web::Data<MainDbPool>, config: web::Data<Conf
         "AI Worker",
         min_dur,
         max_dur,
+        shutdown_token,
         move || {
             let pool = pool.clone();
             let config = config_clone.clone();

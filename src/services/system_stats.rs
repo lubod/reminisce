@@ -93,10 +93,16 @@ pub async fn get_system_stats(
     config: web::Data<Config>,
     shared_sys: web::Data<SharedSystem>,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let _claims = match utils::authenticate_request(&req, "get_system_stats", config.get_api_key()) {
+    let claims = match utils::authenticate_request(&req, "get_system_stats", config.get_api_key()) {
         Ok(claims) => claims,
         Err(response) => return Ok(response),
     };
+
+    if claims.role != "admin" {
+        return Ok(HttpResponse::Forbidden().json(serde_json::json!({
+            "error": "Forbidden: Admin role required to access system statistics"
+        })));
+    }
 
     let cpu_usage;
     let total_mem;
@@ -190,10 +196,16 @@ pub async fn get_p2p_daemon_status(
     p2p_service: web::Data<Arc<P2PService>>,
     pool: web::Data<MainDbPool>,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let _claims = match utils::authenticate_request(&req, "get_p2p_daemon_status", config.get_api_key()) {
+    let claims = match utils::authenticate_request(&req, "get_p2p_daemon_status", config.get_api_key()) {
         Ok(claims) => claims,
         Err(response) => return Ok(response),
     };
+
+    if claims.role != "admin" {
+        return Ok(HttpResponse::Forbidden().json(serde_json::json!({
+            "error": "Forbidden: Admin role required to access P2P daemon status"
+        })));
+    }
 
     let client = utils::get_db_client(&pool.0).await?;
 

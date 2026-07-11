@@ -1,5 +1,4 @@
 use deadpool_postgres::{Pool, Runtime, PoolConfig, Timeouts};
-use tokio_postgres::NoTls;
 use tokio_postgres::Config as PgConfig;
 use std::str::FromStr;
 use deadpool_postgres::Manager as PgManager;
@@ -33,7 +32,9 @@ pub fn create_pool_with_options(
     options: DbPoolOptions,
 ) -> Result<Pool, Box<dyn std::error::Error>> {
     let pg_config = PgConfig::from_str(&postgres_url)?;
-    let manager = PgManager::new(pg_config, NoTls);
+    let tls_connector = native_tls::TlsConnector::builder().build()?;
+    let connector = postgres_native_tls::MakeTlsConnector::new(tls_connector);
+    let manager = PgManager::new(pg_config, connector);
 
     // Configure pool with explicit settings
     let mut pool_config = PoolConfig::new(options.max_size);

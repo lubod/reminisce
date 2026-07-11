@@ -120,23 +120,25 @@ fn load_persisted_peers(data_dir: &std::path::Path) -> HashMap<(String, String),
 
 fn save_persisted_peers(peers: &PeerMap, data_dir: &std::path::Path) {
     let path = data_dir.join("peers.json");
-    let map = peers.read().unwrap();
-    let current_secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
+    let list: Vec<PersistedPeer> = {
+        let map = peers.read().unwrap();
+        let current_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
 
-    let list: Vec<PersistedPeer> = map.iter().map(|((ns, _), p)| {
-        let elapsed = p.last_seen.elapsed().as_secs();
-        let last_seen_secs = current_secs.saturating_sub(elapsed);
-        PersistedPeer {
-            namespace: ns.clone(),
-            node_id: p.node_id.clone(),
-            ip: p.ip.to_string(),
-            quic_port: p.quic_port,
-            last_seen_secs,
-        }
-    }).collect();
+        map.iter().map(|((ns, _), p)| {
+            let elapsed = p.last_seen.elapsed().as_secs();
+            let last_seen_secs = current_secs.saturating_sub(elapsed);
+            PersistedPeer {
+                namespace: ns.clone(),
+                node_id: p.node_id.clone(),
+                ip: p.ip.to_string(),
+                quic_port: p.quic_port,
+                last_seen_secs,
+            }
+        }).collect()
+    };
 
     if let Ok(file) = std::fs::File::create(&path) {
         if let Err(e) = serde_json::to_writer_pretty(file, &list) {

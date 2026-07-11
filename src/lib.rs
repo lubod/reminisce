@@ -317,6 +317,29 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
     info!("Server starting up with config file");
     crate::metrics::init_metrics();
 
+    let shutdown_token = tokio_util::sync::CancellationToken::new();
+
+    // Signal listener task to cancel the token on termination signals
+    let signal_token = shutdown_token.clone();
+    tokio::spawn(async move {
+        #[cfg(unix)]
+        {
+            use tokio::signal::unix::{signal, SignalKind};
+            let mut sigint = signal(SignalKind::interrupt()).unwrap();
+            let mut sigterm = signal(SignalKind::terminate()).unwrap();
+            tokio::select! {
+                _ = sigint.recv() => info!("Received SIGINT signal. Starting graceful shutdown..."),
+                _ = sigterm.recv() => info!("Received SIGTERM signal. Starting graceful shutdown..."),
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = tokio::signal::ctrl_c().await;
+            info!("Received Ctrl-C signal. Starting graceful shutdown...");
+        }
+        signal_token.cancel();
+    });
+
     // Validate API Secret Key strength
     let api_secret = config.api_secret_key.as_deref().unwrap_or("");
     if api_secret.is_empty() {
@@ -411,33 +434,41 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
         if let Err(e) = services::ai_settings::load_ai_settings_from_db(&pool, &config).await {
             error!("Failed to load AI settings from database: {}", e);
         }
+        let verification_token = shutdown_token.clone();
         tokio::spawn(
             verification_worker::start_verification_worker(
                 web::Data::new(worker_pool.clone()),
-                config_data.clone()
+                config_data.clone(),
+                verification_token,
             )
         );
     
+        let ai_token = shutdown_token.clone();
         tokio::spawn(
             crate::ai_worker::start_ai_worker(
                 web::Data::new(worker_pool.clone()),
-                config_data.clone()
+                config_data.clone(),
+                ai_token,
             )
         );
 
+        let duplicate_token = shutdown_token.clone();
         tokio::spawn(
             duplicate_worker::start_duplicate_worker(
                 web::Data::new(worker_pool.clone()),
                 duplicate_status.get_ref().clone(),
                 config_data.clone(),
+                duplicate_token,
             )
         );
 
+        let metrics_token = shutdown_token.clone();
         tokio::spawn(
             metrics_collector::start_metrics_collector(
                 web::Data::new(worker_pool.clone()),
                 web::Data::new(geo_pool.clone()),
-                config_data.clone()
+                config_data.clone(),
+                metrics_token,
             )
         );
     
@@ -445,11 +476,13 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
             let replication_pool = worker_pool.0.clone();
             let replication_config = config.clone();
             let replication_service = p2p_service.clone();
+            let replication_token = shutdown_token.clone();
             tokio::spawn(async move {
                 media_replication_worker::media_replication_loop(
                     replication_pool,
                     replication_config,
-                    replication_service
+                    replication_service,
+                    replication_token,
                 ).await;
             });
         }
@@ -497,19 +530,23 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
 
         // Registry starts empty on boot — peers register as they connect via discovery
 
+            let audit_token = shutdown_token.clone();
             tokio::spawn(
                 crate::p2p_audit_worker::start_audit_worker(
                     worker_pool.0.clone(),
                     config.clone(),
-                    p2p_service.clone()
+                    p2p_service.clone(),
+                    audit_token,
                 )
             );
 
+            let rebalance_token = shutdown_token.clone();
             tokio::spawn(
                 crate::shard_rebalance_worker::start_rebalance_worker(
                     worker_pool.0.clone(),
                     config.clone(),
-                    p2p_service.clone()
+                    p2p_service.clone(),
+                    rebalance_token,
                 )
             );
         

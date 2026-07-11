@@ -12,7 +12,11 @@ use crate::metrics::{VERIFICATION_DURATION, VERIFICATION_SUCCESS_TOTAL, VERIFICA
 use crate::services::thumbnail::{generate_thumbnail_for_image, generate_thumbnail_for_video};
 use futures::stream::StreamExt;
 
-pub async fn start_verification_worker(pool: web::Data<MainDbPool>, config: web::Data<Config>) {
+pub async fn start_verification_worker(
+    pool: web::Data<MainDbPool>,
+    config: web::Data<Config>,
+    shutdown_token: tokio_util::sync::CancellationToken,
+) {
     info!("Verification worker started.");
 
     // Adaptive strategy:
@@ -27,6 +31,7 @@ pub async fn start_verification_worker(pool: web::Data<MainDbPool>, config: web:
         "Verification Worker",
         min_dur,
         max_dur,
+        shutdown_token,
         move || {
             let pool = pool.clone();
             let config = config_clone.clone();

@@ -45,6 +45,7 @@ pub async fn start_duplicate_worker(
     pool: web::Data<MainDbPool>,
     status: SharedDuplicateStatus,
     config: web::Data<Config>,
+    shutdown_token: tokio_util::sync::CancellationToken,
 ) {
     info!("Duplicate worker started");
 
@@ -56,6 +57,7 @@ pub async fn start_duplicate_worker(
         "Duplicate Worker",
         min_dur,
         max_dur,
+        shutdown_token,
         move || {
             let pool = pool.clone();
             let status = status.clone();

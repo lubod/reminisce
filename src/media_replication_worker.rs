@@ -63,6 +63,7 @@ pub async fn media_replication_loop(
     pool: Pool,
     config: Config,
     p2p_service: Arc<P2PService>,
+    shutdown_token: tokio_util::sync::CancellationToken,
 ) {
     info!("P2P Media Replication Worker started (3/5 EC, rendezvous hashing)");
     // Give LAN discovery time to register the Pi before the first batch.
@@ -77,6 +78,7 @@ pub async fn media_replication_loop(
         "Media Replication Worker",
         min_dur,
         max_dur,
+        shutdown_token,
         move || {
             let pool = pool.clone();
             let config = config.clone();
