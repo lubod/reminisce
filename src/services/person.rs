@@ -100,23 +100,18 @@ pub async fn get_persons(
     };
 
     let user_uuid = utils::parse_user_uuid(&claims.user_id)?;
-    let is_admin = claims.role == "admin";
-
     let client = utils::get_db_client(&pool.0).await?;
 
     let page = query.page.max(1);
     let limit = query.limit;
     let offset = (page - 1) * limit;
 
-    // Get total count - admins see all persons
-    let total_rows = if is_admin {
-        client.query_one("SELECT COUNT(*) FROM persons", &[]).await
-    } else {
-        client.query_one("SELECT COUNT(*) FROM persons WHERE user_id = $1", &[&user_uuid]).await
-    }.map_err(|e| {
-        error!("Failed to count persons: {}", e);
-        actix_web::error::ErrorInternalServerError("Query failed")
-    })?;
+    // Get total count
+    let total_rows = client.query_one("SELECT COUNT(*) FROM persons WHERE user_id = $1", &[&user_uuid]).await
+        .map_err(|e| {
+            error!("Failed to count persons: {}", e);
+            actix_web::error::ErrorInternalServerError("Query failed")
+        })?;
     let total: i64 = total_rows.get(0);
 
     let base_query = "SELECT p.id, p.name, p.face_count, p.created_at, p.updated_at,
@@ -124,17 +119,11 @@ pub async fn get_persons(
              FROM persons p
              LEFT JOIN faces f ON p.representative_face_id = f.id";
 
-    let rows = if is_admin {
-        client.query(
-            &format!("{} ORDER BY p.face_count DESC, p.updated_at DESC LIMIT $1 OFFSET $2", base_query),
-            &[&(limit as i64), &(offset as i64)],
-        ).await
-    } else {
-        client.query(
-            &format!("{} WHERE p.user_id = $1 ORDER BY p.face_count DESC, p.updated_at DESC LIMIT $2 OFFSET $3", base_query),
-            &[&user_uuid, &(limit as i64), &(offset as i64)],
-        ).await
-    }.map_err(|e| {
+    let rows = client.query(
+        &format!("{} WHERE p.user_id = $1 ORDER BY p.face_count DESC, p.updated_at DESC LIMIT $2 OFFSET $3", base_query),
+        &[&user_uuid, &(limit as i64), &(offset as i64)],
+    ).await
+    .map_err(|e| {
         error!("Failed to query persons: {}", e);
         actix_web::error::ErrorInternalServerError("Query failed")
     })?;
@@ -205,10 +194,7 @@ pub async fn get_person(
     };
 
     let user_uuid = utils::parse_user_uuid(&claims.user_id)?;
-    let is_admin = claims.role == "admin";
-
     let person_id = path.into_inner();
-
     let client = utils::get_db_client(&pool.0).await?;
 
     let base_query = "SELECT p.id, p.name, p.face_count, p.created_at, p.updated_at,
@@ -217,17 +203,11 @@ pub async fn get_person(
              LEFT JOIN faces f ON p.representative_face_id = f.id
              LEFT JOIN images i ON f.image_hash = i.hash AND f.image_user_id = i.user_id AND i.deleted_at IS NULL";
 
-    let row = if is_admin {
-        client.query_opt(
-            &format!("{} WHERE p.id = $1", base_query),
-            &[&person_id],
-        ).await
-    } else {
-        client.query_opt(
-            &format!("{} WHERE p.id = $1 AND p.user_id = $2", base_query),
-            &[&person_id, &user_uuid],
-        ).await
-    }.map_err(|e| {
+    let row = client.query_opt(
+        &format!("{} WHERE p.id = $1 AND p.user_id = $2", base_query),
+        &[&person_id, &user_uuid],
+    ).await
+    .map_err(|e| {
         error!("Failed to query person: {}", e);
         actix_web::error::ErrorInternalServerError("Query failed")
     })?;
@@ -304,21 +284,15 @@ pub async fn get_person_images(
     };
 
     let user_uuid = utils::parse_user_uuid(&claims.user_id)?;
-    let is_admin = claims.role == "admin";
-
     let person_id = path.into_inner();
-
     let client = utils::get_db_client(&pool.0).await?;
 
-    // Verify person belongs to user (admins can access any person)
-    let person_exists = if is_admin {
-        client.query_opt("SELECT 1 FROM persons WHERE id = $1", &[&person_id]).await
-    } else {
-        client.query_opt("SELECT 1 FROM persons WHERE id = $1 AND user_id = $2", &[&person_id, &user_uuid]).await
-    }.map_err(|e| {
-        error!("Failed to verify person ownership: {}", e);
-        actix_web::error::ErrorInternalServerError("Query failed")
-    })?;
+    // Verify person belongs to user
+    let person_exists = client.query_opt("SELECT 1 FROM persons WHERE id = $1 AND user_id = $2", &[&person_id, &user_uuid]).await
+        .map_err(|e| {
+            error!("Failed to verify person ownership: {}", e);
+            actix_web::error::ErrorInternalServerError("Query failed")
+        })?;
 
     if person_exists.is_none() {
         return Ok(HttpResponse::NotFound().json(serde_json::json!({

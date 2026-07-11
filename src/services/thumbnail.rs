@@ -468,8 +468,8 @@ async fn list_media_thumbnails(
         req_type
     );
 
-    // Non-admin users get user_id-based access control
-    let apply_user_id_filter = claims.role != "admin";
+    // Always apply user_id-based access control
+    let apply_user_id_filter = true;
 
     let total = utils::total_thumbnails(
         &claims.user_id,

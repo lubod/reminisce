@@ -118,11 +118,7 @@ pub async fn search_images(
 
     let user_uuid = utils::parse_user_uuid(&claims.user_id)?;
 
-    let device_filter: Option<&String> = if claims.role == "admin" {
-        query.device_id.as_ref()
-    } else {
-        None // Access control for non-admin is handled via user_id in the queries
-    };
+    let device_filter: Option<&String> = query.device_id.as_ref();
 
     let limit_i64 = query.limit as i64;
     let offset_i64 = query.offset as i64;
