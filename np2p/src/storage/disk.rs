@@ -11,6 +11,27 @@ pub struct DiskStorage {
     base_path: PathBuf,
 }
 
+#[cfg(unix)]
+fn get_available_space(path: &Path) -> std::io::Result<u64> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let c_path = CString::new(path.as_os_str().as_bytes())?;
+    unsafe {
+        let mut stats: libc::statvfs = std::mem::zeroed();
+        if libc::statvfs(c_path.as_ptr(), &mut stats) == 0 {
+            Ok(stats.f_frsize as u64 * stats.f_bavail as u64)
+        } else {
+            Err(std::io::Error::last_os_error())
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn get_available_space(_path: &Path) -> std::io::Result<u64> {
+    Ok(u64::MAX)
+}
+
 impl DiskStorage {
     /// Creates a new DiskStorage instance at the specified path.
     /// Ensures the directory exists.
@@ -40,6 +61,16 @@ impl DiskStorage {
 
     /// Stores a shard on disk.
     pub async fn store(&self, shard_hash: [u8; 32], data: &[u8]) -> Result<()> {
+        // Assert at least 100MB of free space is available
+        if let Ok(avail) = get_available_space(&self.base_path) {
+            if avail < 100 * 1024 * 1024 {
+                return Err(crate::error::Np2pError::Storage(format!(
+                    "Insufficient disk space on node: {} bytes available",
+                    avail
+                )));
+            }
+        }
+
         let path = self.get_shard_path(&shard_hash);
 
         // Ensure parent directory exists

@@ -32,10 +32,12 @@ pub async fn start_audit_worker(
     let pool = pool.clone();
     let config = config.clone();
     let p2p_service = p2p_service.clone();
+    let min_dur = Duration::from_secs(config.workers.audit_min_secs);
+    let max_dur = Duration::from_secs(config.workers.audit_max_secs);
     crate::utils::run_worker_loop(
         "P2P Audit Worker",
-        Duration::from_secs(60),
-        Duration::from_secs(3600),
+        min_dur,
+        max_dur,
         move || {
             let pool = pool.clone();
             let config = config.clone();
@@ -324,7 +326,7 @@ async fn repair_file(
     let file_info = find_file_info(&client, file_hash, config.get_api_key().unwrap()).await?;
 
     match file_info {
-        Some((ext, Some(key), _enc_size)) => {
+        Some((ext, Some(key), _enc_size, data_shards, parity_shards)) => {
             info!("Repairing shard {} of {} by re-sharding from local file", failed_shard_index, file_hash);
 
             let images_path = PathBuf::from(config.get_images_dir())
@@ -342,8 +344,7 @@ async fn repair_file(
                 return Err(format!("Local file not found for hash {}", file_hash).into());
             };
 
-            // nonce_context = key: single-segment file, key is unique per file.
-            let (shards, _) = StorageEngine::process_for_backup(&file_data, &key, &key)?;
+            let (shards, _) = StorageEngine::process_for_backup(&file_data, &key, &key, data_shards, parity_shards)?;
 
             if failed_shard_index >= shards.len() {
                 return Err(format!("Shard index {} out of range", failed_shard_index).into());

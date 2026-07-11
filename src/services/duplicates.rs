@@ -225,7 +225,9 @@ pub async fn get_duplicates(
     let near_rows = client.query(
         "SELECT hash_a, hash_b, similarity \
          FROM image_duplicate_pairs \
-         WHERE user_id = $1 AND similarity >= $2",
+         WHERE user_id = $1 AND similarity >= $2 \
+         ORDER BY similarity DESC \
+         LIMIT 2000",
         &[&user_uuid, &threshold_f32],
     ).await.map_err(|e| {
         error!("get_duplicates: near-dup query failed: {}", e);

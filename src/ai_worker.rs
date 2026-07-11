@@ -56,18 +56,17 @@ async fn resize_image_for_ai(image_data: Vec<u8>, max_dim: u32) -> Result<Vec<u8
 pub async fn start_ai_worker(pool: web::Data<MainDbPool>, config: web::Data<Config>) {
     info!("AI worker started.");
     
-    // Adaptive strategy:
-    // - Active: 5s (Process heavy backlog slightly faster than default)
-    // - Idle: Backoff up to 30s
     let pool = pool.clone();
-    let config = config.clone();
+    let config_clone = config.clone();
+    let min_dur = Duration::from_secs(config.workers.ai_min_secs);
+    let max_dur = Duration::from_secs(config.workers.ai_max_secs);
     super::utils::run_worker_loop(
         "AI Worker",
-        Duration::from_secs(5),
-        Duration::from_secs(30),
+        min_dur,
+        max_dur,
         move || {
             let pool = pool.clone();
-            let config = config.clone();
+            let config = config_clone.clone();
             async move { process_files(pool, config).await }
         }
     ).await;

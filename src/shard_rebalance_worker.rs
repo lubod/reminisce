@@ -5,7 +5,7 @@
 //! distribution stays balanced. Triggered via POST /api/p2p/backup/rebalance.
 
 use crate::config::Config;
-use crate::media_replication_worker::{rendezvous_select_nodes, SHARD_COUNT, MIN_NODES_REQUIRED};
+use crate::media_replication_worker::{rendezvous_select_nodes, MIN_NODES_REQUIRED};
 use deadpool_postgres::Pool;
 use log::{info, warn, error};
 use np2p::network::{P2PService, Message, Protocol};
@@ -62,10 +62,12 @@ pub async fn start_rebalance_worker(
     let pool = pool.clone();
     let config = config.clone();
     let p2p_service = p2p_service.clone();
+    let min_dur = Duration::from_secs(config.workers.rebalance_min_secs);
+    let max_dur = Duration::from_secs(config.workers.rebalance_max_secs);
     crate::utils::run_worker_loop(
         "Shard Rebalance Worker",
-        Duration::from_secs(120),
-        Duration::from_secs(3600),
+        min_dur,
+        max_dur,
         move || {
             let pool = pool.clone();
             let config = config.clone();
@@ -152,8 +154,15 @@ async fn rebalance_file(
         &[&file_hash],
     ).await?;
 
+    let file_info = find_file_info(&client, file_hash, config.get_api_key().unwrap()).await?;
+    let (data_shards, parity_shards) = match file_info {
+        Some((_, _, _, ds, ps)) => (ds, ps),
+        None => (3, 2),
+    };
+    let total_shards = data_shards + parity_shards;
+
     // Compute ideal placement
-    let ideal_nodes = rendezvous_select_nodes(file_hash, active_nodes, SHARD_COUNT.min(active_nodes.len()));
+    let ideal_nodes = rendezvous_select_nodes(file_hash, active_nodes, total_shards.min(active_nodes.len()));
 
     let mut migrated_any = false;
 
@@ -207,8 +216,8 @@ async fn migrate_shard(
     let file_info = find_file_info(&client, file_hash, config.get_api_key().unwrap()).await?;
 
     let shard_data = match file_info {
-        Some((ext, Some(key), _enc_size)) => {
-            reshard_from_local(config, file_hash, &ext, &key, shard_index).await?
+        Some((ext, Some(key), _enc_size, data_shards, parity_shards)) => {
+            reshard_from_local(config, file_hash, &ext, &key, shard_index, data_shards, parity_shards).await?
         }
         _ => {
             // Look up old node's addr from DB public_addr or in-memory registry
@@ -255,10 +264,10 @@ pub async fn find_file_info(
     client: &tokio_postgres::Client,
     file_hash: &str,
     api_secret: &str,
-) -> Result<Option<(String, Option<Vec<u8>>, Option<i32>)>, Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<Option<(String, Option<Vec<u8>>, Option<i32>, usize, usize)>, Box<dyn std::error::Error + Send + Sync>> {
     // Try images first
     let row = client.query_opt(
-        "SELECT ext, p2p_encryption_key, p2p_encrypted_size FROM images WHERE hash = $1 LIMIT 1",
+        "SELECT ext, p2p_encryption_key, p2p_encrypted_size, p2p_data_shards, p2p_parity_shards FROM images WHERE hash = $1 LIMIT 1",
         &[&file_hash],
     ).await?;
 
@@ -266,16 +275,18 @@ pub async fn find_file_info(
         let ext: String = row.get(0);
         let key_enc: Option<Vec<u8>> = row.get(1);
         let enc_size: Option<i32> = row.get(2);
+        let data_shards: i32 = row.get::<_, Option<i32>>(3).unwrap_or(3);
+        let parity_shards: i32 = row.get::<_, Option<i32>>(4).unwrap_or(2);
         let key = match key_enc {
             Some(k) => Some(crate::utils::decrypt_key(&k, api_secret)?),
             None => None,
         };
-        return Ok(Some((ext, key, enc_size)));
+        return Ok(Some((ext, key, enc_size, data_shards as usize, parity_shards as usize)));
     }
 
     // Try videos
     let row = client.query_opt(
-        "SELECT ext, p2p_encryption_key, p2p_encrypted_size FROM videos WHERE hash = $1 LIMIT 1",
+        "SELECT ext, p2p_encryption_key, p2p_encrypted_size, p2p_data_shards, p2p_parity_shards FROM videos WHERE hash = $1 LIMIT 1",
         &[&file_hash],
     ).await?;
 
@@ -283,11 +294,13 @@ pub async fn find_file_info(
         let ext: String = row.get(0);
         let key_enc: Option<Vec<u8>> = row.get(1);
         let enc_size: Option<i32> = row.get(2);
+        let data_shards: i32 = row.get::<_, Option<i32>>(3).unwrap_or(3);
+        let parity_shards: i32 = row.get::<_, Option<i32>>(4).unwrap_or(2);
         let key = match key_enc {
             Some(k) => Some(crate::utils::decrypt_key(&k, api_secret)?),
             None => None,
         };
-        return Ok(Some((ext, key, enc_size)));
+        return Ok(Some((ext, key, enc_size, data_shards as usize, parity_shards as usize)));
     }
 
     Ok(None)
@@ -300,6 +313,8 @@ async fn reshard_from_local(
     ext: &str,
     encryption_key: &[u8],
     shard_index: usize,
+    data_shards: usize,
+    parity_shards: usize,
 ) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
     // Try images dir first, then videos
     let images_path = PathBuf::from(config.get_images_dir())
@@ -317,8 +332,7 @@ async fn reshard_from_local(
         return Err(format!("Local file not found for hash {}", file_hash).into());
     };
 
-    // nonce_context = key: single-segment file, key is unique per file.
-    let (shards, _enc_size) = StorageEngine::process_for_backup(&file_data, encryption_key, encryption_key)?;
+    let (shards, _enc_size) = StorageEngine::process_for_backup(&file_data, encryption_key, encryption_key, data_shards, parity_shards)?;
 
     if shard_index >= shards.len() {
         return Err(format!("Shard index {} out of range ({})", shard_index, shards.len()).into());

@@ -71,10 +71,12 @@ pub async fn media_replication_loop(
     let pool = pool.clone();
     let config = config.clone();
     let p2p_service = p2p_service.clone();
+    let min_dur = Duration::from_secs(config.workers.replication_min_secs);
+    let max_dur = Duration::from_secs(config.workers.replication_max_secs);
     crate::utils::run_worker_loop(
         "Media Replication Worker",
-        Duration::from_secs(10),
-        Duration::from_secs(60),
+        min_dur,
+        max_dur,
         move || {
             let pool = pool.clone();
             let config = config.clone();
@@ -176,6 +178,7 @@ async fn replicate_batch(
             let success_counter = &successes;
 
             let api_secret = config.get_api_key().unwrap().to_string();
+            let config_clone = config.clone();
 
             async move {
                 BACKUP_ATTEMPTS_TOTAL.inc();
@@ -187,6 +190,7 @@ async fn replicate_batch(
                     &nodes_owned,
                     &file,
                     &api_secret,
+                    &config_clone,
                 ).await {
                     Ok(_) => {
                         success_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -212,6 +216,7 @@ async fn replicate_single_file(
     nodes: &[(String, SocketAddr)],
     file: &MediaToReplicate,
     api_secret: &str,
+    config: &Config,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let file_path = PathBuf::from(base_dir)
         .join(&file.hash[0..2])
@@ -237,17 +242,21 @@ async fn replicate_single_file(
         return res;
     }
 
-    // 1. Encrypt and Shard (entire file fits in memory for files ≤ 256 MB)
+    let data_shards = config.p2p_data_shards;
+    let parity_shards = config.p2p_parity_shards;
+    let total_shards = data_shards + parity_shards;
+
+    // 1. Encrypt and Shard
     let file_data = tokio::fs::read(&file_path).await?;
     let mut encryption_key = [0u8; 32];
     rand::fill(&mut encryption_key);
 
     // nonce_context = key: key is randomly generated once per file, ensuring unique nonce per file.
-    let (shards, _enc_size) = StorageEngine::process_for_backup(&file_data, &encryption_key, &encryption_key)?;
+    let (shards, _enc_size) = StorageEngine::process_for_backup(&file_data, &encryption_key, &encryption_key, data_shards, parity_shards)?;
 
     // 2. Select nodes via rendezvous hashing (HRW)
     // We always want to distribute among available nodes, but we MUST store ALL shards.
-    let target_nodes = rendezvous_select_nodes(&file.hash, nodes, SHARD_COUNT.min(nodes.len()));
+    let target_nodes = rendezvous_select_nodes(&file.hash, nodes, total_shards.min(nodes.len()));
 
     info!("Sharding {} into {} pieces across {} nodes (rendezvous)", file.hash, shards.len(), target_nodes.len());
 
@@ -338,8 +347,8 @@ async fn replicate_single_file(
     }
 
     let final_results = shard_results.lock().await;
-    if final_results.len() < np2p::storage::DATA_SHARDS {
-        return Err(format!("Only {}/{} shards stored. Minimum {} required (for reconstruction).", final_results.len(), SHARD_COUNT, np2p::storage::DATA_SHARDS).into());
+    if final_results.len() < data_shards {
+        return Err(format!("Only {}/{} shards stored. Minimum {} required (for reconstruction).", final_results.len(), total_shards, data_shards).into());
     }
 
     // 4. Update Database
@@ -369,6 +378,8 @@ async fn replicate_single_file(
 
     // Mark as synced and store the encryption key + encrypted size for future re-sharding
     let enc_size_i32 = _enc_size as i32;
+    let data_shards_i32 = data_shards as i32;
+    let parity_shards_i32 = parity_shards as i32;
     let encrypted_key = crate::utils::encrypt_key(&encryption_key, api_secret);
     // Compute a manifest hash: BLAKE3 over all stored shard hashes concatenated.
     let mut manifest_hasher = blake3::Hasher::new();
@@ -377,10 +388,10 @@ async fn replicate_single_file(
 
     crate::utils::validate_table_name(table).unwrap();
     let update_query = format!(
-        "UPDATE {} SET p2p_synced_at = NOW(), p2p_shard_hash = $1, p2p_encryption_key = $2, p2p_encrypted_size = $3 WHERE hash = $4",
+        "UPDATE {} SET p2p_synced_at = NOW(), p2p_shard_hash = $1, p2p_encryption_key = $2, p2p_encrypted_size = $3, p2p_data_shards = $4, p2p_parity_shards = $5 WHERE hash = $6",
         table
     );
-    trans.execute(&update_query, &[&manifest_hash, &encrypted_key, &enc_size_i32, &file.hash]).await?;
+    trans.execute(&update_query, &[&manifest_hash, &encrypted_key, &enc_size_i32, &data_shards_i32, &parity_shards_i32, &file.hash]).await?;
 
     trans.commit().await?;
 

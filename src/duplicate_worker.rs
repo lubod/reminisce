@@ -9,6 +9,8 @@ use crate::db::MainDbPool;
 use crate::utils::run_worker_loop;
 use crate::metrics::{DUPLICATE_PAIRS_TOTAL, DUPLICATE_CHECKED_IMAGES};
 
+use crate::config::Config;
+
 /// Shared status for the duplicate detection background worker.
 #[derive(Clone)]
 pub struct DuplicateWorkerStatus {
@@ -42,17 +44,18 @@ const BATCH_SIZE: i64 = 50;
 pub async fn start_duplicate_worker(
     pool: web::Data<MainDbPool>,
     status: SharedDuplicateStatus,
+    config: web::Data<Config>,
 ) {
     info!("Duplicate worker started");
 
     let pool = pool.clone();
     let status = status.clone();
+    let min_dur = Duration::from_millis(config.workers.duplicate_min_millis);
+    let max_dur = Duration::from_secs(config.workers.duplicate_max_secs);
     run_worker_loop(
         "Duplicate Worker",
-        // min_interval: time between batches when work is found
-        Duration::from_millis(200),
-        // max_interval: idle sleep when no unchecked images remain
-        Duration::from_secs(300),
+        min_dur,
+        max_dur,
         move || {
             let pool = pool.clone();
             let status = status.clone();

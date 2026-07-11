@@ -28,7 +28,6 @@ pub fn encrypt(data: &[u8], key_bytes: &[u8], nonce_context: &[u8]) -> Result<Ve
 
     let key = Key::from_slice(key_bytes);
     let cipher = ChaCha20Poly1305::new(key);
-
     // Derive nonce deterministically from context so re-encryption always yields the same ciphertext.
     let nonce_hash = blake3::hash(nonce_context);
     let nonce_bytes: [u8; NONCE_SIZE] = nonce_hash.as_bytes()[..NONCE_SIZE].try_into().unwrap();

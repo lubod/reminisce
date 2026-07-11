@@ -10,7 +10,7 @@ use crate::metrics::{DB_QUERY_DURATION, SLOW_QUERIES_TOTAL};
 const SLOW_QUERY_THRESHOLD_MS: u128 = 100;
 
 /// Execute a query and log performance metrics
-#[instrument(skip(client, params), fields(operation = %operation_name, elapsed_ms, query_preview, status))]
+#[instrument(skip(client, query, params), fields(operation = %operation_name, elapsed_ms, query_preview, status))]
 pub async fn instrumented_query(
     client: &tokio_postgres::Client,
     query: &str,
@@ -27,7 +27,7 @@ pub async fn instrumented_query(
 }
 
 /// Execute a query_one and log performance metrics
-#[instrument(skip(client, params), fields(operation = %operation_name, elapsed_ms, query_preview, status))]
+#[instrument(skip(client, query, params), fields(operation = %operation_name, elapsed_ms, query_preview, status))]
 pub async fn instrumented_query_one(
     client: &tokio_postgres::Client,
     query: &str,
@@ -44,7 +44,7 @@ pub async fn instrumented_query_one(
 }
 
 /// Execute a query_opt and log performance metrics
-#[instrument(skip(client, params), fields(operation = %operation_name, elapsed_ms, query_preview, status))]
+#[instrument(skip(client, query, params), fields(operation = %operation_name, elapsed_ms, query_preview, status))]
 pub async fn instrumented_query_opt(
     client: &tokio_postgres::Client,
     query: &str,
@@ -61,7 +61,7 @@ pub async fn instrumented_query_opt(
 }
 
 /// Execute an execute statement and log performance metrics
-#[instrument(skip(client, params), fields(operation = %operation_name, elapsed_ms, query_preview, status))]
+#[instrument(skip(client, query, params), fields(operation = %operation_name, elapsed_ms, query_preview, status))]
 pub async fn instrumented_execute(
     client: &tokio_postgres::Client,
     query: &str,
@@ -78,7 +78,7 @@ pub async fn instrumented_execute(
 }
 
 /// Execute a transaction query and log performance metrics
-#[instrument(skip(transaction, params), fields(operation = %operation_name, elapsed_ms, query_preview, status))]
+#[instrument(skip(transaction, query, params), fields(operation = %operation_name, elapsed_ms, query_preview, status))]
 pub async fn instrumented_transaction_query(
     transaction: &tokio_postgres::Transaction<'_>,
     query: &str,
@@ -95,7 +95,7 @@ pub async fn instrumented_transaction_query(
 }
 
 /// Execute a transaction query_opt and log performance metrics
-#[instrument(skip(transaction, params), fields(operation = %operation_name, elapsed_ms, query_preview, status))]
+#[instrument(skip(transaction, query, params), fields(operation = %operation_name, elapsed_ms, query_preview, status))]
 pub async fn instrumented_transaction_query_opt(
     transaction: &tokio_postgres::Transaction<'_>,
     query: &str,
@@ -112,7 +112,7 @@ pub async fn instrumented_transaction_query_opt(
 }
 
 /// Execute a transaction execute and log performance metrics
-#[instrument(skip(transaction, params), fields(operation = %operation_name, elapsed_ms, query_preview, status))]
+#[instrument(skip(transaction, query, params), fields(operation = %operation_name, elapsed_ms, query_preview, status))]
 pub async fn instrumented_transaction_execute(
     transaction: &tokio_postgres::Transaction<'_>,
     query: &str,

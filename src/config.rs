@@ -107,7 +107,88 @@ pub struct Config {
     /// Use different values for dev and production to avoid cross-contamination.
     #[serde(default = "default_p2p_namespace")]
     pub p2p_namespace: String,
+
+    #[serde(default = "default_p2p_data_shards")]
+    pub p2p_data_shards: usize,
+    #[serde(default = "default_p2p_parity_shards")]
+    pub p2p_parity_shards: usize,
+
+    #[serde(default)]
+    pub workers: WorkerConfig,
 }
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct WorkerConfig {
+    #[serde(default = "default_ai_min")]
+    pub ai_min_secs: u64,
+    #[serde(default = "default_ai_max")]
+    pub ai_max_secs: u64,
+    
+    #[serde(default = "default_duplicate_min")]
+    pub duplicate_min_millis: u64,
+    #[serde(default = "default_duplicate_max")]
+    pub duplicate_max_secs: u64,
+
+    #[serde(default = "default_replication_min")]
+    pub replication_min_secs: u64,
+    #[serde(default = "default_replication_max")]
+    pub replication_max_secs: u64,
+
+    #[serde(default = "default_audit_min")]
+    pub audit_min_secs: u64,
+    #[serde(default = "default_audit_max")]
+    pub audit_max_secs: u64,
+
+    #[serde(default = "default_rebalance_min")]
+    pub rebalance_min_secs: u64,
+    #[serde(default = "default_rebalance_max")]
+    pub rebalance_max_secs: u64,
+
+    #[serde(default = "default_verification_min")]
+    pub verification_min_secs: u64,
+    #[serde(default = "default_verification_max")]
+    pub verification_max_secs: u64,
+}
+
+impl Default for WorkerConfig {
+    fn default() -> Self {
+        Self {
+            ai_min_secs: default_ai_min(),
+            ai_max_secs: default_ai_max(),
+            duplicate_min_millis: default_duplicate_min(),
+            duplicate_max_secs: default_duplicate_max(),
+            replication_min_secs: default_replication_min(),
+            replication_max_secs: default_replication_max(),
+            audit_min_secs: default_audit_min(),
+            audit_max_secs: default_audit_max(),
+            rebalance_min_secs: default_rebalance_min(),
+            rebalance_max_secs: default_rebalance_max(),
+            verification_min_secs: default_verification_min(),
+            verification_max_secs: default_verification_max(),
+        }
+    }
+}
+
+fn default_ai_min() -> u64 { 5 }
+fn default_ai_max() -> u64 { 30 }
+
+fn default_duplicate_min() -> u64 { 200 }
+fn default_duplicate_max() -> u64 { 300 }
+
+fn default_replication_min() -> u64 { 10 }
+fn default_replication_max() -> u64 { 60 }
+
+fn default_audit_min() -> u64 { 60 }
+fn default_audit_max() -> u64 { 3600 }
+
+fn default_rebalance_min() -> u64 { 120 }
+fn default_rebalance_max() -> u64 { 3600 }
+
+fn default_verification_min() -> u64 { 1 }
+fn default_verification_max() -> u64 { 10 }
+
+fn default_p2p_data_shards() -> usize { 3 }
+fn default_p2p_parity_shards() -> usize { 2 }
 
 fn default_port() -> u16 {
     8080

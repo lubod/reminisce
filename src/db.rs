@@ -129,6 +129,12 @@ pub async fn run_migrations_with_schema(pool: &Pool, init_sql: &str) -> Result<(
         info!("DB init.sql: {} statements applied", ok);
     }
 
+    // Ensure dynamic sharding columns exist for backward compatibility
+    let _ = client.execute("ALTER TABLE images ADD COLUMN IF NOT EXISTS p2p_data_shards INTEGER DEFAULT 3", &[]).await;
+    let _ = client.execute("ALTER TABLE images ADD COLUMN IF NOT EXISTS p2p_parity_shards INTEGER DEFAULT 2", &[]).await;
+    let _ = client.execute("ALTER TABLE videos ADD COLUMN IF NOT EXISTS p2p_data_shards INTEGER DEFAULT 3", &[]).await;
+    let _ = client.execute("ALTER TABLE videos ADD COLUMN IF NOT EXISTS p2p_parity_shards INTEGER DEFAULT 2", &[]).await;
+
     // --- Versioned migrations (each runs exactly once) ---
     client.execute(
         "CREATE TABLE IF NOT EXISTS schema_migrations (

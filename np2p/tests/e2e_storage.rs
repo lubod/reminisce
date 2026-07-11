@@ -37,7 +37,7 @@ async fn test_e2e_backup_and_restore() {
     let backup_key = [0x55u8; 32];
 
     // 3. Client: Encrypt and Shard
-    let (shards, encrypted_size) = StorageEngine::process_for_backup(original_data, &backup_key, &backup_key).unwrap();
+    let (shards, encrypted_size) = StorageEngine::process_for_backup(original_data, &backup_key, &backup_key, 3, 2).unwrap();
     assert_eq!(shards.len(), 5);
 
     // 4. Client: Connect and Store Shards
@@ -88,7 +88,7 @@ async fn test_e2e_backup_and_restore() {
     }
 
     // 6. Client: Reconstruct and Decrypt
-    let restored_data = StorageEngine::restore_from_backup(retrieved_shards, encrypted_size, &backup_key).unwrap();
+    let restored_data = StorageEngine::restore_from_backup(retrieved_shards, encrypted_size, &backup_key, 3, 2).unwrap();
     
     assert_eq!(original_data.to_vec(), restored_data);
     

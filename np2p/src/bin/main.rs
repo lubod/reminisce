@@ -84,7 +84,7 @@ async fn main() -> anyhow::Result<()> {
     info!("np2p daemon listening on {}", service.node().local_addr()?);
 
     // LAN broadcast — announces our QUIC port to all nodes on the same subnet
-    discovery::start_broadcaster(node_id_hex.clone(), quic_port, args.discovery_port);
+    discovery::start_broadcaster(Arc::new(identity.clone()), quic_port, args.discovery_port);
     info!("Broadcasting on discovery port {}", args.discovery_port);
 
     // Coordinator — for nodes on different networks

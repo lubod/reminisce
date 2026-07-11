@@ -2,32 +2,34 @@ use super::utils::{ get_load_average, get_gpu_load, get_cpu_count, calculate_wor
 use actix_web::web;
 use log::{ error, info, warn };
 use blake3::Hasher;
-use std::sync::Arc;
 use std::time::Instant;
 use tokio::io::AsyncReadExt;
-use tokio::sync::Semaphore;
 use tokio::time::Duration;
 use chrono::Utc;
 use crate::config::Config;
 use crate::db::MainDbPool;
 use crate::metrics::{VERIFICATION_DURATION, VERIFICATION_SUCCESS_TOTAL, VERIFICATION_FAILURES_TOTAL, THUMBNAIL_PROCESSING_DELAY};
 use crate::services::thumbnail::{generate_thumbnail_for_image, generate_thumbnail_for_video};
+use futures::stream::StreamExt;
 
 pub async fn start_verification_worker(pool: web::Data<MainDbPool>, config: web::Data<Config>) {
     info!("Verification worker started.");
 
     // Adaptive strategy:
-    // - Active: 1s (Process queue quickly)
-    // - Idle: Backoff up to 10s
+    // - Active: config-based min interval
+    // - Idle: config-based max interval
     let pool = pool.clone();
-    let config = config.clone();
+    let config_clone = config.clone();
+    let min_dur = Duration::from_secs(config.workers.verification_min_secs);
+    let max_dur = Duration::from_secs(config.workers.verification_max_secs);
+
     super::utils::run_worker_loop(
         "Verification Worker",
-        Duration::from_secs(1),
-        Duration::from_secs(10),
+        min_dur,
+        max_dur,
         move || {
             let pool = pool.clone();
-            let config = config.clone();
+            let config = config_clone.clone();
             async move { verify_files(pool, config).await }
         }
     ).await;
@@ -50,9 +52,6 @@ async fn verify_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) ->
 
     // Use verification concurrency for batch sizing (I/O bound, higher throughput)
     let batch_size: i64 = super::utils::calculate_parallel_batch_size(limits.verification, load_average, cpu_count);
-
-    // Only log if we are actually going to check DB (reduce log noise)
-    // info!("System load: {:.2}...", ...); 
 
     // Get distinct user IDs that have files needing verification or missing thumbnails
     let user_id_rows = client
@@ -105,37 +104,27 @@ async fn verify_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) ->
 
         info!("Found {} files to verify for user {}", total_files, current_user_id);
 
-        // Verification is I/O-bound (BLAKE3 hashing), use calculated concurrency
-        let hash_verification_semaphore = Arc::new(Semaphore::new(limits.verification));
-        
-        // Spawn concurrent verification tasks
-        let mut tasks = Vec::new();
+        let pool_clone = pool.clone();
+        let config_clone = config.clone();
 
-        for (index, row) in file_rows.into_iter().enumerate() {
+        let verification_stream = futures::stream::iter(file_rows.into_iter().enumerate()).map(|(index, row)| {
             let hash: String = row.get(0);
             let ext: String = row.get(1);
-            let _name: String = row.get(2);
-            let deviceid: String = row.get(3); // kept for logging compatibility
+            let deviceid: String = row.get(3);
             let file_type: String = row.get(4);
             let mut has_thumbnail: bool = row.get(6);
             let created_at: chrono::DateTime<Utc> = row.get(7);
-            let orientation: Option<i16> = row.get(8); // NULL for videos
+            let orientation: Option<i16> = row.get(8);
             let user_id = current_user_id;
+            let total_files = total_files;
 
-            let file_dir = if file_type == "image" { config.get_images_dir().to_string() } else { config.get_videos_dir().to_string() };
+            let file_dir = if file_type == "image" { config_clone.get_images_dir().to_string() } else { config_clone.get_videos_dir().to_string() };
             let sub_dir_path = super::utils::get_subdirectory_path(&file_dir, &hash);
             let file_path = sub_dir_path.join(format!("{}.{}", hash, ext));
 
-            // Clone resources for the task
-            let pool_clone = pool.clone();
-            let hash_sem_clone = hash_verification_semaphore.clone();
+            let pool_inner = pool_clone.clone();
 
-            // Spawn a task for each file
-            let task = tokio::spawn(async move {
-                // Acquire semaphore permit for hash verification (limits concurrency)
-                let _permit = hash_sem_clone.acquire().await
-                    .expect("hash_verification_semaphore closed unexpectedly");
-
+            async move {
                 info!(
                     "Verifying {} {}/{}: {} (device: {}, thumbnail: {})",
                     file_type,
@@ -146,11 +135,9 @@ async fn verify_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) ->
                     has_thumbnail
                 );
 
-                // Start timing for verification
                 let start_time = Instant::now();
 
-                // Get a database client for this task
-                let client = match pool_clone.0.get().await {
+                let client = match pool_inner.0.get().await {
                     Ok(c) => c,
                     Err(e) => {
                         error!("Failed to get database client for {}: {}", hash, e);
@@ -160,152 +147,102 @@ async fn verify_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) ->
                 };
 
                 match tokio::fs::File::open(&file_path).await {
-                Ok(mut file) => {
-                    info!(
-                        "Successfully opened {} file for verification: {}",
-                        file_type,
-                        file_path.display()
-                    );
-                    let mut hasher = Hasher::new();
-                    let mut buffer = [0; 8192]; // 8KB buffer for better I/O performance
-                    loop {
-                        match file.read(&mut buffer).await {
-                            Ok(0) => {
-                                break;
-                            } // End of file
-                            Ok(n) => {
-                                hasher.update(&buffer[..n]);
-                            }
-                            Err(e) => {
-                                error!(
-                                    "Failed to read {} file chunk for verification {}: {}",
-                                    file_type,
-                                    hash,
-                                    e
-                                );
-                                // Update verification status to -1 (failed)
-                                let table_name = if file_type == "image" { "images" } else { "videos" };
-                                crate::utils::validate_table_name(table_name).unwrap();
-                                let query =
-                                    format!("UPDATE {} SET last_verified_at = NOW(), verification_status = -1 WHERE hash = $1 AND user_id = $2", table_name);
-                                if let Err(db_err) = client.execute(&query, &[&hash, &user_id]).await {
-                                    error!(
-                                        "Failed to update verification_status for {} {}: {}",
-                                        file_type,
-                                        hash,
-                                        db_err
-                                    );
-                                }
-                                break;
-                            }
-                        }
-                    }
-                    let calculated_hash = hasher.finalize().to_hex().to_string();
-                    if calculated_hash == hash {
-                        let duration = start_time.elapsed();
-                        VERIFICATION_DURATION.observe(duration.as_secs_f64());
-                        VERIFICATION_SUCCESS_TOTAL.inc();
-                        info!("{} verification successful for hash: {} (took {:.2}s)", file_type, hash, duration.as_secs_f64());
-                        
-                        // Check if we need to generate thumbnail
-                        if !has_thumbnail {
-                            let thumb_filename = format!("{}.thumb.jpg", hash);
-                            let thumb_path = sub_dir_path.join(&thumb_filename);
-                            
-                            info!("Generating missing thumbnail for {} {}", file_type, hash);
-                            let generation_result = if file_type == "image" {
-                                generate_thumbnail_for_image(&file_path, &thumb_path, 500, orientation).await
-                            } else {
-                                generate_thumbnail_for_video(&file_path, &thumb_path).await
-                            };
-                            
-                            match generation_result {
-                                Ok(_) => {
-                                    info!("Successfully generated missing thumbnail for {} {}", file_type, hash);
-                                    has_thumbnail = true;
-                                    
-                                    // Record processing delay
-                                    let delay = Utc::now().signed_duration_since(created_at);
-                                    let delay_secs = delay.num_seconds().max(0) as f64;
-                                    THUMBNAIL_PROCESSING_DELAY.observe(delay_secs);
+                    Ok(mut file) => {
+                        info!(
+                            "Successfully opened {} file for verification: {}",
+                            file_type,
+                            file_path.display()
+                        );
+                        let mut hasher = Hasher::new();
+                        let mut buffer = [0; 8192];
+                        let mut read_failed = false;
+                        loop {
+                            match file.read(&mut buffer).await {
+                                Ok(0) => break,
+                                Ok(n) => {
+                                    hasher.update(&buffer[..n]);
                                 }
                                 Err(e) => {
-                                    error!("Failed to generate missing thumbnail for {} {}: {}", file_type, hash, e);
-                                    // Don't fail the verification just because thumbnail failed, 
-                                    // but we won't set has_thumbnail=true
+                                    error!("Failed to read {} file chunk for verification {}: {}", file_type, hash, e);
+                                    let table_name = if file_type == "image" { "images" } else { "videos" };
+                                    if let Ok(_) = crate::utils::validate_table_name(table_name) {
+                                        let query = format!("UPDATE {} SET last_verified_at = NOW(), verification_status = -1 WHERE hash = $1 AND user_id = $2", table_name);
+                                        let _ = client.execute(&query, &[&hash, &user_id]).await;
+                                    }
+                                    read_failed = true;
+                                    break;
                                 }
                             }
                         }
-
-                        // Mark as verified immediately and update thumbnail status
-                        let table_name = if file_type == "image" { "images" } else { "videos" };
-                        crate::utils::validate_table_name(table_name).unwrap();
-                        let query = format!("UPDATE {} SET last_verified_at = NOW(), verification_status = 1, has_thumbnail = $3 WHERE hash = $1 AND user_id = $2", table_name);
-                        if let Err(e) = client.execute(&query, &[&hash, &user_id, &has_thumbnail]).await {
-                            error!("Failed to update verification_status for {} {}: {}", file_type, hash, e);
+                        if read_failed {
+                            VERIFICATION_FAILURES_TOTAL.inc();
+                            return;
                         }
 
-                        // NOTE: Replication/Backup functionality has been removed.
-                        // Previously, we would upload the verified file to another server here.
+                        let calculated_hash = hasher.finalize().to_hex().to_string();
+                        if calculated_hash == hash {
+                            let duration = start_time.elapsed();
+                            VERIFICATION_DURATION.observe(duration.as_secs_f64());
+                            VERIFICATION_SUCCESS_TOTAL.inc();
+                            info!("{} verification successful for hash: {} (took {:.2}s)", file_type, hash, duration.as_secs_f64());
+                            
+                            if !has_thumbnail {
+                                let thumb_filename = format!("{}.thumb.jpg", hash);
+                                let thumb_path = sub_dir_path.join(&thumb_filename);
+                                
+                                info!("Generating missing thumbnail for {} {}", file_type, hash);
+                                let generation_result = if file_type == "image" {
+                                    generate_thumbnail_for_image(&file_path, &thumb_path, 500, orientation).await
+                                } else {
+                                    generate_thumbnail_for_video(&file_path, &thumb_path).await
+                                };
+                                
+                                match generation_result {
+                                    Ok(_) => {
+                                        info!("Successfully generated missing thumbnail for {} {}", file_type, hash);
+                                        has_thumbnail = true;
+                                        let delay = Utc::now().signed_duration_since(created_at);
+                                        let delay_secs = delay.num_seconds().max(0) as f64;
+                                        THUMBNAIL_PROCESSING_DELAY.observe(delay_secs);
+                                    }
+                                    Err(e) => {
+                                        error!("Failed to generate missing thumbnail for {} {}: {}", file_type, hash, e);
+                                    }
+                                }
+                            }
 
-                    } else {
-                        let duration = start_time.elapsed();
-                        VERIFICATION_DURATION.observe(duration.as_secs_f64());
+                            let table_name = if file_type == "image" { "images" } else { "videos" };
+                            if let Ok(_) = crate::utils::validate_table_name(table_name) {
+                                let query = format!("UPDATE {} SET last_verified_at = NOW(), verification_status = 1, has_thumbnail = $3 WHERE hash = $1 AND user_id = $2", table_name);
+                                let _ = client.execute(&query, &[&hash, &user_id, &has_thumbnail]).await;
+                            }
+                        } else {
+                            let duration = start_time.elapsed();
+                            VERIFICATION_DURATION.observe(duration.as_secs_f64());
+                            VERIFICATION_FAILURES_TOTAL.inc();
+                            warn!("{} verification failed for hash: {}. Expected {}, got {} (took {:.2}s)", file_type, hash, hash, calculated_hash, duration.as_secs_f64());
+                            let table_name = if file_type == "image" { "images" } else { "videos" };
+                            if let Ok(_) = crate::utils::validate_table_name(table_name) {
+                                let query = format!("UPDATE {} SET last_verified_at = NOW(), verification_status = -1 WHERE hash = $1 AND user_id = $2", table_name);
+                                let _ = client.execute(&query, &[&hash, &user_id]).await;
+                            }
+                        }
+                    }
+                    Err(e) => {
                         VERIFICATION_FAILURES_TOTAL.inc();
-                        warn!(
-                            "{} verification failed for hash: {}. Expected {}, got {} (took {:.2}s)",
-                            file_type,
-                            hash,
-                            hash,
-                            calculated_hash,
-                            duration.as_secs_f64()
-                        );
-                        info!("Skipping AI description and embedding generation for unverified file: {}", hash);
-                        // Update verification status to -1 (failed)
+                        error!("Failed to open {} file for verification {}: {}", file_type, hash, e);
                         let table_name = if file_type == "image" { "images" } else { "videos" };
-                        crate::utils::validate_table_name(table_name).unwrap();
-                        let query =
-                            format!("UPDATE {} SET last_verified_at = NOW(), verification_status = -1 WHERE hash = $1 AND user_id = $2", table_name);
-                        if let Err(e) = client.execute(&query, &[&hash, &user_id]).await {
-                            error!(
-                                "Failed to update verification_status for failed {} {}: {}",
-                                file_type,
-                                hash,
-                                e
-                            );
+                        if let Ok(_) = crate::utils::validate_table_name(table_name) {
+                            let query = format!("UPDATE {} SET last_verified_at = NOW(), verification_status = -1 WHERE hash = $1 AND user_id = $2", table_name);
+                            let _ = client.execute(&query, &[&hash, &user_id]).await;
                         }
                     }
                 }
-                Err(e) => {
-                    VERIFICATION_FAILURES_TOTAL.inc();
-                    error!("Failed to open {} file for verification {}: {}", file_type, hash, e);
-                    // Update verification status to -1 (failed)
-                    let table_name = if file_type == "image" { "images" } else { "videos" };
-                    crate::utils::validate_table_name(table_name).unwrap();
-                    let query =
-                        format!("UPDATE {} SET last_verified_at = NOW(), verification_status = -1 WHERE hash = $1 AND user_id = $2", table_name);
-                    if let Err(db_err) = client.execute(&query, &[&hash, &user_id]).await {
-                        error!(
-                            "Failed to update verification_status for failed-to-open {} {}: {}",
-                            file_type,
-                            hash,
-                            db_err
-                        );
-                    }
-                }
             }
-            });
+        });
 
-            tasks.push(task);
-        }
-
-        // Wait for all tasks to complete
-        info!("Waiting for {} verification tasks to complete for user {}...", tasks.len(), current_user_id);
-        for task in tasks {
-            if let Err(e) = task.await {
-                error!("Verification task failed: {}", e);
-            }
-        }
+        let mut buffered = verification_stream.buffer_unordered(limits.verification);
+        while let Some(_) = buffered.next().await {}
         info!("All verification tasks completed for user {}", current_user_id);
     }
 

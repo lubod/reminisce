@@ -66,19 +66,26 @@ use actix_web::dev::ServiceRequest;
 use actix_web::http::header;
 use tracing::field::Empty;
 
-async fn metrics_handler() -> HttpResponse {
+async fn metrics_handler(
+    req: actix_web::HttpRequest,
+    config: web::Data<Config>,
+) -> Result<HttpResponse, actix_web::Error> {
+    if let Err(response) = crate::auth_utils::authenticate_request(&req, "metrics", config.get_api_key()) {
+        return Ok(response);
+    }
+
     let encoder = TextEncoder::new();
     let mut buffer = vec![];
     let metric_families = prometheus::gather();
     match encoder.encode(&metric_families, &mut buffer) {
         Ok(_) => {
-            HttpResponse::Ok()
+            Ok(HttpResponse::Ok()
                 .content_type(encoder.format_type())
-                .body(buffer)
+                .body(buffer))
         }
         Err(e) => {
             error!("Could not encode metrics: {}", e);
-            HttpResponse::InternalServerError().finish()
+            Ok(HttpResponse::InternalServerError().finish())
         }
     }
 }
@@ -349,12 +356,21 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
     let geotagging_pool = db::create_pool_with_options(&config.geotagging_database_url, pool_options)
         .expect("Failed to create geotagging database pool");
 
+    let worker_pool_options = db::DbPoolOptions {
+        max_size: 10,
+        min_size: 1,
+        timeout_secs: config.db_pool_timeout_secs,
+    };
+    let worker_pool_inner = db::create_pool_with_options(&database_url, worker_pool_options)
+        .expect("Failed to create worker database pool");
+
     // Apply idempotent schema migrations on every startup
     if let Err(e) = db::run_migrations(&pool).await {
         error!("DB migration failed: {}", e);
     }
 
     let main_pool = db::MainDbPool(pool.clone());
+    let worker_pool = db::MainDbPool(worker_pool_inner);
     let geo_pool = db::GeotaggingDbPool(geotagging_pool.clone());
 
     let config_data = web::Data::new(config.clone());
@@ -395,37 +411,38 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
         if let Err(e) = services::ai_settings::load_ai_settings_from_db(&pool, &config).await {
             error!("Failed to load AI settings from database: {}", e);
         }
-            tokio::spawn(
+        tokio::spawn(
             verification_worker::start_verification_worker(
-                web::Data::new(main_pool.clone()),
+                web::Data::new(worker_pool.clone()),
                 config_data.clone()
             )
         );
     
         tokio::spawn(
             crate::ai_worker::start_ai_worker(
-                web::Data::new(main_pool.clone()),
+                web::Data::new(worker_pool.clone()),
                 config_data.clone()
             )
         );
 
         tokio::spawn(
             duplicate_worker::start_duplicate_worker(
-                web::Data::new(main_pool.clone()),
+                web::Data::new(worker_pool.clone()),
                 duplicate_status.get_ref().clone(),
+                config_data.clone(),
             )
         );
 
         tokio::spawn(
             metrics_collector::start_metrics_collector(
-                web::Data::new(main_pool.clone()),
+                web::Data::new(worker_pool.clone()),
                 web::Data::new(geo_pool.clone()),
                 config_data.clone()
             )
         );
     
         if config.database_url.is_some() {
-            let replication_pool = main_pool.0.clone();
+            let replication_pool = worker_pool.0.clone();
             let replication_config = config.clone();
             let replication_service = p2p_service.clone();
             tokio::spawn(async move {
@@ -482,7 +499,7 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
 
             tokio::spawn(
                 crate::p2p_audit_worker::start_audit_worker(
-                    main_pool.0.clone(),
+                    worker_pool.0.clone(),
                     config.clone(),
                     p2p_service.clone()
                 )
@@ -490,7 +507,7 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
 
             tokio::spawn(
                 crate::shard_rebalance_worker::start_rebalance_worker(
-                    main_pool.0.clone(),
+                    worker_pool.0.clone(),
                     config.clone(),
                     p2p_service.clone()
                 )

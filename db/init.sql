@@ -47,6 +47,8 @@ CREATE TABLE IF NOT EXISTS images (
     p2p_shard_hash VARCHAR(255), -- Root hash or manifest hash of the object in P2P network (Blake3).
     p2p_encryption_key BYTEA, -- 32-byte encryption key used for sharding (needed for re-sharding during rebalance)
     p2p_encrypted_size INTEGER, -- Size of the encrypted blob before erasure coding (needed for reconstruction)
+    p2p_data_shards INTEGER DEFAULT 3,
+    p2p_parity_shards INTEGER DEFAULT 2,
     aesthetic_score REAL, -- AI-computed aesthetic quality score (0–10)
     sharpness_score REAL, -- Laplacian variance sharpness score
     width INTEGER, -- Image width in pixels
@@ -181,6 +183,8 @@ CREATE TABLE IF NOT EXISTS videos (
     p2p_shard_hash VARCHAR(255), -- Root hash or manifest hash of the object in P2P network (Blake3).
     p2p_encryption_key BYTEA, -- 32-byte encryption key used for sharding (needed for re-sharding during rebalance)
     p2p_encrypted_size INTEGER, -- Size of the encrypted blob before erasure coding (needed for reconstruction)
+    p2p_data_shards INTEGER DEFAULT 3,
+    p2p_parity_shards INTEGER DEFAULT 2,
     PRIMARY KEY (user_id, hash)
 );
 
