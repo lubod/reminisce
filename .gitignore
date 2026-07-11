@@ -41,3 +41,4 @@ e2e/test-results/
 e2e/.auth/
 
 .DS_Store
+p2p_keys.escrow

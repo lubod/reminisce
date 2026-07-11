@@ -385,14 +385,20 @@ async fn replicate_single_file(
     trans.commit().await?;
 
     // Append to escrow file for key recovery
-    let escrow_path = PathBuf::from(base_dir).join("../p2p_keys.escrow");
-    if let Ok(mut escrow_file) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&escrow_path)
+    let abs_base = std::fs::canonicalize(base_dir).unwrap_or_else(|_| PathBuf::from(base_dir));
+    let escrow_path = abs_base.parent().unwrap_or(&abs_base).join("p2p_keys.escrow");
+
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
     {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+
+    if let Ok(mut escrow_file) = options.open(&escrow_path) {
         use std::io::Write;
-        let line = format!("{},{},{}\n", file.hash, hex::encode(&encryption_key), hex::encode(&encrypted_key));
+        let line = format!("{},{}\n", file.hash, hex::encode(&encrypted_key));
         let _ = escrow_file.write_all(line.as_bytes());
     }
 
