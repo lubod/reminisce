@@ -73,7 +73,7 @@ pub async fn check_image_exists(
 
     let user_uuid = match utils::parse_user_uuid(&claims.user_id) {
         Ok(u) => u,
-        Err(_) => return HttpResponse::Unauthorized().finish(),
+        Err(_) => return HttpResponse::Unauthorized().json(serde_json::json!({"error": "Unauthorized: Invalid user ID format"})),
     };
 
     let hash_to_find = &query.hash;
@@ -119,7 +119,7 @@ pub async fn check_video_exists(
 
     let user_uuid = match utils::parse_user_uuid(&claims.user_id) {
         Ok(u) => u,
-        Err(_) => return HttpResponse::Unauthorized().finish(),
+        Err(_) => return HttpResponse::Unauthorized().json(serde_json::json!({"error": "Unauthorized: Invalid user ID format"})),
     };
 
     let hash_to_find = &query.hash;

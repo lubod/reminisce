@@ -12,7 +12,7 @@ use crate::metrics::{
 use actix_web::web;
 use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
-use once_cell::sync::Lazy;
+use std::sync::LazyLock as Lazy;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
@@ -32,6 +32,21 @@ struct VlmRequest {
 #[derive(Deserialize)]
 struct VlmResponse {
     description: String,
+}
+
+#[allow(dead_code)]
+struct AiTask {
+    hash: String,
+    ext: String,
+    name: String,
+    user_id: uuid::Uuid,
+    file_type: String,
+    process_description: bool,
+    process_embedding: bool,
+    process_faces: bool,
+    process_quality: bool,
+    created_at: DateTime<Utc>,
+    orientation: Option<i16>,
 }
 
 /// Resize image to fit within max_dim on longest side, preserving aspect ratio.
@@ -160,7 +175,19 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
             let user_id: uuid::Uuid = row.get(3);
             let file_type: String = row.get(4);
             let created_at: DateTime<Utc> = row.get(5);
-            all_tasks_to_process.insert(hash.clone(), (hash, ext, name, user_id, file_type, false, true, false, false, created_at, None));
+            all_tasks_to_process.insert(hash.clone(), AiTask {
+                hash: hash.clone(),
+                ext,
+                name,
+                user_id,
+                file_type,
+                process_description: false,
+                process_embedding: true,
+                process_faces: false,
+                process_quality: false,
+                created_at,
+                orientation: None,
+            });
         }
     }
 
@@ -193,10 +220,22 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
 
             all_tasks_to_process.entry(hash.clone())
                 .and_modify(|e| {
-                    e.7 = true;
-                    e.10 = orientation;
+                    e.process_faces = true;
+                    e.orientation = orientation;
                 })
-                .or_insert((hash, ext, name, user_id, file_type, false, false, true, false, created_at, orientation));
+                .or_insert(AiTask {
+                    hash: hash.clone(),
+                    ext,
+                    name,
+                    user_id,
+                    file_type,
+                    process_description: false,
+                    process_embedding: false,
+                    process_faces: true,
+                    process_quality: false,
+                    created_at,
+                    orientation,
+                });
         }
     }
 
@@ -224,8 +263,20 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
             let created_at: DateTime<Utc> = row.get(5);
 
             all_tasks_to_process.entry(hash.clone())
-                .and_modify(|e| e.5 = true)
-                .or_insert((hash, ext, name, user_id, file_type, true, false, false, false, created_at, None));
+                .and_modify(|e| e.process_description = true)
+                .or_insert(AiTask {
+                    hash: hash.clone(),
+                    ext,
+                    name,
+                    user_id,
+                    file_type,
+                    process_description: true,
+                    process_embedding: false,
+                    process_faces: false,
+                    process_quality: false,
+                    created_at,
+                    orientation: None,
+                });
         }
     }
 
@@ -256,8 +307,20 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
             let created_at: DateTime<Utc> = row.get(5);
 
             all_tasks_to_process.entry(hash.clone())
-                .and_modify(|e| e.8 = true)
-                .or_insert((hash, ext, name, user_id, file_type, false, false, false, true, created_at, None));
+                .and_modify(|e| e.process_quality = true)
+                .or_insert(AiTask {
+                    hash: hash.clone(),
+                    ext,
+                    name,
+                    user_id,
+                    file_type,
+                    process_description: false,
+                    process_embedding: false,
+                    process_faces: false,
+                    process_quality: true,
+                    created_at,
+                    orientation: None,
+                });
         }
     }
 
@@ -286,7 +349,18 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
     let users_with_new_faces_clone = users_with_new_faces.clone();
 
     stream::iter(tasks_to_process)
-        .for_each_concurrent(concurrent_limit, move |(hash, ext, _name, user_id, file_type, process_description, process_embedding, process_faces, process_quality, created_at, db_orientation)| {
+        .for_each_concurrent(concurrent_limit, move |task| {
+            let hash = task.hash;
+            let ext = task.ext;
+            let user_id = task.user_id;
+            let file_type = task.file_type;
+            let process_description = task.process_description;
+            let process_embedding = task.process_embedding;
+            let process_faces = task.process_faces;
+            let process_quality = task.process_quality;
+            let created_at = task.created_at;
+            let db_orientation = task.orientation;
+
             let file_dir = if file_type == "image" { config.get_images_dir().to_string() } else { config.get_videos_dir().to_string() };
             let sub_dir_path = super::utils::get_subdirectory_path(&file_dir, &hash);
             let file_path = sub_dir_path.join(format!("{}.{}", hash, ext));
@@ -519,10 +593,7 @@ async fn get_image_description(
         image: base64_image,
     };
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(60))
-        .build()
-        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+    let client = crate::utils::get_http_client();
 
     let ai_url = format!("{}/describe", config.embedding_service_url); 
     

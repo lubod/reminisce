@@ -6,7 +6,7 @@ use crate::network::peer_registry::PeerRegistry;
 use crate::crypto::{NodeIdentity, verify_signature};
 use std::sync::Arc;
 
-pub const DEFAULT_DISCOVERY_PORT: u16 = 5060;
+pub const DEFAULT_DISCOVERY_PORT: u16 = 5066;
 const BROADCAST_INTERVAL_SECS: u64 = 10;
 const PEER_TTL_SECS: u64 = 90;
 

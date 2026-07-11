@@ -7,7 +7,7 @@ use prometheus::{
     IntCounter, IntGauge, Histogram, HistogramOpts,
     register_int_counter, register_int_gauge, register_histogram,
 };
-use once_cell::sync::Lazy;
+use std::sync::LazyLock as Lazy;
 
 // ============================================================================
 // User Metrics

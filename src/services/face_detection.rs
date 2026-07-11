@@ -30,10 +30,7 @@ pub async fn detect_faces(
 
     let base64_image = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, image_data);
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(60))
-        .build()
-        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+    let client = crate::utils::get_http_client();
 
     let url = format!("{}/detect", config.face_service_url);
     let request = FaceDetectRequest { image: base64_image };

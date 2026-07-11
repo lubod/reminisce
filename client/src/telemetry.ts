@@ -60,7 +60,7 @@ const setupTelemetry = () => {
         ],
     });
 
-    console.log('OpenTelemetry initialized');
+    console.info('OpenTelemetry initialized');
 };
 
 export default setupTelemetry;

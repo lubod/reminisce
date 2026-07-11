@@ -1,3 +1,6 @@
+/// Proxy stream manager. This is a fully functional multiplexed WS stream
+/// registration and routing manager component for P2P connection tunneling.
+
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};

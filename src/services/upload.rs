@@ -424,7 +424,7 @@ async fn internal_check_images_exist(
 ) -> HttpResponse {
     let client = match pool.0.get().await {
         Ok(c) => c,
-        Err(_) => return HttpResponse::InternalServerError().finish(),
+        Err(_) => return HttpResponse::InternalServerError().json(serde_json::json!({"error": "Failed to get database connection"})),
     };
 
     if req.hashes.is_empty() {
@@ -441,7 +441,7 @@ async fn internal_check_images_exist(
         }
         Err(e) => {
             error!("Failed to check image existence batch: {}", e);
-            HttpResponse::InternalServerError().finish()
+            HttpResponse::InternalServerError().json(serde_json::json!({"error": "Failed to check image existence"}))
         }
     }
 }
@@ -453,7 +453,7 @@ async fn internal_check_videos_exist(
 ) -> HttpResponse {
     let client = match pool.0.get().await {
         Ok(c) => c,
-        Err(_) => return HttpResponse::InternalServerError().finish(),
+        Err(_) => return HttpResponse::InternalServerError().json(serde_json::json!({"error": "Failed to get database connection"})),
     };
 
     if req.hashes.is_empty() {
@@ -470,7 +470,7 @@ async fn internal_check_videos_exist(
         }
         Err(e) => {
             error!("Failed to check video existence batch: {}", e);
-            HttpResponse::InternalServerError().finish()
+            HttpResponse::InternalServerError().json(serde_json::json!({"error": "Failed to check video existence"}))
         }
     }
 }
@@ -496,7 +496,7 @@ pub async fn check_images_exist_batch(
 ) -> HttpResponse {
     let user_uuid = match Uuid::parse_str(&claims.user_id) {
         Ok(u) => u,
-        Err(_) => return HttpResponse::Unauthorized().finish(),
+        Err(_) => return HttpResponse::Unauthorized().json(serde_json::json!({"error": "Unauthorized: Invalid user ID format"})),
     };
     internal_check_images_exist(&user_uuid, req.into_inner(), pool).await
 }
@@ -522,7 +522,7 @@ pub async fn check_videos_exist_batch(
 ) -> HttpResponse {
     let user_uuid = match Uuid::parse_str(&claims.user_id) {
         Ok(u) => u,
-        Err(_) => return HttpResponse::Unauthorized().finish(),
+        Err(_) => return HttpResponse::Unauthorized().json(serde_json::json!({"error": "Unauthorized: Invalid user ID format"})),
     };
     internal_check_videos_exist(&user_uuid, req.into_inner(), pool).await
 }
@@ -548,7 +548,7 @@ pub async fn batch_check_images(
 ) -> HttpResponse {
     let user_uuid = match Uuid::parse_str(&claims.user_id) {
         Ok(u) => u,
-        Err(_) => return HttpResponse::Unauthorized().finish(),
+        Err(_) => return HttpResponse::Unauthorized().json(serde_json::json!({"error": "Unauthorized: Invalid user ID format"})),
     };
     internal_check_images_exist(&user_uuid, req.into_inner(), pool).await
 }
@@ -574,7 +574,7 @@ pub async fn batch_check_videos(
 ) -> HttpResponse {
     let user_uuid = match Uuid::parse_str(&claims.user_id) {
         Ok(u) => u,
-        Err(_) => return HttpResponse::Unauthorized().finish(),
+        Err(_) => return HttpResponse::Unauthorized().json(serde_json::json!({"error": "Unauthorized: Invalid user ID format"})),
     };
     internal_check_videos_exist(&user_uuid, req.into_inner(), pool).await
 }

@@ -242,7 +242,7 @@ export const DirectoryImportModal = observer(({ onClose }: { onClose: () => void
             const toUpload = fileHashes.filter(f => checkResult.needs_upload.includes(f.hash));
             const alreadyHandled = fileHashes.length - toUpload.length;
 
-            console.log(`${alreadyHandled} files already exist or were deduplicated, uploading ${toUpload.length} new files`);
+            console.info(`${alreadyHandled} files already exist or were deduplicated, uploading ${toUpload.length} new files`);
 
             // Phase 4: Upload sequentially
             setProgress(prev => ({

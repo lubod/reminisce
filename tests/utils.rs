@@ -40,7 +40,7 @@ pub fn create_test_config() -> config::Config {
         port: 8080,
         p2p_data_dir: "data/p2p".to_string(),
         p2p_peers: vec![],
-        p2p_discovery_port: 5060,
+        p2p_discovery_port: 5066,
         p2p_coordinator_addr: None,
         p2p_tunnel_local_port: None,
         p2p_tunnel_public_url: None,

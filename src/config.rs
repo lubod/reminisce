@@ -237,7 +237,7 @@ fn default_p2p_data_dir() -> String {
 }
 
 fn default_p2p_discovery_port() -> u16 {
-    5060
+    5066
 }
 
 fn default_p2p_namespace() -> String {

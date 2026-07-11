@@ -435,7 +435,7 @@ fn start_tcp_tunnel_listener(tunnel_port: u16, tunnels: TunnelMap, tls_acceptor:
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 
-#[tokio::main]
+#[tokio::main(flavor = "multi_thread")]
 async fn main() -> anyhow::Result<()> {
     let _ = rustls::crypto::ring::default_provider().install_default();
     tracing_subscriber::fmt::init();

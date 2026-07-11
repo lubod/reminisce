@@ -1,5 +1,5 @@
 use actix_web::{delete, get, patch, post, web, HttpResponse};
-use log::{info, warn};
+use log::info;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -41,7 +41,7 @@ pub async fn list_users(claims: Claims, pool: web::Data<MainDbPool>) -> HttpResp
 
     let client = match pool.0.get().await {
         Ok(c) => c,
-        Err(_) => return HttpResponse::InternalServerError().finish(),
+        Err(_) => return HttpResponse::InternalServerError().json(serde_json::json!({"error": "Failed to get database connection"})),
     };
 
     let rows = match client.query(
@@ -49,9 +49,8 @@ pub async fn list_users(claims: Claims, pool: web::Data<MainDbPool>) -> HttpResp
         &[],
     ).await {
         Ok(r) => r,
-        Err(e) => {
-            warn!("list_users DB error: {}", e);
-            return HttpResponse::InternalServerError().finish();
+        Err(_) => {
+            return HttpResponse::InternalServerError().json(serde_json::json!({"error": "Failed to list users"}));
         }
     };
 
@@ -101,14 +100,14 @@ pub async fn create_user(
 
     let password_hash = match hash_password(&body.password) {
         Ok(h) => h,
-        Err(_) => return HttpResponse::InternalServerError().finish(),
+        Err(_) => return HttpResponse::InternalServerError().json(serde_json::json!({"error": "Failed to hash password"})),
     };
 
     let email = format!("{}@local", body.username);
 
     let client = match pool.0.get().await {
         Ok(c) => c,
-        Err(_) => return HttpResponse::InternalServerError().finish(),
+        Err(_) => return HttpResponse::InternalServerError().json(serde_json::json!({"error": "Failed to get database connection"})),
     };
 
     match client.query_one(
@@ -130,8 +129,7 @@ pub async fn create_user(
                     "message": "Username already exists"
                 }))
             } else {
-                warn!("create_user DB error: {}", e);
-                HttpResponse::InternalServerError().finish()
+                HttpResponse::InternalServerError().json(serde_json::json!({"error": "Database query failed"}))
             }
         }
     }
@@ -171,7 +169,7 @@ pub async fn update_user(
 
     let client = match pool.0.get().await {
         Ok(c) => c,
-        Err(_) => return HttpResponse::InternalServerError().finish(),
+        Err(_) => return HttpResponse::InternalServerError().json(serde_json::json!({"error": "Failed to get database connection"})),
     };
 
     if let Some(ref role) = body.role {
@@ -191,7 +189,7 @@ pub async fn update_user(
         }
         match hash_password(new_password) {
             Ok(hash) => { let _ = client.execute("UPDATE users SET password_hash = $1 WHERE id = $2", &[&hash, &target_id]).await; }
-            Err(_) => return HttpResponse::InternalServerError().finish(),
+            Err(_) => return HttpResponse::InternalServerError().json(serde_json::json!({"error": "Failed to hash password"})),
         }
     }
 
@@ -223,7 +221,7 @@ pub async fn delete_user(
 
     let client = match pool.0.get().await {
         Ok(c) => c,
-        Err(_) => return HttpResponse::InternalServerError().finish(),
+        Err(_) => return HttpResponse::InternalServerError().json(serde_json::json!({"error": "Failed to get database connection"})),
     };
 
     match client.execute("DELETE FROM users WHERE id = $1", &[&target_id]).await {
@@ -232,9 +230,6 @@ pub async fn delete_user(
             HttpResponse::Ok().json(serde_json::json!({"status": "ok"}))
         }
         Ok(_) => HttpResponse::NotFound().json(serde_json::json!({"status":"error","message":"User not found"})),
-        Err(e) => {
-            warn!("delete_user DB error: {}", e);
-            HttpResponse::InternalServerError().finish()
-        }
+        Err(_) => HttpResponse::InternalServerError().json(serde_json::json!({"error": "Database query failed"})),
     }
 }

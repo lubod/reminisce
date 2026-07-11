@@ -51,7 +51,7 @@ pub async fn get_stats(
     };
 
     if claims.role != "admin" {
-        return Ok(HttpResponse::Forbidden().finish());
+        return Ok(HttpResponse::Forbidden().json(serde_json::json!({"error": "Forbidden: Admin role required"})));
     }
 
     let client = utils::get_db_client(&pool.0).await?;

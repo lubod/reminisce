@@ -433,10 +433,7 @@ async fn get_text_embedding(text: &str, config: &Config) -> Result<Vector, Strin
 
     info!("Requesting text embedding from CLIP service at: {}", config.embedding_service_url);
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+    let client = crate::utils::get_http_client();
 
     let url = format!("{}/embed/text", config.embedding_service_url);
 
@@ -473,10 +470,7 @@ async fn get_text_embedding(text: &str, config: &Config) -> Result<Vector, Strin
 
 /// Get image embedding from CLIP service
 pub async fn get_image_embedding(image_data: &[u8], config: &Config) -> Result<Vector, String> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(60))
-        .build()
-        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+    let client = crate::utils::get_http_client();
 
     let base64_image = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, image_data);
     let url = format!("{}/embed/image", config.embedding_service_url);

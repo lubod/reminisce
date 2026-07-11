@@ -254,7 +254,7 @@ async fn replicate_single_file(
     rand::fill(&mut encryption_key);
 
     // nonce_context = key: key is randomly generated once per file, ensuring unique nonce per file.
-    let (shards, _enc_size) = StorageEngine::process_for_backup(&file_data, &encryption_key, &encryption_key, data_shards, parity_shards)?;
+    let (shards, enc_size) = StorageEngine::process_for_backup(&file_data, &encryption_key, &encryption_key, data_shards, parity_shards)?;
 
     // 2. Select nodes via rendezvous hashing (HRW)
     // We always want to distribute among available nodes, but we MUST store ALL shards.
@@ -379,7 +379,7 @@ async fn replicate_single_file(
     }
 
     // Mark as synced and store the encryption key + encrypted size for future re-sharding
-    let enc_size_i32 = _enc_size as i32;
+    let enc_size_i32 = enc_size as i32;
     let data_shards_i32 = data_shards as i32;
     let parity_shards_i32 = parity_shards as i32;
     let encrypted_key = crate::utils::encrypt_key(&encryption_key, api_secret);

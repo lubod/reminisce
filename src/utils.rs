@@ -139,3 +139,15 @@ pub fn decrypt_key(encrypted_key: &[u8], api_secret: &str) -> Result<Vec<u8>, St
 
 /// Global lock to coordinate rebalance and audit background tasks to avoid race conditions.
 pub static P2P_WORKER_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+static HTTP_CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+
+/// Get a globally shared reqwest::Client to enable HTTP connection pooling.
+pub fn get_http_client() -> &'static reqwest::Client {
+    HTTP_CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(60))
+            .build()
+            .expect("Failed to initialize global HTTP client")
+    })
+}

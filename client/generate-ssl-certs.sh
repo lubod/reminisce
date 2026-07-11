@@ -22,7 +22,7 @@ echo "Valid for $DAYS_VALID days"
 # Generate private key and certificate
 # Including common LAN IP patterns in SAN to reduce browser friction
 openssl req -x509 -nodes -days $DAYS_VALID \
-    -newkey rsa:2048 \
+    -newkey rsa:4096 \
     -keyout "$KEY_FILE" \
     -out "$CERT_FILE" \
     -subj "/C=US/ST=State/L=City/O=Reminisce/CN=reminisce.local" \
