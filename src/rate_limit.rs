@@ -42,16 +42,24 @@ impl TokenBucket {
     }
 }
 
+struct LimiterState {
+    buckets: HashMap<IpAddr, TokenBucket>,
+    last_cleanup: Instant,
+}
+
 #[derive(Clone)]
 pub struct RateLimiter {
     // Shared state across workers
-    buckets: Arc<Mutex<HashMap<IpAddr, TokenBucket>>>,
+    state: Arc<Mutex<LimiterState>>,
 }
 
 impl RateLimiter {
     pub fn new() -> Self {
         Self {
-            buckets: Arc::new(Mutex::new(HashMap::new())),
+            state: Arc::new(Mutex::new(LimiterState {
+                buckets: HashMap::new(),
+                last_cleanup: Instant::now(),
+            })),
         }
     }
 }
@@ -71,14 +79,14 @@ where
     fn new_transform(&self, service: S) -> Self::Future {
         ready(Ok(RateLimitMiddleware {
             service,
-            buckets: self.buckets.clone(),
+            state: self.state.clone(),
         }))
     }
 }
 
 pub struct RateLimitMiddleware<S> {
     service: S,
-    buckets: Arc<Mutex<HashMap<IpAddr, TokenBucket>>>,
+    state: Arc<Mutex<LimiterState>>,
 }
 
 impl<S, B> Service<ServiceRequest> for RateLimitMiddleware<S>
@@ -112,8 +120,18 @@ where
             (100.0, 5.0)
         };
 
-        let mut buckets = self.buckets.lock().unwrap();
-        let bucket = buckets
+        let mut state = self.state.lock().unwrap();
+
+        // Periodic cleanup of stale entries (last update > 10 mins ago)
+        let now = Instant::now();
+        if now.duration_since(state.last_cleanup).as_secs() > 60 {
+            state.buckets.retain(|_, bucket| {
+                now.duration_since(bucket.last_update).as_secs() < 600
+            });
+            state.last_cleanup = now;
+        }
+
+        let bucket = state.buckets
             .entry(ip)
             .or_insert_with(|| TokenBucket::new(max_tokens));
 

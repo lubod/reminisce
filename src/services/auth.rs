@@ -115,7 +115,8 @@ impl FromRequest for Claims {
                     Err(actix_web::error::ErrorUnauthorized("User not found"))
                 }
             } else {
-                Ok(claims)
+                log::error!("MainDbPool app data is missing in Claims FromRequest");
+                Err(actix_web::error::ErrorInternalServerError("Database configuration error"))
             }
         };
 

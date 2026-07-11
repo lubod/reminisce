@@ -140,9 +140,24 @@ fn save_persisted_peers(peers: &PeerMap, data_dir: &std::path::Path) {
         }).collect()
     };
 
-    if let Ok(file) = std::fs::File::create(&path) {
+    let temp_name = format!("peers.{}.tmp", rand::random::<u64>());
+    let temp_path = data_dir.join(temp_name);
+
+    let write_ok = if let Ok(file) = std::fs::File::create(&temp_path) {
         if let Err(e) = serde_json::to_writer_pretty(file, &list) {
-            warn!("[COORD] Failed to write peers.json: {}", e);
+            warn!("[COORD] Failed to write temp peers file: {}", e);
+            false
+        } else {
+            true
+        }
+    } else {
+        false
+    };
+
+    if write_ok {
+        if let Err(e) = std::fs::rename(&temp_path, &path) {
+            warn!("[COORD] Failed to rename temp peers file to peers.json: {}", e);
+            let _ = std::fs::remove_file(&temp_path);
         }
     }
 }
