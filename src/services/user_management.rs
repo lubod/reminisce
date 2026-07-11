@@ -1,5 +1,5 @@
 use actix_web::{delete, get, patch, post, web, HttpResponse};
-use log::info;
+use log::{info, error};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -49,7 +49,8 @@ pub async fn list_users(claims: Claims, pool: web::Data<MainDbPool>) -> HttpResp
         &[],
     ).await {
         Ok(r) => r,
-        Err(_) => {
+        Err(e) => {
+            error!("Database error listing users: {:?}", e);
             return HttpResponse::InternalServerError().json(serde_json::json!({"error": "Failed to list users"}));
         }
     };
@@ -129,6 +130,7 @@ pub async fn create_user(
                     "message": "Username already exists"
                 }))
             } else {
+                error!("Database error creating user: {:?}", e);
                 HttpResponse::InternalServerError().json(serde_json::json!({"error": "Database query failed"}))
             }
         }
@@ -230,6 +232,9 @@ pub async fn delete_user(
             HttpResponse::Ok().json(serde_json::json!({"status": "ok"}))
         }
         Ok(_) => HttpResponse::NotFound().json(serde_json::json!({"status":"error","message":"User not found"})),
-        Err(_) => HttpResponse::InternalServerError().json(serde_json::json!({"error": "Database query failed"})),
+        Err(e) => {
+            error!("Database error deleting user: {:?}", e);
+            HttpResponse::InternalServerError().json(serde_json::json!({"error": "Database query failed"}))
+        }
     }
 }
