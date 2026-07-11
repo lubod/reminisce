@@ -92,7 +92,7 @@ impl Protocol {
         recv.read_exact(&mut len_buf).await?;
         let len = u32::from_be_bytes(len_buf) as usize;
 
-        if len > 100 * 1024 * 1024 { // 100 MB limit
+        if len > 20 * 1024 * 1024 { // 20MB limit
             return Err(crate::error::Np2pError::Protocol("Message too large".into()));
         }
 

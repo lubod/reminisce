@@ -68,11 +68,19 @@ pub async fn media_replication_loop(
     // Give LAN discovery time to register the Pi before the first batch.
     tokio::time::sleep(Duration::from_secs(20)).await;
 
+    let pool = pool.clone();
+    let config = config.clone();
+    let p2p_service = p2p_service.clone();
     crate::utils::run_worker_loop(
         "Media Replication Worker",
         Duration::from_secs(10),
         Duration::from_secs(60),
-        || replicate_all(&pool, &config, &p2p_service)
+        move || {
+            let pool = pool.clone();
+            let config = config.clone();
+            let p2p_service = p2p_service.clone();
+            async move { replicate_all(&pool, &config, &p2p_service).await }
+        }
     ).await;
 }
 
@@ -257,34 +265,69 @@ async fn replicate_single_file(
 
         set.spawn(async move {
             let shard_hash = blake3::hash(&shard_data).to_hex().to_string();
+            let mut last_err = String::new();
 
-            match p2p_service.connect_to_addr(addr).await {
-                Ok(conn) => {
-                    let (mut send, mut recv) = conn.open_bi().await.map_err(|e| e.to_string())?;
-                    let shard_hash_bytes = blake3::hash(&shard_data).into();
-                    let token = p2p_service.identity().create_shard_token(&shard_hash_bytes);
-                    let req = Message::StoreShardRequest {
-                        shard_hash: shard_hash_bytes,
-                        data: shard_data,
-                        token,
-                    };
-                    Protocol::send(&mut send, &req).await.map_err(|e| e.to_string())?;
-                    let resp = Protocol::receive(&mut recv).await.map_err(|e| e.to_string())?;
-
-                    if let Message::StoreShardResponse { success, .. } = resp {
-                        if success {
-                            let mut r = results.lock().await;
-                            r.push((idx, node_id, addr.to_string(), shard_hash));
-                            Ok(())
-                        } else {
-                            Err("Node rejected shard".to_string())
+            for attempt in 1..=3 {
+                if attempt > 1 {
+                    tokio::time::sleep(Duration::from_millis(500 * (attempt - 1))).await;
+                }
+                match p2p_service.connect_to_addr(addr).await {
+                    Ok(conn) => {
+                        let open_res = conn.open_bi().await.map_err(|e| e.to_string());
+                        let (mut send, mut recv) = match open_res {
+                            Ok(s) => s,
+                            Err(e) => {
+                                last_err = format!("open_bi failed: {}", e);
+                                conn.close(0u32.into(), b"error");
+                                continue;
+                            }
+                        };
+                        let shard_hash_bytes = blake3::hash(&shard_data).into();
+                        let token = p2p_service.identity().create_shard_token(&shard_hash_bytes);
+                        let req = Message::StoreShardRequest {
+                            shard_hash: shard_hash_bytes,
+                            data: shard_data.clone(),
+                            token,
+                        };
+                        if let Err(e) = Protocol::send(&mut send, &req).await.map_err(|e| e.to_string()) {
+                            last_err = format!("send failed: {}", e);
+                            let _ = send.finish();
+                            conn.close(0u32.into(), b"error");
+                            continue;
                         }
-                    } else {
-                        Err("Unexpected response".to_string())
+                        let resp = Protocol::receive(&mut recv).await.map_err(|e| e.to_string());
+                        let msg = match resp {
+                            Ok(m) => m,
+                            Err(e) => {
+                                last_err = format!("receive failed: {}", e);
+                                let _ = send.finish();
+                                conn.close(0u32.into(), b"error");
+                                continue;
+                            }
+                        };
+
+                        if let Message::StoreShardResponse { success, .. } = msg {
+                            if success {
+                                let mut r = results.lock().await;
+                                r.push((idx, node_id, addr.to_string(), shard_hash));
+                                let _ = send.finish();
+                                conn.close(0u32.into(), b"done");
+                                return Ok(());
+                            } else {
+                                last_err = "Node rejected shard".to_string();
+                            }
+                        } else {
+                            last_err = "Unexpected response".to_string();
+                        }
+                        let _ = send.finish();
+                        conn.close(0u32.into(), b"error");
+                    }
+                    Err(e) => {
+                        last_err = format!("Connection to {} failed: {}", addr, e);
                     }
                 }
-                Err(e) => Err(format!("Connection to {} failed: {}", addr, e)),
             }
+            Err(last_err)
         });
     }
 
@@ -340,6 +383,18 @@ async fn replicate_single_file(
     trans.execute(&update_query, &[&manifest_hash, &encrypted_key, &enc_size_i32, &file.hash]).await?;
 
     trans.commit().await?;
+
+    // Append to escrow file for key recovery
+    let escrow_path = PathBuf::from(base_dir).join("../p2p_keys.escrow");
+    if let Ok(mut escrow_file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&escrow_path)
+    {
+        use std::io::Write;
+        let line = format!("{},{},{}\n", file.hash, hex::encode(&encryption_key), hex::encode(&encrypted_key));
+        let _ = escrow_file.write_all(line.as_bytes());
+    }
 
     info!("Replicated {}: {} shards stored (rendezvous)", file.hash, final_results.len());
     BACKUP_SIZE_BYTES.observe(file_size as f64);

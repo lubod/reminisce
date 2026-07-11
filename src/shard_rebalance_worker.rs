@@ -59,11 +59,14 @@ pub async fn start_rebalance_worker(
 ) {
     info!("Shard Rebalance Worker started");
 
+    let pool = pool.clone();
+    let config = config.clone();
+    let p2p_service = p2p_service.clone();
     crate::utils::run_worker_loop(
         "Shard Rebalance Worker",
         Duration::from_secs(120),
         Duration::from_secs(3600),
-        || {
+        move || {
             let pool = pool.clone();
             let config = config.clone();
             let p2p_service = p2p_service.clone();
@@ -77,6 +80,7 @@ pub async fn rebalance_cycle(
     config: &Config,
     p2p_service: &Arc<P2PService>,
 ) -> Result<bool, String> {
+    let _lock = crate::utils::P2P_WORKER_LOCK.lock().await;
     // Get currently discovered peers and sync to DB
     let active_nodes: Vec<(String, SocketAddr)> = p2p_service.registry.all()
         .into_iter()

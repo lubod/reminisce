@@ -104,7 +104,15 @@ impl ConnectionHandler {
             }
 
             Message::StoreShardRequest { shard_hash, data, token } => {
-                let success = if crate::crypto::verify_shard_token(&token, &shard_hash, allowed_owner_id.as_ref()) {
+                let computed_hash: [u8; 32] = blake3::hash(&data).into();
+                let success = if computed_hash != shard_hash {
+                    warn!(
+                        "StoreShardRequest: hash mismatch: computed {}, request {}",
+                        hex::encode(computed_hash),
+                        hex::encode(shard_hash)
+                    );
+                    false
+                } else if crate::crypto::verify_shard_token(&token, &shard_hash, allowed_owner_id.as_ref()) {
                     storage.store(shard_hash, &data).await.is_ok()
                 } else {
                     warn!("StoreShardRequest: token verification failed for shard {}", hex::encode(shard_hash));

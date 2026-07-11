@@ -45,13 +45,15 @@ pub async fn start_duplicate_worker(
 ) {
     info!("Duplicate worker started");
 
+    let pool = pool.clone();
+    let status = status.clone();
     run_worker_loop(
         "Duplicate Worker",
         // min_interval: time between batches when work is found
         Duration::from_millis(200),
         // max_interval: idle sleep when no unchecked images remain
         Duration::from_secs(300),
-        || {
+        move || {
             let pool = pool.clone();
             let status = status.clone();
             async move { process_batch(&pool, &status).await }

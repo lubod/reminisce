@@ -136,3 +136,6 @@ pub fn decrypt_key(encrypted_key: &[u8], api_secret: &str) -> Result<Vec<u8>, St
         .map_err(|e| format!("Decryption failed: {}", e))?;
     Ok(decrypted)
 }
+
+/// Global lock to coordinate rebalance and audit background tasks to avoid race conditions.
+pub static P2P_WORKER_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());

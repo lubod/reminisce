@@ -63,6 +63,88 @@ struct PeerEntry {
 /// Key: (namespace, node_id)
 type PeerMap = Arc<RwLock<HashMap<(String, String), PeerEntry>>>;
 
+#[derive(serde::Serialize, serde::Deserialize)]
+struct PersistedPeer {
+    namespace: String,
+    node_id: String,
+    ip: String,
+    quic_port: u16,
+    last_seen_secs: u64,
+}
+
+fn load_persisted_peers(data_dir: &std::path::Path) -> HashMap<(String, String), PeerEntry> {
+    let path = data_dir.join("peers.json");
+    if !path.exists() {
+        return HashMap::new();
+    }
+    let file = match std::fs::File::open(&path) {
+        Ok(f) => f,
+        Err(e) => {
+            warn!("[COORD] Failed to open peers.json: {}", e);
+            return HashMap::new();
+        }
+    };
+    let reader = BufReader::new(file);
+    let list: Vec<PersistedPeer> = match serde_json::from_reader(reader) {
+        Ok(l) => l,
+        Err(e) => {
+            warn!("[COORD] Failed to deserialize peers.json: {}", e);
+            return HashMap::new();
+        }
+    };
+
+    let mut map = HashMap::new();
+    let current_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    for p in list {
+        if let Ok(ip) = p.ip.parse() {
+            let elapsed = current_secs.saturating_sub(p.last_seen_secs);
+            let last_seen = Instant::now().checked_sub(std::time::Duration::from_secs(elapsed)).unwrap_or(Instant::now());
+            map.insert(
+                (p.namespace, p.node_id.clone()),
+                PeerEntry {
+                    node_id: p.node_id,
+                    ip,
+                    quic_port: p.quic_port,
+                    last_seen,
+                },
+            );
+        }
+    }
+    info!("[COORD] Loaded {} peers from peers.json", map.len());
+    map
+}
+
+fn save_persisted_peers(peers: &PeerMap, data_dir: &std::path::Path) {
+    let path = data_dir.join("peers.json");
+    let map = peers.read().unwrap();
+    let current_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let list: Vec<PersistedPeer> = map.iter().map(|((ns, _), p)| {
+        let elapsed = p.last_seen.elapsed().as_secs();
+        let last_seen_secs = current_secs.saturating_sub(elapsed);
+        PersistedPeer {
+            namespace: ns.clone(),
+            node_id: p.node_id.clone(),
+            ip: p.ip.to_string(),
+            quic_port: p.quic_port,
+            last_seen_secs,
+        }
+    }).collect();
+
+    if let Ok(file) = std::fs::File::create(&path) {
+        if let Err(e) = serde_json::to_writer_pretty(file, &list) {
+            warn!("[COORD] Failed to write peers.json: {}", e);
+        }
+    }
+}
+
 fn current_peer_list(peers: &PeerMap, namespace: &str, ttl: u64) -> Vec<(String, String)> {
     peers
         .read()
@@ -87,13 +169,14 @@ type ChannelMap = Arc<RwLock<HashMap<String, quinn::Connection>>>;
 async fn handle_stream(
     msg: Message,
     mut send: quinn::SendStream,
-    mut recv: quinn::RecvStream,
+    _recv: quinn::RecvStream,
     conn: quinn::Connection,
     remote_ip: IpAddr,
     peers: PeerMap,
     peer_ttl_secs: u64,
     node: Node,
     channels: ChannelMap,
+    data_dir: PathBuf,
 ) {
     let response = match msg {
         Message::RegisterNode { node_id, quic_port, namespace } => {
@@ -124,6 +207,7 @@ async fn handle_stream(
                     (namespace.clone(), node_id.clone()),
                     PeerEntry { node_id, ip: remote_ip, quic_port, last_seen: Instant::now() },
                 );
+                save_persisted_peers(&peers, &data_dir);
                 Message::PeerList { peers: current_peer_list(&peers, &namespace, peer_ttl_secs) }
             }
         }
@@ -134,6 +218,10 @@ async fn handle_stream(
         }
 
         Message::RelayRequest { target_node_id, payload } => {
+            if payload.len() > 2 * 1024 * 1024 {
+                let _ = Protocol::send(&mut send, &Message::Error { code: 400, message: "Relay payload too large".into() }).await;
+                return;
+            }
             relay(&mut send, &peers, peer_ttl_secs, &node, &target_node_id, payload, &channels).await;
             return;
         }
@@ -156,6 +244,10 @@ async fn relay(
     payload: Vec<u8>,
     channels: &ChannelMap,
 ) {
+    if payload.len() > 2 * 1024 * 1024 {
+        return;
+    }
+
     // Try channel first (works even if target is behind NAT)
     let channel_conn = {
         let map = channels.read().unwrap();
@@ -179,7 +271,7 @@ async fn relay(
         let mut len_buf = [0u8; 4];
         if tr.read_exact(&mut len_buf).await.is_err() { return; }
         let resp_len = u32::from_be_bytes(len_buf) as usize;
-        if resp_len > 100 * 1024 * 1024 { return; }
+        if resp_len > 2 * 1024 * 1024 { return; }
         let mut resp_payload = vec![0u8; resp_len];
         if tr.read_exact(&mut resp_payload).await.is_err() { return; }
         let _ = Protocol::send(send, &Message::RelayResponse { payload: resp_payload }).await;
@@ -242,7 +334,7 @@ async fn relay(
     let mut len_buf = [0u8; 4];
     if tr.read_exact(&mut len_buf).await.is_err() { return; }
     let resp_len = u32::from_be_bytes(len_buf) as usize;
-    if resp_len > 100 * 1024 * 1024 { return; }
+    if resp_len > 2 * 1024 * 1024 { return; }
     let mut resp_payload = vec![0u8; resp_len];
     if tr.read_exact(&mut resp_payload).await.is_err() { return; }
 
@@ -364,7 +456,8 @@ async fn main() -> anyhow::Result<()> {
     let node = Node::new(args.listen, identity)?;
     info!("Coordinator QUIC on {}", args.listen);
 
-    let peers: PeerMap = Arc::new(RwLock::new(HashMap::new()));
+    let peers_map = load_persisted_peers(&args.data_dir);
+    let peers: PeerMap = Arc::new(RwLock::new(peers_map));
     let tunnels: TunnelMap = Arc::new(RwLock::new(HashMap::new()));
     let channels: ChannelMap = Arc::new(RwLock::new(HashMap::new()));
 
@@ -372,6 +465,7 @@ async fn main() -> anyhow::Result<()> {
     {
         let peers = peers.clone();
         let ttl = args.peer_ttl_secs;
+        let data_dir = args.data_dir.clone();
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(std::time::Duration::from_secs(30)).await;
@@ -381,6 +475,10 @@ async fn main() -> anyhow::Result<()> {
                 let removed = before - map.len();
                 if removed > 0 {
                     info!("[COORD] Cleaned {} stale peers, {} active", removed, map.len());
+                }
+                drop(map);
+                if removed > 0 {
+                    save_persisted_peers(&peers, &data_dir);
                 }
             }
         });
@@ -410,6 +508,7 @@ async fn main() -> anyhow::Result<()> {
             let ttl = args.peer_ttl_secs;
             let node_for_task = node.clone();
             let allowed_node_id = allowed_tunnel_node_id.clone();
+            let data_dir_owned = args.data_dir.clone();
 
             tokio::spawn(async move {
                 let conn = match incoming.await {
@@ -524,6 +623,7 @@ async fn main() -> anyhow::Result<()> {
                     tokio::spawn(handle_stream(
                         first_msg, first_send, first_recv, conn.clone(),
                         remote_ip, peers.clone(), ttl, node_for_task.clone(), channels.clone(),
+                        data_dir_owned.clone(),
                     ));
 
                     loop {
@@ -534,7 +634,8 @@ async fn main() -> anyhow::Result<()> {
                                 let node = node_for_task.clone();
                                 let channels = channels.clone();
                                 let conn_clone = conn.clone();
-                                tokio::spawn(handle_stream(msg, send, recv, conn_clone, remote_ip, peers, ttl, node, channels));
+                                let data_dir = data_dir_owned.clone();
+                                tokio::spawn(handle_stream(msg, send, recv, conn_clone, remote_ip, peers, ttl, node, channels, data_dir));
                             }
                             Err(_) => break,
                         }

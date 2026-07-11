@@ -19,11 +19,17 @@ pub async fn start_verification_worker(pool: web::Data<MainDbPool>, config: web:
     // Adaptive strategy:
     // - Active: 1s (Process queue quickly)
     // - Idle: Backoff up to 10s
+    let pool = pool.clone();
+    let config = config.clone();
     super::utils::run_worker_loop(
         "Verification Worker",
         Duration::from_secs(1),
         Duration::from_secs(10),
-        || verify_files(pool.clone(), config.clone())
+        move || {
+            let pool = pool.clone();
+            let config = config.clone();
+            async move { verify_files(pool, config).await }
+        }
     ).await;
 }
 

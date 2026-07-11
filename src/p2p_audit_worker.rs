@@ -29,11 +29,14 @@ pub async fn start_audit_worker(
 ) {
     info!("P2P Audit & Repair Worker started");
 
+    let pool = pool.clone();
+    let config = config.clone();
+    let p2p_service = p2p_service.clone();
     crate::utils::run_worker_loop(
         "P2P Audit Worker",
         Duration::from_secs(60),
         Duration::from_secs(3600),
-        || {
+        move || {
             let pool = pool.clone();
             let config = config.clone();
             let p2p_service = p2p_service.clone();
@@ -47,6 +50,7 @@ async fn perform_audit(
     config: &Config,
     p2p_service: &Arc<P2PService>,
 ) -> Result<bool, String> {
+    let _lock = crate::utils::P2P_WORKER_LOCK.lock().await;
     let client = pool.get().await.map_err(|e| e.to_string())?;
     let rows = client.query(
         "SELECT id, file_hash, shard_index, node_id, shard_hash

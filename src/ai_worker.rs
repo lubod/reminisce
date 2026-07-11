@@ -59,11 +59,17 @@ pub async fn start_ai_worker(pool: web::Data<MainDbPool>, config: web::Data<Conf
     // Adaptive strategy:
     // - Active: 5s (Process heavy backlog slightly faster than default)
     // - Idle: Backoff up to 30s
+    let pool = pool.clone();
+    let config = config.clone();
     super::utils::run_worker_loop(
         "AI Worker",
         Duration::from_secs(5),
         Duration::from_secs(30),
-        || process_files(pool.clone(), config.clone())
+        move || {
+            let pool = pool.clone();
+            let config = config.clone();
+            async move { process_files(pool, config).await }
+        }
     ).await;
 }
 
@@ -510,7 +516,7 @@ async fn get_image_description(
     };
 
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(300))
+        .timeout(std::time::Duration::from_secs(60))
         .build()
         .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
 

@@ -128,21 +128,31 @@ pub async fn run_worker_loop<F, Fut>(
     mut task: F,
 ) where
     F: FnMut() -> Fut,
-    Fut: Future<Output = Result<bool, String>>,
+    Fut: Future<Output = Result<bool, String>> + Send + 'static,
 {
     let mut current_interval = min_interval;
 
     loop {
-        match task().await {
-            Ok(did_work) => {
+        // Run the task in a spawned task to isolate and catch any potential panics
+        let handle = tokio::spawn(task());
+        match handle.await {
+            Ok(Ok(did_work)) => {
                 if did_work {
                     current_interval = min_interval;
                 } else {
                     current_interval = (current_interval * 2).min(max_interval);
                 }
             }
-            Err(e) => {
+            Ok(Err(e)) => {
                 error!("Worker '{}' failed: {}", name, e);
+                current_interval = (current_interval * 2).min(max_interval);
+            }
+            Err(join_err) => {
+                if join_err.is_panic() {
+                    error!("Worker '{}' panicked! Panic caught to prevent process crash.", name);
+                } else {
+                    error!("Worker '{}' task was cancelled or failed to join: {}", name, join_err);
+                }
                 current_interval = (current_interval * 2).min(max_interval);
             }
         }
