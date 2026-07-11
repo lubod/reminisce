@@ -24,17 +24,15 @@ impl Default for DbPoolOptions {
 }
 
 pub fn create_pool(postgres_url: &str) -> Result<Pool, Box<dyn std::error::Error>> {
-    create_pool_with_options(postgres_url, DbPoolOptions::default())
+    create_pool_with_options(postgres_url, DbPoolOptions::default(), false)
 }
 
 pub fn create_pool_with_options(
     postgres_url: &str,
     options: DbPoolOptions,
+    use_tls: bool,
 ) -> Result<Pool, Box<dyn std::error::Error>> {
     let pg_config = PgConfig::from_str(&postgres_url)?;
-    let tls_connector = native_tls::TlsConnector::builder().build()?;
-    let connector = postgres_native_tls::MakeTlsConnector::new(tls_connector);
-    let manager = PgManager::new(pg_config, connector);
 
     // Configure pool with explicit settings
     let mut pool_config = PoolConfig::new(options.max_size);
@@ -44,10 +42,21 @@ pub fn create_pool_with_options(
         recycle: Some(Duration::from_secs(options.timeout_secs)),
     };
 
-    let pool = Pool::builder(manager)
-        .config(pool_config)
-        .runtime(Runtime::Tokio1)
-        .build()?;
+    let pool = if use_tls {
+        let tls_connector = native_tls::TlsConnector::builder().build()?;
+        let connector = postgres_native_tls::MakeTlsConnector::new(tls_connector);
+        let manager = PgManager::new(pg_config, connector);
+        Pool::builder(manager)
+            .config(pool_config)
+            .runtime(Runtime::Tokio1)
+            .build()?
+    } else {
+        let manager = PgManager::new(pg_config, tokio_postgres::NoTls);
+        Pool::builder(manager)
+            .config(pool_config)
+            .runtime(Runtime::Tokio1)
+            .build()?
+    };
 
     info!(
         "Database connection pool configured: max={}, timeout={}s",

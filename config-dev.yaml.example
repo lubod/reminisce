@@ -3,6 +3,8 @@
 
 # Main database (running in Docker on port 25432)
 database_url: "postgres://postgres:postgres@localhost:25432/reminisce_db"
+# Enforce database connection TLS via native-tls/postgres-native-tls (default: false)
+db_tls: false
 
 # Geotagging database (running in Docker on port 5435)
 geotagging_database_url: "postgres://postgres:postgres@localhost:5435/geotagging_db"

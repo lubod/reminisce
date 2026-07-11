@@ -20,6 +20,7 @@ pub fn create_test_config() -> config::Config {
         p2p_daemon_port: Some(5050),
         enable_media_backup: Arc::new(AtomicBool::new(true)),
         external_ip: None,
+        db_tls: false,
         db_pool_max_size: 16,
         db_pool_min_size: 4,
         db_pool_timeout_secs: 30,

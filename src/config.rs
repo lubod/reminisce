@@ -39,6 +39,8 @@ pub struct Config {
     pub allowed_import_dirs: Option<Vec<String>>,
 
     // Database connection pool configuration
+    #[serde(default = "default_db_tls")]
+    pub db_tls: bool,
     #[serde(default = "default_db_pool_max_size")]
     pub db_pool_max_size: usize,
     #[serde(default = "default_db_pool_min_size")]
@@ -212,6 +214,10 @@ fn default_embedding_service_url() -> String {
 
 fn default_face_service_url() -> String {
     "http://localhost:8081".to_string()  // Consolidated with embedding service
+}
+
+fn default_db_tls() -> bool {
+    false
 }
 
 fn default_db_pool_max_size() -> usize {

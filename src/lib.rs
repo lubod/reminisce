@@ -374,9 +374,9 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
         timeout_secs: config.db_pool_timeout_secs,
     };
 
-    let pool = db::create_pool_with_options(&database_url, pool_options.clone())
+    let pool = db::create_pool_with_options(&database_url, pool_options.clone(), config.db_tls)
         .expect("Failed to create database pool");
-    let geotagging_pool = db::create_pool_with_options(&config.geotagging_database_url, pool_options)
+    let geotagging_pool = db::create_pool_with_options(&config.geotagging_database_url, pool_options, config.db_tls)
         .expect("Failed to create geotagging database pool");
 
     let worker_pool_options = db::DbPoolOptions {
@@ -384,7 +384,7 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
         min_size: 1,
         timeout_secs: config.db_pool_timeout_secs,
     };
-    let worker_pool_inner = db::create_pool_with_options(&database_url, worker_pool_options)
+    let worker_pool_inner = db::create_pool_with_options(&database_url, worker_pool_options, config.db_tls)
         .expect("Failed to create worker database pool");
 
     // Apply idempotent schema migrations on every startup
