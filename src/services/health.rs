@@ -30,7 +30,7 @@ pub struct HealthCheckResponse {
 
 #[utoipa::path(
     get,
-    path = "/api/health",
+    path = "/health",
     responses(
         (status = 200, description = "Service is healthy", body = HealthCheckResponse),
         (status = 503, description = "Service is unhealthy", body = HealthCheckResponse)

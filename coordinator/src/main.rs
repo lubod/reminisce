@@ -119,7 +119,7 @@ fn load_persisted_peers(data_dir: &std::path::Path) -> HashMap<(String, String),
 }
 
 fn save_persisted_peers(peers: &PeerMap, data_dir: &std::path::Path) {
-    let path = data_dir.to_path_buf();
+    let dir = data_dir.to_path_buf();
     let list: Vec<PersistedPeer> = {
         let map = peers.read().unwrap();
         let current_secs = std::time::SystemTime::now()
@@ -141,8 +141,8 @@ fn save_persisted_peers(peers: &PeerMap, data_dir: &std::path::Path) {
     };
 
     let temp_name = format!("peers.{}.tmp", rand::random::<u64>());
-    let temp_path = path.join(temp_name);
-    let target_path = path.join("peers.json");
+    let temp_path = dir.join(temp_name);
+    let target_path = dir.join("peers.json");
 
     tokio::task::spawn_blocking(move || {
         let write_ok = if let Ok(file) = std::fs::File::create(&temp_path) {
