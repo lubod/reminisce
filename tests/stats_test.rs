@@ -93,6 +93,7 @@ async fn test_get_stats() {
             email: "test@example.com".to_string(),
             role: "user".to_string(),
             exp: (chrono::Utc::now() + chrono::Duration::days(1)).timestamp() as usize,
+            scope: None,
         };
         encode(
             &Header::new(Algorithm::HS512),

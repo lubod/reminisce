@@ -936,10 +936,10 @@ pub async fn enhance_image(
 
 // ── Save enhanced image to library ───────────────────────────────────────────
 
-#[derive(Deserialize)]
-struct SaveEnhancedRequest {
+#[derive(Deserialize, ToSchema)]
+pub struct SaveEnhancedRequest {
     /// Base64-encoded JPEG of the enhanced image (from the /enhance endpoint)
-    image: String,
+    pub image: String,
 }
 
 #[utoipa::path(

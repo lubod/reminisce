@@ -156,7 +156,8 @@ async fn rebalance_file(
         &[&file_hash],
     ).await?;
 
-    let file_info = find_file_info(&client, file_hash, config.get_api_key().unwrap()).await?;
+    let api_key = config.get_api_key().map_err(|e| format!("Failed to retrieve API key: {}", e))?;
+    let file_info = find_file_info(&client, file_hash, api_key).await?;
     let (data_shards, parity_shards) = match file_info {
         Some((_, _, _, ds, ps)) => (ds, ps),
         None => (3, 2),
@@ -215,7 +216,8 @@ async fn migrate_shard(
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     let client = pool.get().await?;
 
-    let file_info = find_file_info(&client, file_hash, config.get_api_key().unwrap()).await?;
+    let api_key = config.get_api_key().map_err(|e| format!("Failed to retrieve API key: {}", e))?;
+    let file_info = find_file_info(&client, file_hash, api_key).await?;
 
     let shard_data = match file_info {
         Some((ext, Some(key), _enc_size, data_shards, parity_shards)) => {

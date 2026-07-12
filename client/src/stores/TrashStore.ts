@@ -26,7 +26,7 @@ export class TrashStore {
 
     getThumbnailUrl = (item: TrashItem): string => {
         const base = `/api/thumbnail/${item.hash}`;
-        const token = this.rootStore.authStore.token;
+        const token = this.rootStore.authStore.imageToken || this.rootStore.authStore.token;
         if (!token) return base;
         return `${base}?token=${token}`;
     };

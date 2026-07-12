@@ -175,7 +175,20 @@ pub use crate::services::import_dir::{import_directory, get_import_status};
         crate::services::p2p_status::trigger_rebalance,
         crate::services::duplicates::get_duplicates,
         crate::services::duplicates::get_duplicate_status,
-        crate::services::duplicates::trigger_duplicate_scan
+        crate::services::duplicates::trigger_duplicate_scan,
+        crate::services::auth::register_user,
+        crate::services::auth::user_logout,
+        crate::services::auth::get_me,
+        crate::services::auth::setup_status,
+        crate::services::auth::setup_admin,
+        crate::services::user_management::list_users,
+        crate::services::user_management::create_user,
+        crate::services::user_management::update_user,
+        crate::services::user_management::delete_user,
+        crate::services::media::save_enhanced_image,
+        crate::services::label::get_video_labels,
+        crate::services::label::add_video_label,
+        crate::services::label::remove_video_label
     ),
     components(
         schemas(
@@ -249,7 +262,12 @@ pub use crate::services::import_dir::{import_directory, get_import_status};
             crate::services::duplicates::DuplicateImage,
             crate::services::duplicates::DuplicateGroup,
             crate::services::duplicates::DuplicatesResponse,
-            crate::services::duplicates::DuplicateWorkerStatusResponse
+            crate::services::duplicates::DuplicateWorkerStatusResponse,
+            crate::services::auth::SetupRequest,
+            crate::services::user_management::UserRecord,
+            crate::services::user_management::CreateUserRequest,
+            crate::services::user_management::UpdateUserRequest,
+            crate::services::media::SaveEnhancedRequest
         )
     ),
     tags((name = "reminisce", description = "Reminisce: Self-hosted photo and video memory vault."))
@@ -373,6 +391,10 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
         min_size: config.db_pool_min_size,
         timeout_secs: config.db_pool_timeout_secs,
     };
+
+    if !config.db_tls && config.environment.as_deref() == Some("production") {
+        log::warn!("SECURITY WARNING: Database TLS is disabled (db_tls: false) in a production environment!");
+    }
 
     let pool = db::create_pool_with_options(&database_url, pool_options.clone(), config.db_tls)
         .expect("Failed to create database pool");

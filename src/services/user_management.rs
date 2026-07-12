@@ -2,30 +2,31 @@ use actix_web::{delete, get, patch, post, web, HttpResponse};
 use log::{info, error};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+use utoipa::ToSchema;
 
 use crate::auth_utils::hash_password;
 use crate::db::MainDbPool;
 use crate::services::auth::Claims;
 
-#[derive(Serialize)]
-struct UserRecord {
-    id: String,
-    username: String,
-    email: String,
-    role: String,
-    is_active: bool,
-    created_at: String,
-    last_login_at: Option<String>,
+#[derive(Serialize, ToSchema)]
+pub struct UserRecord {
+    pub id: String,
+    pub username: String,
+    pub email: String,
+    pub role: String,
+    pub is_active: bool,
+    pub created_at: String,
+    pub last_login_at: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct CreateUserRequest {
     pub username: String,
     pub password: String,
     pub role: Option<String>, // "user", "admin", "viewer" — defaults to "user"
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 pub struct UpdateUserRequest {
     pub role: Option<String>,
     pub is_active: Option<bool>,
@@ -33,6 +34,16 @@ pub struct UpdateUserRequest {
 }
 
 /// List all users — admin only.
+#[utoipa::path(
+    get,
+    path = "/api/users",
+    responses(
+        (status = 200, description = "List of all users", body = [UserRecord]),
+        (status = 403, description = "Forbidden - Admin only"),
+        (status = 401, description = "Unauthorized")
+    ),
+    tag = "User Management"
+)]
 #[get("/users")]
 pub async fn list_users(claims: Claims, pool: web::Data<MainDbPool>) -> HttpResponse {
     if claims.role != "admin" {
@@ -74,6 +85,18 @@ pub async fn list_users(claims: Claims, pool: web::Data<MainDbPool>) -> HttpResp
 }
 
 /// Create a user — admin only.
+#[utoipa::path(
+    post,
+    path = "/api/users",
+    request_body = CreateUserRequest,
+    responses(
+        (status = 201, description = "User created successfully", body = serde_json::Value),
+        (status = 400, description = "Invalid request format or username exists"),
+        (status = 403, description = "Forbidden - Admin only"),
+        (status = 401, description = "Unauthorized")
+    ),
+    tag = "User Management"
+)]
 #[post("/users")]
 pub async fn create_user(
     claims: Claims,
@@ -139,6 +162,21 @@ pub async fn create_user(
 
 /// Update a user's role, active status, or password — admin only.
 /// An admin cannot deactivate or demote themselves.
+#[utoipa::path(
+    patch,
+    path = "/api/users/{id}",
+    params(
+        ("id" = String, Path, description = "User ID (UUID)")
+    ),
+    request_body = UpdateUserRequest,
+    responses(
+        (status = 200, description = "User updated successfully", body = serde_json::Value),
+        (status = 400, description = "Invalid request format or demoting self"),
+        (status = 403, description = "Forbidden - Admin only"),
+        (status = 401, description = "Unauthorized")
+    ),
+    tag = "User Management"
+)]
 #[patch("/users/{id}")]
 pub async fn update_user(
     claims: Claims,
@@ -200,6 +238,21 @@ pub async fn update_user(
 }
 
 /// Delete a user — admin only. Cannot delete yourself.
+#[utoipa::path(
+    delete,
+    path = "/api/users/{id}",
+    params(
+        ("id" = String, Path, description = "User ID (UUID)")
+    ),
+    responses(
+        (status = 200, description = "User deleted successfully", body = serde_json::Value),
+        (status = 400, description = "Invalid user ID or deleting self"),
+        (status = 403, description = "Forbidden - Admin only"),
+        (status = 404, description = "User not found"),
+        (status = 401, description = "Unauthorized")
+    ),
+    tag = "User Management"
+)]
 #[delete("/users/{id}")]
 pub async fn delete_user(
     claims: Claims,

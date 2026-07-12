@@ -685,7 +685,7 @@ export class MediaStore {
     // --- Helper Methods ---
 
     getAuthenticatedUrl = (baseUrl: string) => {
-        const token = this.rootStore.authStore.token;
+        const token = this.rootStore.authStore.imageToken || this.rootStore.authStore.token;
         if (!token) return baseUrl;
         const separator = baseUrl.includes('?') ? '&' : '?';
         return `${baseUrl}${separator}token=${token}`;

@@ -16,6 +16,7 @@ impl StorageEngine {
     /// Prepares a file for distributed backup.
     /// 1. Encrypts the data with the provided key.
     /// 2. Splits the encrypted data into shards (data + parity).
+    ///
     /// Returns the shards and the size of the encrypted blob (needed for reconstruction).
     pub fn process_for_backup(data: &[u8], key: &[u8], nonce_context: &[u8], data_shards: usize, parity_shards: usize) -> Result<(Vec<Vec<u8>>, usize)> {
         // 1. Encrypt

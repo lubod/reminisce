@@ -27,6 +27,8 @@ pub struct Claims {
     pub email: String,
     pub role: String,      // admin/user/viewer
     pub exp: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>, // optional scope restriction (e.g. "media_read")
 }
 
 use actix_web::{FromRequest, dev::Payload, Error as ActixError};
@@ -72,6 +74,8 @@ impl FromRequest for Claims {
         }
 
         let pool = req.app_data::<web::Data<MainDbPool>>().cloned();
+        let path = req.path().to_string();
+        let method = req.method().clone();
 
         let fut = async move {
             let token_str = match token {
@@ -87,6 +91,23 @@ impl FromRequest for Claims {
             ).map_err(|_| actix_web::error::ErrorUnauthorized("Invalid token"))?;
 
             let claims = token_data.claims;
+
+            // Check scope restriction if present
+            if let Some(ref scope) = claims.scope {
+                if scope == "media_read" {
+                    let is_get = method == actix_web::http::Method::GET;
+                    let is_media_path = path.starts_with("/api/image/")
+                        || path.starts_with("/api/video/")
+                        || path.starts_with("/api/media/")
+                        || path.starts_with("/api/images/")
+                        || path.starts_with("/api/videos/")
+                        || path.starts_with("/api/faces/");
+                    if !is_get || !is_media_path {
+                        return Err(actix_web::error::ErrorForbidden("Token is restricted to media read access only"));
+                    }
+                }
+            }
+
             let user_uuid = uuid::Uuid::parse_str(&claims.user_id)
                 .map_err(|_| actix_web::error::ErrorUnauthorized("Invalid user ID in token"))?;
 
@@ -152,6 +173,14 @@ pub struct UserLoginRequest {
 }
 
 // Public registration is disabled — users are created by admins only.
+#[utoipa::path(
+    post,
+    path = "/api/auth/register",
+    responses(
+        (status = 403, description = "Forbidden - Public registration is disabled"),
+    ),
+    tag = "Authentication"
+)]
 #[post("/auth/register")]
 pub async fn register_user() -> HttpResponse {
     HttpResponse::Forbidden().json(serde_json::json!({
@@ -162,13 +191,22 @@ pub async fn register_user() -> HttpResponse {
 
 // --- Setup endpoints (first-run only) ---
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, ToSchema)]
 pub struct SetupRequest {
     pub username: String,
     pub password: String,
 }
 
 /// Returns whether the server needs initial setup (no users exist yet).
+#[utoipa::path(
+    get,
+    path = "/api/auth/setup-status",
+    responses(
+        (status = 200, description = "Returns if setup is needed", body = serde_json::Value),
+        (status = 500, description = "Server error")
+    ),
+    tag = "Authentication"
+)]
 #[get("/auth/setup-status")]
 pub async fn setup_status(pool: web::Data<MainDbPool>) -> HttpResponse {
     let client = match pool.0.get().await {
@@ -185,6 +223,18 @@ pub async fn setup_status(pool: web::Data<MainDbPool>) -> HttpResponse {
 }
 
 /// Creates the first admin account. Returns 403 if any user already exists.
+#[utoipa::path(
+    post,
+    path = "/api/auth/setup",
+    request_body = SetupRequest,
+    responses(
+        (status = 201, description = "Admin user created successfully", body = serde_json::Value),
+        (status = 400, description = "Invalid request format"),
+        (status = 403, description = "Setup is already completed"),
+        (status = 500, description = "Server error")
+    ),
+    tag = "Authentication"
+)]
 #[post("/auth/setup")]
 pub async fn setup_admin(
     req_body: web::Json<SetupRequest>,
@@ -326,6 +376,7 @@ pub async fn user_login(
                 email: String::new(),
                 role: role.clone(),
                 exp: expiration_time.timestamp() as usize,
+                scope: None,
             };
 
             let token = encode(
@@ -358,10 +409,26 @@ pub async fn user_login(
                         .max_age(actix_web::cookie::time::Duration::days(7))
                         .finish();
 
+                    let image_token_exp = chrono::Utc::now() + chrono::Duration::hours(24);
+                    let image_claims = Claims {
+                        user_id: user_id.to_string(),
+                        username: username.clone(),
+                        email: String::new(),
+                        role: role.clone(),
+                        exp: image_token_exp.timestamp() as usize,
+                        scope: Some("media_read".to_string()),
+                    };
+                    let image_token = encode(
+                        &Header::new(Algorithm::HS512),
+                        &image_claims,
+                        &EncodingKey::from_secret(config.get_api_key().unwrap().as_bytes())
+                    ).unwrap_or_default();
+
                     let mut response = HttpResponse::Ok();
                     response.cookie(cookie);
                     response.json(serde_json::json!({
                         "access_token": t,
+                        "image_token": image_token,
                         "user": {
                             "id": user_id.to_string(),
                             "username": username,
@@ -400,6 +467,14 @@ pub async fn user_login(
 }
 
 // User logout endpoint (clears HttpOnly cookie)
+#[utoipa::path(
+    post,
+    path = "/api/auth/logout",
+    responses(
+        (status = 200, description = "Logged out successfully", body = serde_json::Value)
+    ),
+    tag = "Authentication"
+)]
 #[post("/auth/logout")]
 pub async fn user_logout() -> HttpResponse {
     let cookie = actix_web::cookie::Cookie::build("access_token", "")
@@ -418,6 +493,15 @@ pub async fn user_logout() -> HttpResponse {
 }
 
 // User details endpoint (returns currently authenticated user session)
+#[utoipa::path(
+    get,
+    path = "/api/auth/me",
+    responses(
+        (status = 200, description = "Current user information", body = serde_json::Value),
+        (status = 401, description = "Unauthorized")
+    ),
+    tag = "Authentication"
+)]
 #[get("/auth/me")]
 pub async fn get_me(req: HttpRequest, claims: Claims) -> HttpResponse {
     let mut token = String::new();
@@ -434,10 +518,32 @@ pub async fn get_me(req: HttpRequest, claims: Claims) -> HttpResponse {
         }
     }
 
+    let config = match req.app_data::<web::Data<Config>>() {
+        Some(c) => c,
+        None => return HttpResponse::InternalServerError().finish(),
+    };
+
+    let image_token_exp = chrono::Utc::now() + chrono::Duration::hours(24);
+    let image_claims = Claims {
+        user_id: claims.user_id.clone(),
+        username: claims.username.clone(),
+        email: claims.email.clone(),
+        role: claims.role.clone(),
+        exp: image_token_exp.timestamp() as usize,
+        scope: Some("media_read".to_string()),
+    };
+
+    let image_token = encode(
+        &Header::new(Algorithm::HS512),
+        &image_claims,
+        &EncodingKey::from_secret(config.get_api_key().unwrap().as_bytes())
+    ).unwrap_or_default();
+
     HttpResponse::Ok().json(serde_json::json!({
         "id": claims.user_id,
         "username": claims.username,
         "role": claims.role,
-        "access_token": token
+        "access_token": token,
+        "image_token": image_token
     }))
 }

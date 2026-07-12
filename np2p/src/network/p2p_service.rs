@@ -47,7 +47,7 @@ impl P2PService {
             }
             Ok(Err(e)) => {
                 error!("[P2P] Connection to {} failed: {}", addr, e);
-                Err(e.into())
+                Err(e)
             }
             Err(_) => {
                 error!("[P2P] Connection to {} timed out", addr);
@@ -70,7 +70,7 @@ impl P2PService {
             }
             Ok(Err(e)) => {
                 error!("[P2P] Connection to peer {} failed: {}", node_id, e);
-                Err(e.into())
+                Err(e)
             }
             Err(_) => {
                 error!("[P2P] Connection to peer {} timed out", node_id);

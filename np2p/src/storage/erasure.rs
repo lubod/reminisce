@@ -28,7 +28,7 @@ pub fn shard(data: &[u8], data_shards: usize, parity_shards: usize) -> Result<Ve
     // 1. Calculate shard size (must be multiple of DATA_SHARDS if we want perfect fit, 
     // but ReedSolomon handles padding if we provide chunks).
     // The simplest way: pad data to be a multiple of DATA_SHARDS.
-    let shard_size = (data.len() + data_shards - 1) / data_shards;
+    let shard_size = data.len().div_ceil(data_shards);
     let total_data_size = shard_size * data_shards;
 
     let mut padded_data = data.to_vec();
@@ -80,10 +80,8 @@ pub fn reconstruct(
 
     // Combine data shards
     let mut result = Vec::with_capacity(original_size);
-    for i in 0..data_shards {
-        if let Some(ref shard_data) = shards[i] {
-            result.extend_from_slice(shard_data);
-        }
+    for shard_data in shards.iter().take(data_shards).flatten() {
+        result.extend_from_slice(shard_data);
     }
 
     // Truncate to original size

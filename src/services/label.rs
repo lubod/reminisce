@@ -396,6 +396,18 @@ pub async fn remove_image_label(
 }
 
 // Video label endpoints (same as image endpoints but for videos)
+#[utoipa::path(
+    get,
+    path = "/api/videos/{hash}/labels",
+    params(
+        ("hash" = String, Path, description = "Video hash")
+    ),
+    responses(
+        (status = 200, description = "Video labels", body = MediaLabelsResponse),
+        (status = 401, description = "Unauthorized")
+    ),
+    tag = "Labels"
+)]
 #[get("/videos/{hash}/labels")]
 pub async fn get_video_labels(
     req: HttpRequest,
@@ -442,6 +454,20 @@ pub async fn get_video_labels(
     Ok(HttpResponse::Ok().json(MediaLabelsResponse { labels }))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/videos/{hash}/labels",
+    params(
+        ("hash" = String, Path, description = "Video hash")
+    ),
+    request_body = AddLabelToMediaRequest,
+    responses(
+        (status = 200, description = "Label added successfully"),
+        (status = 404, description = "Video or label not found"),
+        (status = 401, description = "Unauthorized")
+    ),
+    tag = "Labels"
+)]
 #[post("/videos/{hash}/labels")]
 pub async fn add_video_label(
     req: HttpRequest,
@@ -518,6 +544,19 @@ pub async fn add_video_label(
     })))
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/videos/{hash}/labels/{label_id}",
+    params(
+        ("hash" = String, Path, description = "Video hash"),
+        ("label_id" = i32, Path, description = "Label ID")
+    ),
+    responses(
+        (status = 200, description = "Label removed successfully"),
+        (status = 401, description = "Unauthorized")
+    ),
+    tag = "Labels"
+)]
 #[delete("/videos/{hash}/labels/{label_id}")]
 pub async fn remove_video_label(
     req: HttpRequest,

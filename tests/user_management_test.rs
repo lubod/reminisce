@@ -13,6 +13,7 @@ fn make_user_token(user_id: &str, role: &str) -> String {
         email: "".to_string(),
         role: role.to_string(),
         exp: (chrono::Utc::now() + chrono::Duration::days(1)).timestamp() as usize,
+        scope: None,
     };
     encode(
         &Header::new(Algorithm::HS512),

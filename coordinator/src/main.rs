@@ -121,7 +121,7 @@ fn load_persisted_peers(data_dir: &std::path::Path) -> HashMap<(String, String),
 fn save_persisted_peers(peers: &PeerMap, data_dir: &std::path::Path) {
     let dir = data_dir.to_path_buf();
     let list: Vec<PersistedPeer> = {
-        let map = peers.read().unwrap();
+        let map = peers.read().unwrap_or_else(|e| e.into_inner());
         let current_secs = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -223,7 +223,7 @@ async fn handle_stream(
                 Message::Error { code: 401, message: "Identity verification failed".into() }
             } else {
                 info!("[COORD] Register: node_id={} ns={} ip={} quic_port={}", node_id, namespace, remote_ip, quic_port);
-                peers.write().unwrap().insert(
+                peers.write().unwrap_or_else(|e| e.into_inner()).insert(
                     (namespace.clone(), node_id.clone()),
                     PeerEntry { node_id, ip: remote_ip, quic_port, last_seen: Instant::now() },
                 );
@@ -270,7 +270,7 @@ async fn relay(
 
     // Try channel first (works even if target is behind NAT)
     let channel_conn = {
-        let map = channels.read().unwrap();
+        let map = channels.read().unwrap_or_else(|e| e.into_inner());
         map.get(target_node_id).cloned()
     };
 
@@ -301,7 +301,7 @@ async fn relay(
 
     // Fall back to direct connection
     let target_addr = {
-        let map = peers.read().unwrap();
+        let map = peers.read().unwrap_or_else(|e| e.into_inner());
         map.values()
             .find(|e| e.node_id == target_node_id && e.last_seen.elapsed().as_secs() < peer_ttl_secs)
             .map(|e| SocketAddr::new(e.ip, e.quic_port))
@@ -422,7 +422,7 @@ fn start_tcp_tunnel_listener(tunnel_port: u16, tunnels: TunnelMap, tls_acceptor:
 
             tokio::spawn(async move {
                 let tunnel_conn = {
-                    let map = tunnels.read().unwrap();
+                    let map = tunnels.read().unwrap_or_else(|e| e.into_inner());
                     map.values().next().cloned()
                 };
                 let tunnel_conn = match tunnel_conn {
@@ -489,7 +489,7 @@ async fn main() -> anyhow::Result<()> {
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(std::time::Duration::from_secs(30)).await;
-                let mut map = peers.write().unwrap();
+                let mut map = peers.write().unwrap_or_else(|e| e.into_inner());
                 let before = map.len();
                 map.retain(|_key, p| p.last_seen.elapsed().as_secs() < ttl);
                 let removed = before - map.len();
@@ -589,14 +589,14 @@ async fn main() -> anyhow::Result<()> {
 
                     let _ = Protocol::send(&mut first_send, &Message::TunnelAccepted).await;
                     let _ = first_send.finish();
-                    tunnels.write().unwrap().insert(node_id.clone(), conn.clone());
+                    tunnels.write().unwrap_or_else(|e| e.into_inner()).insert(node_id.clone(), conn.clone());
                     info!("[TUNNEL] Registered: {} from {}", node_id, remote_ip);
                     conn.closed().await;
                     // Only remove if this is still the same connection we registered.
                     // A reconnect may have replaced it already; removing a fresh entry
                     // would leave TunnelMap empty and break the next Android request.
                     {
-                        let mut map = tunnels.write().unwrap();
+                        let mut map = tunnels.write().unwrap_or_else(|e| e.into_inner());
                         if map.get(&node_id).map(|c| c.stable_id() == conn.stable_id()).unwrap_or(false) {
                             map.remove(&node_id);
                         }
@@ -632,10 +632,10 @@ async fn main() -> anyhow::Result<()> {
 
                     let _ = Protocol::send(&mut first_send, &Message::NodeChannelAccepted).await;
                     let _ = first_send.finish();
-                    channels.write().unwrap().insert(node_id.clone(), conn.clone());
+                    channels.write().unwrap_or_else(|e| e.into_inner()).insert(node_id.clone(), conn.clone());
                     info!("[CHANNEL] Registered: {} from {}", node_id, remote_ip);
                     conn.closed().await;
-                    channels.write().unwrap().remove(&node_id);
+                    channels.write().unwrap_or_else(|e| e.into_inner()).remove(&node_id);
                     info!("[CHANNEL] Disconnected: {}", node_id);
                 } else {
                     // ── Normal P2P connection ─────────────────────────────────

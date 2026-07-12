@@ -21,7 +21,8 @@ export interface ManagedUser {
 
 export class AuthStore {
     token: string | null = null; // Memory-only token to prevent XSS localStorage theft (H2)
-    user: User | null = JSON.parse(localStorage.getItem("user") || "null");
+    imageToken: string | null = null; // Scoped memory-only token for media/images (H2)
+    user: User | null = null;
     isAuthenticated: boolean = false;
     needsSetup: boolean = false;
     initialized: boolean = false;
@@ -40,15 +41,18 @@ export class AuthStore {
             if (this.needsSetup) {
                 this.setUser(null);
                 this.setToken(null);
+                this.setImageToken(null);
             } else {
                 // Fetch currently authenticated user session and token
                 try {
                     const meRes = await api.get("/auth/me");
                     this.setUser(meRes.data);
                     this.setToken(meRes.data.access_token);
+                    this.setImageToken(meRes.data.image_token);
                 } catch (err) {
                     this.setUser(null);
                     this.setToken(null);
+                    this.setImageToken(null);
                 }
             }
         } catch {
@@ -84,6 +88,7 @@ export class AuthStore {
         try {
             const response = await api.post("/auth/user-login", { username, password });
             this.setToken(response.data.access_token);
+            this.setImageToken(response.data.image_token);
             this.setUser(response.data.user);
             return { success: true };
         } catch (error: unknown) {
@@ -103,6 +108,7 @@ export class AuthStore {
             console.error("Logout request failed", e);
         }
         this.setToken(null);
+        this.setImageToken(null);
         this.setUser(null);
     };
 
@@ -110,11 +116,13 @@ export class AuthStore {
         this.token = token;
     };
 
+    setImageToken = (token: string | null) => {
+        this.imageToken = token;
+    };
+
     setUser = (user: User | null) => {
         this.user = user;
         this.isAuthenticated = !!user;
-        if (user) localStorage.setItem("user", JSON.stringify(user));
-        else localStorage.removeItem("user");
     };
 
     // --- User management (admin only) ---

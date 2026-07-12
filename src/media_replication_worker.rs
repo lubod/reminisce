@@ -164,6 +164,11 @@ async fn replicate_batch(
 
     let base_dir = if table == "images" { config.get_images_dir() } else { config.get_videos_dir() };
 
+    let api_secret = config.get_api_key().map_err(|e| {
+        log::error!("Replication worker: failed to retrieve API key: {}", e);
+        std::io::Error::new(std::io::ErrorKind::Other, e)
+    })?.to_string();
+
     let successes = std::sync::atomic::AtomicUsize::new(0);
 
     // Videos load entire files into memory for encryption+erasure coding; process one at a time
@@ -179,7 +184,7 @@ async fn replicate_batch(
             let nodes_owned = nodes.to_vec();
             let success_counter = &successes;
 
-            let api_secret = config.get_api_key().unwrap().to_string();
+            let api_secret_clone = api_secret.clone();
             let config_clone = config.clone();
 
             async move {
@@ -191,7 +196,7 @@ async fn replicate_batch(
                     &table_owned,
                     &nodes_owned,
                     &file,
-                    &api_secret,
+                    &api_secret_clone,
                     &config_clone,
                 ).await {
                     Ok(_) => {

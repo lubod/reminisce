@@ -7,7 +7,7 @@ import { DuplicatesLightbox } from "./DuplicatesLightbox";
 export const DuplicatesBrowser = observer(() => {
     const { duplicatesStore, authStore } = useStore();
     const isAdmin = authStore.user?.role === "admin";
-    const token = authStore.token; // passed to lightbox only
+    const token = authStore.imageToken || authStore.token; // passed to lightbox only
     const [lightboxState, setLightboxState] = useState<{ groupIdx: number; imageIdx: number } | null>(null);
 
     useEffect(() => {

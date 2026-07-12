@@ -64,7 +64,7 @@ export class DuplicatesStore {
     }
 
     private authUrl(url: string): string {
-        const token = this.rootStore.authStore.token;
+        const token = this.rootStore.authStore.imageToken || this.rootStore.authStore.token;
         if (!token) return url;
         const sep = url.includes("?") ? "&" : "?";
         return `${url}${sep}token=${token}`;

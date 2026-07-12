@@ -325,7 +325,8 @@ async fn repair_file(
 
     // Single-segment file path
     // Try re-sharding from local file if encryption key is stored
-    let file_info = find_file_info(&client, file_hash, config.get_api_key().unwrap()).await?;
+    let api_key = config.get_api_key().map_err(|e| format!("Failed to retrieve API key: {}", e))?;
+    let file_info = find_file_info(&client, file_hash, api_key).await?;
 
     match file_info {
         Some((ext, Some(key), _enc_size, data_shards, parity_shards)) => {

@@ -35,7 +35,7 @@ impl PeerRegistry {
     }
 
     pub fn upsert(&self, node_id: String, addr: SocketAddr) {
-        let mut peers = self.peers.write().unwrap();
+        let mut peers = self.peers.write().unwrap_or_else(|e| e.into_inner());
         if let Some(existing) = peers.get_mut(&node_id) {
             if is_private_ip(existing.addr.ip()) && !is_private_ip(addr.ip()) {
                 // Keep the working LAN address; only refresh last_seen so the
@@ -55,23 +55,23 @@ impl PeerRegistry {
     }
 
     pub fn remove_stale(&self, timeout_secs: u64) {
-        let mut peers = self.peers.write().unwrap();
+        let mut peers = self.peers.write().unwrap_or_else(|e| e.into_inner());
         peers.retain(|_, p| p.last_seen.elapsed().as_secs() < timeout_secs);
     }
 
     pub fn get(&self, node_id: &str) -> Option<PeerInfo> {
-        self.peers.read().unwrap().get(node_id).cloned()
+        self.peers.read().unwrap_or_else(|e| e.into_inner()).get(node_id).cloned()
     }
 
     pub fn all(&self) -> Vec<PeerInfo> {
-        self.peers.read().unwrap().values().cloned().collect()
+        self.peers.read().unwrap_or_else(|e| e.into_inner()).values().cloned().collect()
     }
 
     pub fn len(&self) -> usize {
-        self.peers.read().unwrap().len()
+        self.peers.read().unwrap_or_else(|e| e.into_inner()).len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.peers.read().unwrap().is_empty()
+        self.peers.read().unwrap_or_else(|e| e.into_inner()).is_empty()
     }
 }

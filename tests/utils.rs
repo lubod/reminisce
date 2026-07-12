@@ -65,6 +65,7 @@ pub async fn create_test_jwt_token() -> String {
         email: "test@example.com".to_string(),
         role: "admin".to_string(),
         exp: expiration_time.timestamp() as usize,
+        scope: None,
     };
     encode(
         &Header::new(Algorithm::HS512),
