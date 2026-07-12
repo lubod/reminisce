@@ -519,7 +519,7 @@ async fn replicate_large_file(
         // nonce_context includes segment index to prevent nonce reuse across segments.
         let seg_idx = segment_enc_sizes.len() as u32;
         let nonce_ctx: Vec<u8> = encryption_key.iter().chain(seg_idx.to_le_bytes().iter()).cloned().collect();
-        let (sub_shards, enc_size) = StorageEngine::process_for_backup(&buf[..n], &encryption_key, &nonce_ctx)?;
+        let (sub_shards, enc_size) = StorageEngine::process_for_backup(&buf[..n], &encryption_key, &nonce_ctx, 3, 2)?;
         segment_enc_sizes.push(enc_size as i64);
 
         for (idx, sub_shard) in sub_shards.iter().enumerate() {

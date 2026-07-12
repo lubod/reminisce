@@ -295,7 +295,7 @@ async fn repair_file(
                 if total == 0 { break; }
 
                 let nonce_ctx: Vec<u8> = key.iter().chain(seg_idx.to_le_bytes().iter()).cloned().collect();
-                let (sub_shards, _enc_size) = StorageEngine::process_for_backup(&buf[..total], &key, &nonce_ctx)?;
+                let (sub_shards, _enc_size) = StorageEngine::process_for_backup(&buf[..total], &key, &nonce_ctx, 3, 2)?;
 
                 if failed_shard_index < sub_shards.len() {
                     full_shard_data.extend_from_slice(&sub_shards[failed_shard_index]);

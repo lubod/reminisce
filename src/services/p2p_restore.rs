@@ -26,7 +26,7 @@ pub async fn restore_p2p_file(
     p2p_service: web::Data<Arc<P2PService>>,
     pool: web::Data<MainDbPool>,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let _claims = match utils::authenticate_request(&req, "restore_p2p_file", config.get_api_key()) {
+    let _claims = match utils::authenticate_request(&req, "restore_p2p_file", config.get_api_key()).await {
         Ok(c) => c,
         Err(r) => return Ok(r),
     };

@@ -27,6 +27,8 @@ struct FileRecord {
     encrypted_size: i32,
     segment_count: i32,
     segment_enc_sizes: Option<Vec<i64>>,
+    data_shards: Option<i32>,
+    parity_shards: Option<i32>,
 }
 
 /// Restore a file from P2P backup, fetching shards from peers via P2PService.
@@ -39,7 +41,8 @@ pub async fn restore_file(
     restore_file_with_fetcher(pool, file_hash, move |node_id, shard_hash| {
         let svc = svc.clone();
         async move {
-            match svc.send_message(&node_id, &Message::RetrieveShardRequest { shard_hash }).await {
+            let token = svc.identity().create_shard_token(&shard_hash);
+            match svc.send_message(&node_id, &Message::RetrieveShardRequest { shard_hash, token }).await {
                 Ok(Message::RetrieveShardResponse { data, .. }) => data,
                 _ => None,
             }
@@ -120,8 +123,11 @@ where
         ).into());
     }
 
+    let data_shards = rec.data_shards.unwrap_or(DATA_SHARDS as i32) as usize;
+    let parity_shards = rec.parity_shards.unwrap_or((TOTAL_SHARDS - DATA_SHARDS) as i32) as usize;
+
     let plaintext = if rec.segment_count <= 1 {
-        StorageEngine::restore_from_backup(full_shards, rec.encrypted_size as usize, &rec.encryption_key)
+        StorageEngine::restore_from_backup(full_shards, rec.encrypted_size as usize, &rec.encryption_key, data_shards, parity_shards)
             .map_err(|e| format!("Restore failed: {}", e))?
     } else {
         let enc_sizes = rec.segment_enc_sizes
@@ -142,7 +148,7 @@ async fn query_file_record(
 ) -> Result<Option<FileRecord>, Box<dyn std::error::Error + Send + Sync>> {
     let row = client.query_opt(
         "SELECT name, ext, p2p_encryption_key, p2p_encrypted_size, \
-         p2p_segment_count, p2p_segment_enc_sizes \
+         p2p_segment_count, p2p_segment_enc_sizes, p2p_data_shards, p2p_parity_shards \
          FROM images WHERE hash = $1 AND deleted_at IS NULL",
         &[&file_hash],
     ).await?;
@@ -157,12 +163,14 @@ async fn query_file_record(
             encrypted_size: r.get(3),
             segment_count: r.get(4),
             segment_enc_sizes: r.get(5),
+            data_shards: r.get(6),
+            parity_shards: r.get(7),
         }));
     }
 
     let row = client.query_opt(
         "SELECT name, ext, p2p_encryption_key, p2p_encrypted_size, \
-         p2p_segment_count, p2p_segment_enc_sizes \
+         p2p_segment_count, p2p_segment_enc_sizes, p2p_data_shards, p2p_parity_shards \
          FROM videos WHERE hash = $1 AND deleted_at IS NULL",
         &[&file_hash],
     ).await?;
@@ -177,6 +185,8 @@ async fn query_file_record(
             encrypted_size: r.get(3),
             segment_count: r.get(4),
             segment_enc_sizes: r.get(5),
+            data_shards: r.get(6),
+            parity_shards: r.get(7),
         }));
     }
 
@@ -202,7 +212,7 @@ pub(crate) fn restore_segmented(
             })
         }).collect();
 
-        let segment_data = StorageEngine::restore_from_backup(segment_shards, enc_size, key)
+        let segment_data = StorageEngine::restore_from_backup(segment_shards, enc_size, key, DATA_SHARDS, TOTAL_SHARDS - DATA_SHARDS)
             .map_err(|e| format!("Segment restore failed at offset {}: {}", offset, e))?;
         plaintext.extend_from_slice(&segment_data);
         offset += sub_shard_size;
@@ -229,7 +239,7 @@ mod tests {
     // --- Helper: produce shards and concatenated full_shards from segments ---
 
     fn make_shards_for_segment(data: &[u8], key: &[u8]) -> (Vec<Vec<u8>>, usize) {
-        StorageEngine::process_for_backup(data, key, key).expect("process_for_backup failed")
+        StorageEngine::process_for_backup(data, key, key, DATA_SHARDS, TOTAL_SHARDS - DATA_SHARDS).expect("process_for_backup failed")
     }
 
     /// Builds the concatenated full-shard representation the Pi stores,

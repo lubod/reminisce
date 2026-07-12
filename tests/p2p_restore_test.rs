@@ -125,7 +125,7 @@ async fn test_restore_single_segment_image_all_shards() {
 
     let key = [0xA1u8; 32];
     let original = b"small image backup test data";
-    let (shards, enc_size) = StorageEngine::process_for_backup(original, &key, &key).unwrap();
+    let (shards, enc_size) = StorageEngine::process_for_backup(original, &key, &key, 3, 2).unwrap();
 
     let hash = "restore_test_single_001";
     insert_image(&client, hash, "photo", "jpg", &key, enc_size as i32, 1, None).await;
@@ -150,7 +150,7 @@ async fn test_restore_single_segment_video() {
 
     let key = [0xA2u8; 32];
     let original = vec![0xFFu8; 512];
-    let (shards, enc_size) = StorageEngine::process_for_backup(&original, &key, &key).unwrap();
+    let (shards, enc_size) = StorageEngine::process_for_backup(&original, &key, &key, 3, 2).unwrap();
 
     let hash = "restore_test_video_001";
     insert_video(&client, hash, "clip", "mp4", &key, enc_size as i32, 1, None).await;
@@ -175,7 +175,7 @@ async fn test_restore_degraded_one_shard_missing() {
 
     let key = [0xA3u8; 32];
     let original = vec![0x55u8; 800];
-    let (shards, enc_size) = StorageEngine::process_for_backup(&original, &key, &key).unwrap();
+    let (shards, enc_size) = StorageEngine::process_for_backup(&original, &key, &key, 3, 2).unwrap();
 
     let hash = "restore_test_degraded_001";
     insert_image(&client, hash, "degraded", "png", &key, enc_size as i32, 1, None).await;
@@ -203,7 +203,7 @@ async fn test_restore_fails_with_only_two_shards() {
 
     let key = [0xA4u8; 32];
     let original = vec![0x77u8; 200];
-    let (shards, enc_size) = StorageEngine::process_for_backup(&original, &key, &key).unwrap();
+    let (shards, enc_size) = StorageEngine::process_for_backup(&original, &key, &key, 3, 2).unwrap();
 
     let hash = "restore_test_toofew_001";
     insert_image(&client, hash, "toofew", "jpg", &key, enc_size as i32, 1, None).await;
@@ -234,7 +234,7 @@ async fn test_restore_hash_mismatch_treated_as_missing() {
 
     let key = [0xA5u8; 32];
     let original = vec![0x88u8; 300];
-    let (shards, enc_size) = StorageEngine::process_for_backup(&original, &key, &key).unwrap();
+    let (shards, enc_size) = StorageEngine::process_for_backup(&original, &key, &key, 3, 2).unwrap();
 
     let hash = "restore_test_mismatch_001";
     insert_image(&client, hash, "corrupt", "jpg", &key, enc_size as i32, 1, None).await;
@@ -297,9 +297,9 @@ async fn test_restore_multi_segment_full_fetch() {
     let seg1 = vec![0x22u8; 2000];
     let seg2 = vec![0x33u8; 500];
 
-    let (s0, e0) = StorageEngine::process_for_backup(&seg0, &key, &key).unwrap();
-    let (s1, e1) = StorageEngine::process_for_backup(&seg1, &key, &key).unwrap();
-    let (s2, e2) = StorageEngine::process_for_backup(&seg2, &key, &key).unwrap();
+    let (s0, e0) = StorageEngine::process_for_backup(&seg0, &key, &key, 3, 2).unwrap();
+    let (s1, e1) = StorageEngine::process_for_backup(&seg1, &key, &key, 3, 2).unwrap();
+    let (s2, e2) = StorageEngine::process_for_backup(&seg2, &key, &key, 3, 2).unwrap();
 
     // Concatenate sub-shards to form full Pi shards
     let enc_sizes = [e0 as i64, e1 as i64, e2 as i64];
@@ -346,8 +346,8 @@ async fn test_restore_multi_segment_one_shard_missing() {
     let seg0 = vec![0xAAu8; 600];
     let seg1 = vec![0xBBu8; 400];
 
-    let (s0, e0) = StorageEngine::process_for_backup(&seg0, &key, &key).unwrap();
-    let (s1, e1) = StorageEngine::process_for_backup(&seg1, &key, &key).unwrap();
+    let (s0, e0) = StorageEngine::process_for_backup(&seg0, &key, &key, 3, 2).unwrap();
+    let (s1, e1) = StorageEngine::process_for_backup(&seg1, &key, &key, 3, 2).unwrap();
 
     let enc_sizes = [e0 as i64, e1 as i64];
     let full_shards: Vec<Vec<u8>> = (0..5).map(|i| {

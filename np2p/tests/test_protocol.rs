@@ -3,6 +3,7 @@
 /// Message variant survives a round-trip through bincode and that the length
 /// prefix framing never produces corrupt frames.
 use np2p::network::protocol::Message;
+use np2p::crypto::ShardToken;
 
 fn roundtrip(msg: &Message) -> Message {
     let bytes = bincode::serialize(msg).expect("serialize");
@@ -36,11 +37,17 @@ fn rt_handshake_ack() {
 fn rt_store_shard_request() {
     let payload = vec![1u8, 2, 3, 4, 5];
     let hash = [0x22u8; 32];
-    let msg = Message::StoreShardRequest { shard_hash: hash, data: payload.clone() };
+    let token = ShardToken {
+        owner_node_id: [0u8; 32],
+        timestamp: 0,
+        signature: vec![],
+    };
+    let msg = Message::StoreShardRequest { shard_hash: hash, data: payload.clone(), token: token.clone() };
     let rt = roundtrip(&msg);
-    if let Message::StoreShardRequest { shard_hash, data } = rt {
+    if let Message::StoreShardRequest { shard_hash, data, token: t } = rt {
         assert_eq!(shard_hash, hash);
         assert_eq!(data, payload);
+        assert_eq!(t.owner_node_id, token.owner_node_id);
     } else { panic!("wrong variant"); }
 }
 
@@ -55,10 +62,16 @@ fn rt_store_shard_response_success() {
 
 #[test]
 fn rt_retrieve_shard_request() {
-    let msg = Message::RetrieveShardRequest { shard_hash: [0x33u8; 32] };
+    let token = ShardToken {
+        owner_node_id: [0u8; 32],
+        timestamp: 0,
+        signature: vec![],
+    };
+    let msg = Message::RetrieveShardRequest { shard_hash: [0x33u8; 32], token: token.clone() };
     let rt = roundtrip(&msg);
-    if let Message::RetrieveShardRequest { shard_hash } = rt {
+    if let Message::RetrieveShardRequest { shard_hash, token: t } = rt {
         assert_eq!(shard_hash, [0x33u8; 32]);
+        assert_eq!(t.owner_node_id, token.owner_node_id);
     } else { panic!("wrong variant"); }
 }
 

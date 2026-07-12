@@ -87,19 +87,23 @@ async fn test_find_file_info_returns_image_data() {
 
     let uid = Uuid::parse_str(TEST_USER_ID).unwrap();
     let hash = "rebalance_find_img_001";
-    let key = vec![0xA1u8; 32];
+    let key = [0xA1u8; 32];
+    let api_secret = "test_secret_key_which_is_at_least_32_bytes_long";
+    let encrypted_key = reminisce::utils::encrypt_key(&key, api_secret);
     client.execute(
         "INSERT INTO images (user_id, deviceid, hash, name, ext, type, has_thumbnail, p2p_synced_at, p2p_encryption_key, p2p_encrypted_size)
          VALUES ($1, 'test', $2, $3, 'png', 'camera', false, NOW(), $4, 512)",
-        &[&uid, &hash, &format!("{}.png", hash), &key],
+        &[&uid, &hash, &format!("{}.png", hash), &encrypted_key],
     ).await.unwrap();
 
-    let info = find_file_info(&client, hash).await.expect("query should succeed");
+    let info = find_file_info(&client, hash, api_secret).await.expect("query should succeed");
     assert!(info.is_some(), "file info should be found");
-    let (ext, enc_key, enc_size) = info.unwrap();
+    let (ext, enc_key, enc_size, data_shards, parity_shards) = info.unwrap();
     assert_eq!(ext, "png");
-    assert_eq!(enc_key, Some(key));
+    assert_eq!(enc_key, Some(key.to_vec()));
     assert_eq!(enc_size, Some(512));
+    assert_eq!(data_shards, 3);
+    assert_eq!(parity_shards, 2);
 }
 
 #[tokio::test]
@@ -110,16 +114,18 @@ async fn test_find_file_info_returns_video_data() {
 
     let uid = Uuid::parse_str(TEST_USER_ID).unwrap();
     let hash = "rebalance_find_vid_001";
-    let key = vec![0xB2u8; 32];
+    let key = [0xB2u8; 32];
+    let api_secret = "test_secret_key_which_is_at_least_32_bytes_long";
+    let encrypted_key = reminisce::utils::encrypt_key(&key, api_secret);
     client.execute(
         "INSERT INTO videos (user_id, deviceid, hash, name, ext, type, has_thumbnail, p2p_synced_at, p2p_encryption_key, p2p_encrypted_size)
          VALUES ($1, 'test', $2, $3, 'mp4', 'camera', false, NOW(), $4, 1024)",
-        &[&uid, &hash, &format!("{}.mp4", hash), &key],
+        &[&uid, &hash, &format!("{}.mp4", hash), &encrypted_key],
     ).await.unwrap();
 
-    let info = find_file_info(&client, hash).await.expect("query should succeed");
+    let info = find_file_info(&client, hash, api_secret).await.expect("query should succeed");
     assert!(info.is_some());
-    let (ext, _, enc_size) = info.unwrap();
+    let (ext, _, enc_size, _, _) = info.unwrap();
     assert_eq!(ext, "mp4");
     assert_eq!(enc_size, Some(1024));
 }
@@ -130,7 +136,8 @@ async fn test_find_file_info_returns_none_for_unknown_hash() {
     let (pool, _db) = setup_test_database_with_instance().await;
     let client = pool.get().await.unwrap();
 
-    let info = find_file_info(&client, "no_such_hash_xyz").await.expect("query should not fail");
+    let api_secret = "test_secret_key_which_is_at_least_32_bytes_long";
+    let info = find_file_info(&client, "no_such_hash_xyz", api_secret).await.expect("query should not fail");
     assert!(info.is_none());
 }
 
@@ -148,9 +155,10 @@ async fn test_find_file_info_returns_none_key_when_key_is_null() {
         &[&uid, &hash, &format!("{}.jpg", hash)],
     ).await.unwrap();
 
-    let info = find_file_info(&client, hash).await.expect("query should not fail");
+    let api_secret = "test_secret_key_which_is_at_least_32_bytes_long";
+    let info = find_file_info(&client, hash, api_secret).await.expect("query should not fail");
     assert!(info.is_some());
-    let (_, enc_key, _) = info.unwrap();
+    let (_, enc_key, _, _, _) = info.unwrap();
     assert!(enc_key.is_none(), "key should be None when not set");
 }
 
