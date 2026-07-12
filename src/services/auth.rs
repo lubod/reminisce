@@ -101,7 +101,8 @@ impl FromRequest for Claims {
                         || path.starts_with("/api/media/")
                         || path.starts_with("/api/images/")
                         || path.starts_with("/api/videos/")
-                        || path.starts_with("/api/faces/");
+                        || path.starts_with("/api/faces/")
+                        || path.starts_with("/api/thumbnail/");
                     if !is_get || !is_media_path {
                         return Err(actix_web::error::ErrorForbidden("Token is restricted to media read access only"));
                     }
@@ -379,10 +380,18 @@ pub async fn user_login(
                 scope: None,
             };
 
+            let api_key = match config.get_api_key() {
+                Ok(k) => k,
+                Err(e) => return HttpResponse::InternalServerError().json(serde_json::json!({
+                    "status": "error",
+                    "message": format!("Configuration error: {}", e)
+                })),
+            };
+
             let token = encode(
                 &Header::new(Algorithm::HS512),
                 &claims,
-                &EncodingKey::from_secret(config.get_api_key().unwrap().as_bytes())
+                &EncodingKey::from_secret(api_key.as_bytes())
             );
 
             match token {
@@ -421,7 +430,7 @@ pub async fn user_login(
                     let image_token = encode(
                         &Header::new(Algorithm::HS512),
                         &image_claims,
-                        &EncodingKey::from_secret(config.get_api_key().unwrap().as_bytes())
+                        &EncodingKey::from_secret(api_key.as_bytes())
                     ).unwrap_or_default();
 
                     let mut response = HttpResponse::Ok();
@@ -533,10 +542,18 @@ pub async fn get_me(req: HttpRequest, claims: Claims) -> HttpResponse {
         scope: Some("media_read".to_string()),
     };
 
+    let api_key = match config.get_api_key() {
+        Ok(k) => k,
+        Err(e) => return HttpResponse::InternalServerError().json(serde_json::json!({
+            "status": "error",
+            "message": format!("Configuration error: {}", e)
+        })),
+    };
+
     let image_token = encode(
         &Header::new(Algorithm::HS512),
         &image_claims,
-        &EncodingKey::from_secret(config.get_api_key().unwrap().as_bytes())
+        &EncodingKey::from_secret(api_key.as_bytes())
     ).unwrap_or_default();
 
     HttpResponse::Ok().json(serde_json::json!({

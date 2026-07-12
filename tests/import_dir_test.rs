@@ -1,4 +1,4 @@
-use actix_web::dev::{Service, ServiceResponse};
+
 use actix_web::{http, test, web, App};
 use reminisce::services::import_dir::{import_directory, get_import_status, ImportJobStore};
 use reminisce::test_utils::setup_test_database_with_instance;
