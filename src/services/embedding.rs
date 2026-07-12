@@ -96,7 +96,7 @@ pub async fn search_images(
     pool: web::Data<MainDbPool>,
     config: web::Data<Config>,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let claims = match utils::authenticate_request(&req, "search_images", config.get_api_key()) {
+    let claims = match utils::authenticate_request(&req, "search_images", config.get_api_key()).await {
         Ok(claims) => claims,
         Err(response) => return Ok(response),
     };

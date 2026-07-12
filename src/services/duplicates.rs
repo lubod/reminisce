@@ -204,7 +204,7 @@ pub async fn get_duplicates(
     pool: web::Data<MainDbPool>,
     config: web::Data<Config>,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let claims = match utils::authenticate_request(&req, "get_duplicates", config.get_api_key()) {
+    let claims = match utils::authenticate_request(&req, "get_duplicates", config.get_api_key()).await {
         Ok(c) => c,
         Err(r) => return Ok(r),
     };
@@ -286,7 +286,7 @@ pub async fn get_duplicate_status(
     config: web::Data<Config>,
     status: web::Data<SharedDuplicateStatus>,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let _ = match utils::authenticate_request(&req, "get_duplicate_status", config.get_api_key()) {
+    let _ = match utils::authenticate_request(&req, "get_duplicate_status", config.get_api_key()).await {
         Ok(c) => c,
         Err(r) => return Ok(r),
     };
@@ -317,7 +317,7 @@ pub async fn trigger_duplicate_scan(
     pool: web::Data<MainDbPool>,
     config: web::Data<Config>,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let claims = match utils::authenticate_request(&req, "trigger_duplicate_scan", config.get_api_key()) {
+    let claims = match utils::authenticate_request(&req, "trigger_duplicate_scan", config.get_api_key()).await {
         Ok(c) => c,
         Err(r) => return Ok(r),
     };

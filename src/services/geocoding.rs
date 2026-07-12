@@ -159,7 +159,7 @@ pub async fn search_places(
     config: web::Data<Config>,
 ) -> Result<HttpResponse, actix_web::Error> {
     // Authenticate request
-    let _claims = match utils::authenticate_request(&req, "search_places", config.get_api_key()) {
+    let _claims = match utils::authenticate_request(&req, "search_places", config.get_api_key()).await {
         Ok(claims) => claims,
         Err(response) => return Ok(response),
     };

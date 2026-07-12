@@ -109,7 +109,7 @@ pub async fn get_ai_settings(
     pool: web::Data<MainDbPool>,
     config: web::Data<Config>,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let claims = match utils::authenticate_request(&req, "get_ai_settings", config.get_api_key()) {
+    let claims = match utils::authenticate_request(&req, "get_ai_settings", config.get_api_key()).await {
         Ok(claims) => claims,
         Err(response) => return Ok(response),
     };
@@ -208,7 +208,7 @@ pub async fn update_ai_settings(
     config: web::Data<Config>,
     req: web::Json<UpdateAiSettingsRequest>,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let claims = match utils::authenticate_request(&http_req, "update_ai_settings", config.get_api_key()) {
+    let claims = match utils::authenticate_request(&http_req, "update_ai_settings", config.get_api_key()).await {
         Ok(claims) => claims,
         Err(response) => return Ok(response),
     };

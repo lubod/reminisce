@@ -32,7 +32,7 @@ pub async fn get_p2p_backup_status(
     p2p_service: web::Data<Arc<P2PService>>,
     pool: web::Data<MainDbPool>,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let _claims = match utils::authenticate_request(&req, "get_p2p_backup_status", config.get_api_key()) {
+    let _claims = match utils::authenticate_request(&req, "get_p2p_backup_status", config.get_api_key()).await {
         Ok(claims) => claims,
         Err(response) => return Ok(response),
     };
@@ -78,7 +78,7 @@ pub async fn get_p2p_connection_info(
     config: web::Data<Config>,
     p2p_service: web::Data<Arc<P2PService>>,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let _claims = match utils::authenticate_request(&req, "get_p2p_connection_info", config.get_api_key()) {
+    let _claims = match utils::authenticate_request(&req, "get_p2p_connection_info", config.get_api_key()).await {
         Ok(claims) => claims,
         Err(response) => return Ok(response),
     };
@@ -130,7 +130,7 @@ pub async fn get_discovered_peers(
     p2p_service: web::Data<Arc<P2PService>>,
     pool: web::Data<MainDbPool>,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let _claims = match utils::authenticate_request(&req, "get_discovered_peers", config.get_api_key()) {
+    let _claims = match utils::authenticate_request(&req, "get_discovered_peers", config.get_api_key()).await {
         Ok(claims) => claims,
         Err(response) => return Ok(response),
     };
@@ -212,7 +212,7 @@ pub async fn verify_p2p_backup(
     config: web::Data<Config>,
     pool: web::Data<MainDbPool>,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let _claims = match utils::authenticate_request(&req, "verify_p2p_backup", config.get_api_key()) {
+    let _claims = match utils::authenticate_request(&req, "verify_p2p_backup", config.get_api_key()).await {
         Ok(claims) => claims,
         Err(response) => return Ok(response),
     };
@@ -365,7 +365,7 @@ pub async fn remove_p2p_node(
     pool: web::Data<MainDbPool>,
     p2p_service: web::Data<Arc<P2PService>>,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let claims = match utils::authenticate_request(&req, "remove_p2p_node", config.get_api_key()) {
+    let claims = match utils::authenticate_request(&req, "remove_p2p_node", config.get_api_key()).await {
         Ok(c) => c,
         Err(r) => return Ok(r),
     };
@@ -429,7 +429,7 @@ pub async fn trigger_rebalance(
     pool: web::Data<MainDbPool>,
     p2p_service: web::Data<Arc<P2PService>>,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let claims = match utils::authenticate_request(&req, "trigger_rebalance", config.get_api_key()) {
+    let claims = match utils::authenticate_request(&req, "trigger_rebalance", config.get_api_key()).await {
         Ok(c) => c,
         Err(r) => return Ok(r),
     };

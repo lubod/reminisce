@@ -93,7 +93,7 @@ pub async fn get_system_stats(
     config: web::Data<Config>,
     shared_sys: web::Data<SharedSystem>,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let claims = match utils::authenticate_request(&req, "get_system_stats", config.get_api_key()) {
+    let claims = match utils::authenticate_request(&req, "get_system_stats", config.get_api_key()).await {
         Ok(claims) => claims,
         Err(response) => return Ok(response),
     };
@@ -196,7 +196,7 @@ pub async fn get_p2p_daemon_status(
     p2p_service: web::Data<Arc<P2PService>>,
     pool: web::Data<MainDbPool>,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let claims = match utils::authenticate_request(&req, "get_p2p_daemon_status", config.get_api_key()) {
+    let claims = match utils::authenticate_request(&req, "get_p2p_daemon_status", config.get_api_key()).await {
         Ok(claims) => claims,
         Err(response) => return Ok(response),
     };

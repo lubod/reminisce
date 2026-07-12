@@ -39,7 +39,7 @@ pub async fn get_face_thumbnail(
             &req,
             "get_face_thumbnail",
             config.get_api_key()
-        )
+        ).await
     {
         Ok(claims) => claims,
         Err(response) => {
@@ -443,7 +443,7 @@ async fn list_media_thumbnails(
     req_type: &str, // "images" or "videos"
 ) -> Result<HttpResponse, actix_web::Error> {
     let claims = match
-        utils::authenticate_request(&req, &format!("list_{}_thumbnails", req_type), config.get_api_key())
+        utils::authenticate_request(&req, &format!("list_{}_thumbnails", req_type), config.get_api_key()).await
     {
         Ok(claims) => claims,
         Err(response) => {
@@ -603,7 +603,7 @@ pub async fn get_thumbnail(
         &req,
         "get_thumbnail",
         config.get_api_key()
-    ) {
+    ).await {
         Ok(claims) => claims,
         Err(response) => return Ok(response),
     };

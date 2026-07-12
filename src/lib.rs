@@ -70,7 +70,7 @@ async fn metrics_handler(
     req: actix_web::HttpRequest,
     config: web::Data<Config>,
 ) -> Result<HttpResponse, actix_web::Error> {
-    if let Err(response) = crate::auth_utils::authenticate_request(&req, "metrics", config.get_api_key()) {
+    if let Err(response) = crate::auth_utils::authenticate_request(&req, "metrics", config.get_api_key()).await {
         return Ok(response);
     }
 

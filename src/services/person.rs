@@ -94,7 +94,7 @@ pub async fn get_persons(
     config: web::Data<Config>,
     query: web::Query<PersonQuery>,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let claims = match utils::authenticate_request(&req, "get_persons", config.get_api_key()) {
+    let claims = match utils::authenticate_request(&req, "get_persons", config.get_api_key()).await {
         Ok(claims) => claims,
         Err(response) => return Ok(response),
     };
@@ -189,7 +189,7 @@ pub async fn get_person(
     pool: web::Data<MainDbPool>,
     config: web::Data<Config>,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let claims = match utils::authenticate_request(&req, "get_person", config.get_api_key()) {
+    let claims = match utils::authenticate_request(&req, "get_person", config.get_api_key()).await {
         Ok(claims) => claims,
         Err(response) => return Ok(response),
     };
@@ -279,7 +279,7 @@ pub async fn get_person_images(
     pool: web::Data<MainDbPool>,
     config: web::Data<Config>,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let claims = match utils::authenticate_request(&req, "get_person_images", config.get_api_key()) {
+    let claims = match utils::authenticate_request(&req, "get_person_images", config.get_api_key()).await {
         Ok(claims) => claims,
         Err(response) => return Ok(response),
     };
@@ -384,7 +384,7 @@ pub async fn update_person_name(
     pool: web::Data<MainDbPool>,
     config: web::Data<Config>,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let claims = match utils::authenticate_request(&req, "update_person_name", config.get_api_key()) {
+    let claims = match utils::authenticate_request(&req, "update_person_name", config.get_api_key()).await {
         Ok(claims) => claims,
         Err(response) => return Ok(response),
     };
@@ -453,7 +453,7 @@ pub async fn set_representative_face(
     pool: web::Data<MainDbPool>,
     config: web::Data<Config>,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let claims = match utils::authenticate_request(&req, "set_representative_face", config.get_api_key()) {
+    let claims = match utils::authenticate_request(&req, "set_representative_face", config.get_api_key()).await {
         Ok(claims) => claims,
         Err(response) => return Ok(response),
     };
@@ -514,7 +514,7 @@ pub async fn merge_persons(
     pool: web::Data<MainDbPool>,
     config: web::Data<Config>,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let claims = match utils::authenticate_request(&req, "merge_persons", config.get_api_key()) {
+    let claims = match utils::authenticate_request(&req, "merge_persons", config.get_api_key()).await {
         Ok(claims) => claims,
         Err(response) => return Ok(response),
     };

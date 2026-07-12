@@ -38,7 +38,7 @@ pub async fn get_geodb_stats(
     pool: web::Data<GeotaggingDbPool>,
     config: web::Data<Config>
 ) -> Result<HttpResponse, actix_web::Error> {
-    let claims = match utils::authenticate_request(&req, "get_geodb_stats", config.get_api_key()) {
+    let claims = match utils::authenticate_request(&req, "get_geodb_stats", config.get_api_key()).await {
         Ok(claims) => claims,
         Err(response) => return Ok(response),
     };

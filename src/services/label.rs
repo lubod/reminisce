@@ -56,7 +56,7 @@ pub async fn get_labels(
     pool: web::Data<MainDbPool>,
     config: web::Data<Config>,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let claims = match utils::authenticate_request(&req, "get_labels", config.get_api_key()) {
+    let claims = match utils::authenticate_request(&req, "get_labels", config.get_api_key()).await {
         Ok(claims) => claims,
         Err(response) => return Ok(response),
     };
@@ -108,7 +108,7 @@ pub async fn create_label(
     config: web::Data<Config>,
     body: web::Json<CreateLabelRequest>,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let claims = match utils::authenticate_request(&req, "create_label", config.get_api_key()) {
+    let claims = match utils::authenticate_request(&req, "create_label", config.get_api_key()).await {
         Ok(claims) => claims,
         Err(response) => return Ok(response),
     };
@@ -166,7 +166,7 @@ pub async fn delete_label(
     config: web::Data<Config>,
     path: web::Path<i32>,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let claims = match utils::authenticate_request(&req, "delete_label", config.get_api_key()) {
+    let claims = match utils::authenticate_request(&req, "delete_label", config.get_api_key()).await {
         Ok(claims) => claims,
         Err(response) => return Ok(response),
     };
@@ -219,7 +219,7 @@ pub async fn get_image_labels(
     config: web::Data<Config>,
     path: web::Path<String>,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let claims = match utils::authenticate_request(&req, "get_image_labels", config.get_api_key()) {
+    let claims = match utils::authenticate_request(&req, "get_image_labels", config.get_api_key()).await {
         Ok(claims) => claims,
         Err(response) => return Ok(response),
     };
@@ -280,7 +280,7 @@ pub async fn add_image_label(
     path: web::Path<String>,
     body: web::Json<AddLabelToMediaRequest>,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let claims = match utils::authenticate_request(&req, "add_image_label", config.get_api_key()) {
+    let claims = match utils::authenticate_request(&req, "add_image_label", config.get_api_key()).await {
         Ok(claims) => claims,
         Err(response) => return Ok(response),
     };
@@ -368,7 +368,7 @@ pub async fn remove_image_label(
     config: web::Data<Config>,
     path: web::Path<(String, i32)>,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let claims = match utils::authenticate_request(&req, "remove_image_label", config.get_api_key()) {
+    let claims = match utils::authenticate_request(&req, "remove_image_label", config.get_api_key()).await {
         Ok(claims) => claims,
         Err(response) => return Ok(response),
     };
@@ -403,7 +403,7 @@ pub async fn get_video_labels(
     config: web::Data<Config>,
     path: web::Path<String>,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let claims = match utils::authenticate_request(&req, "get_video_labels", config.get_api_key()) {
+    let claims = match utils::authenticate_request(&req, "get_video_labels", config.get_api_key()).await {
         Ok(claims) => claims,
         Err(response) => return Ok(response),
     };
@@ -450,7 +450,7 @@ pub async fn add_video_label(
     path: web::Path<String>,
     body: web::Json<AddLabelToMediaRequest>,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let claims = match utils::authenticate_request(&req, "add_video_label", config.get_api_key()) {
+    let claims = match utils::authenticate_request(&req, "add_video_label", config.get_api_key()).await {
         Ok(claims) => claims,
         Err(response) => return Ok(response),
     };
@@ -525,7 +525,7 @@ pub async fn remove_video_label(
     config: web::Data<Config>,
     path: web::Path<(String, i32)>,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let claims = match utils::authenticate_request(&req, "remove_video_label", config.get_api_key()) {
+    let claims = match utils::authenticate_request(&req, "remove_video_label", config.get_api_key()).await {
         Ok(claims) => claims,
         Err(response) => return Ok(response),
     };

@@ -119,7 +119,7 @@ fn load_persisted_peers(data_dir: &std::path::Path) -> HashMap<(String, String),
 }
 
 fn save_persisted_peers(peers: &PeerMap, data_dir: &std::path::Path) {
-    let path = data_dir.join("peers.json");
+    let path = data_dir.to_path_buf();
     let list: Vec<PersistedPeer> = {
         let map = peers.read().unwrap();
         let current_secs = std::time::SystemTime::now()
@@ -141,25 +141,28 @@ fn save_persisted_peers(peers: &PeerMap, data_dir: &std::path::Path) {
     };
 
     let temp_name = format!("peers.{}.tmp", rand::random::<u64>());
-    let temp_path = data_dir.join(temp_name);
+    let temp_path = path.join(temp_name);
+    let target_path = path.join("peers.json");
 
-    let write_ok = if let Ok(file) = std::fs::File::create(&temp_path) {
-        if let Err(e) = serde_json::to_writer_pretty(file, &list) {
-            warn!("[COORD] Failed to write temp peers file: {}", e);
-            false
+    tokio::task::spawn_blocking(move || {
+        let write_ok = if let Ok(file) = std::fs::File::create(&temp_path) {
+            if let Err(e) = serde_json::to_writer_pretty(file, &list) {
+                warn!("[COORD] Failed to write temp peers file: {}", e);
+                false
+            } else {
+                true
+            }
         } else {
-            true
-        }
-    } else {
-        false
-    };
+            false
+        };
 
-    if write_ok {
-        if let Err(e) = std::fs::rename(&temp_path, &path) {
-            warn!("[COORD] Failed to rename temp peers file to peers.json: {}", e);
-            let _ = std::fs::remove_file(&temp_path);
+        if write_ok {
+            if let Err(e) = std::fs::rename(&temp_path, &target_path) {
+                warn!("[COORD] Failed to rename temp peers file to peers.json: {}", e);
+                let _ = std::fs::remove_file(&temp_path);
+            }
         }
-    }
+    });
 }
 
 fn current_peer_list(peers: &PeerMap, namespace: &str, ttl: u64) -> Vec<(String, String)> {

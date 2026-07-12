@@ -17,9 +17,12 @@ pub async fn ping() -> impl Responder {
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct HealthCheckResponse {
     pub status: String,
-    pub database: String,
-    pub geotagging_database: String,
-    pub ai_service: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub database: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub geotagging_database: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ai_service: Option<String>,
     pub timestamp: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub backup: Option<serde_json::Value>,
@@ -27,7 +30,7 @@ pub struct HealthCheckResponse {
 
 #[utoipa::path(
     get,
-    path = "/health",
+    path = "/api/health",
     responses(
         (status = 200, description = "Service is healthy", body = HealthCheckResponse),
         (status = 503, description = "Service is unhealthy", body = HealthCheckResponse)
@@ -36,10 +39,17 @@ pub struct HealthCheckResponse {
 )]
 #[get("/health")]
 pub async fn health_check(
+    req: actix_web::HttpRequest,
     main_pool: web::Data<MainDbPool>,
     geo_pool: web::Data<GeotaggingDbPool>,
     config: web::Data<Config>,
 ) -> impl Responder {
+    // Check if the requester is authenticated as admin
+    let is_admin = match crate::auth_utils::authenticate_request(&req, "health_check", config.get_api_key()).await {
+        Ok(claims) => claims.role == "admin",
+        Err(_) => false,
+    };
+
     let database = match main_pool.0.get().await {
         Ok(c) => match c.query_one("SELECT 1", &[]).await {
             Ok(_) => "connected".to_string(),
@@ -92,13 +102,24 @@ pub async fn health_check(
         && geotagging_database == "connected"
         && ai_service == "connected";
 
-    let body = HealthCheckResponse {
-        status: if healthy { "healthy" } else { "unhealthy" }.to_string(),
-        database,
-        geotagging_database,
-        ai_service,
-        timestamp: chrono::Utc::now().to_rfc3339(),
-        backup: None,
+    let body = if is_admin {
+        HealthCheckResponse {
+            status: if healthy { "healthy" } else { "unhealthy" }.to_string(),
+            database: Some(database),
+            geotagging_database: Some(geotagging_database),
+            ai_service: Some(ai_service),
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            backup: None,
+        }
+    } else {
+        HealthCheckResponse {
+            status: if healthy { "healthy" } else { "unhealthy" }.to_string(),
+            database: None,
+            geotagging_database: None,
+            ai_service: None,
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            backup: None,
+        }
     };
 
     if healthy {

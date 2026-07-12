@@ -63,7 +63,7 @@ pub async fn check_image_exists(
     config: web::Data<Config>
 ) -> HttpResponse {
     let claims = match
-        utils::authenticate_request(&req, "check_image_exists", config.get_api_key())
+        utils::authenticate_request(&req, "check_image_exists", config.get_api_key()).await
     {
         Ok(claims) => claims,
         Err(response) => {
@@ -109,7 +109,7 @@ pub async fn check_video_exists(
     config: web::Data<Config>
 ) -> HttpResponse {
     let claims = match
-        utils::authenticate_request(&req, "check_video_exists", config.get_api_key())
+        utils::authenticate_request(&req, "check_video_exists", config.get_api_key()).await
     {
         Ok(claims) => claims,
         Err(response) => {

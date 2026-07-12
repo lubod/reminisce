@@ -60,7 +60,7 @@ pub async fn ensure_user_exists(
 
 /// Authenticates a request by checking for a valid JWT in the Authorization header or
 /// `token` query parameter. Returns the decoded claims on success.
-pub fn authenticate_request(
+pub async fn authenticate_request(
     req: &HttpRequest,
     handler_name: &str,
     api_secret_env: Result<&str, &'static str>,
@@ -110,7 +110,47 @@ pub fn authenticate_request(
         ) {
             Ok(token_data) => {
                 log::debug!("JWT token validated successfully for {}.", handler_name);
-                return Ok(token_data.claims);
+                let claims = token_data.claims;
+                let user_uuid = match uuid::Uuid::parse_str(&claims.user_id) {
+                    Ok(u) => u,
+                    Err(_) => return Err(HttpResponse::Unauthorized().json(serde_json::json!({"error": "Invalid user ID in token"}))),
+                };
+
+                if let Some(pool) = req.app_data::<web::Data<crate::db::MainDbPool>>() {
+                    let client = match pool.0.get().await {
+                        Ok(c) => c,
+                        Err(e) => {
+                            log::error!("authenticate_request DB connection error: {:?}", e);
+                            return Err(HttpResponse::InternalServerError().json(serde_json::json!({"error": "Database connection failed"})));
+                        }
+                    };
+
+                    let row = match client.query_opt(
+                        "SELECT role, is_active FROM users WHERE id = $1",
+                        &[&user_uuid]
+                    ).await {
+                        Ok(r) => r,
+                        Err(e) => {
+                            log::error!("authenticate_request DB query error: {:?}", e);
+                            return Err(HttpResponse::InternalServerError().json(serde_json::json!({"error": "Database error"})));
+                        }
+                    };
+
+                    if let Some(row) = row {
+                        let is_active: bool = row.get("is_active");
+                        if !is_active {
+                            return Err(HttpResponse::Unauthorized().json(serde_json::json!({"error": "Account is disabled"})));
+                        }
+                        let mut claims_updated = claims;
+                        claims_updated.role = row.get("role");
+                        return Ok(claims_updated);
+                    } else {
+                        return Err(HttpResponse::Unauthorized().json(serde_json::json!({"error": "User not found"})));
+                    }
+                } else {
+                    log::error!("MainDbPool app data is missing in authenticate_request");
+                    return Err(HttpResponse::InternalServerError().json(serde_json::json!({"error": "Database configuration error"})));
+                }
             }
             Err(e) => {
                 warn!("JWT validation failed for {}: {:?}", handler_name, e);

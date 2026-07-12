@@ -30,7 +30,7 @@ pub async fn get_image(
     pool: web::Data<MainDbPool>,
     config: web::Data<Config>,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let claims = match utils::authenticate_request(&req, "get_image", config.get_api_key()) {
+    let claims = match utils::authenticate_request(&req, "get_image", config.get_api_key()).await {
         Ok(claims) => claims,
         Err(response) => return Ok(response),
     };
@@ -131,7 +131,7 @@ pub async fn get_video(
     pool: web::Data<MainDbPool>,
     config: web::Data<Config>,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let claims = match utils::authenticate_request(&req, "get_video", config.get_api_key()) {
+    let claims = match utils::authenticate_request(&req, "get_video", config.get_api_key()).await {
         Ok(claims) => claims,
         Err(response) => return Ok(response),
     };
@@ -229,7 +229,7 @@ pub async fn get_image_metadata(
     pool: web::Data<MainDbPool>,
     config: web::Data<Config>
 ) -> Result<HttpResponse, actix_web::Error> {
-    let claims = match utils::authenticate_request(&req, "get_image_metadata", config.get_api_key()) {
+    let claims = match utils::authenticate_request(&req, "get_image_metadata", config.get_api_key()).await {
         Ok(claims) => claims,
         Err(response) => return Ok(response),
     };
@@ -388,7 +388,7 @@ pub async fn toggle_image_star(
     pool: web::Data<MainDbPool>,
     config: web::Data<Config>
 ) -> Result<HttpResponse, actix_web::Error> {
-    let claims = match utils::authenticate_request(&req, "toggle_image_star", config.get_api_key()) {
+    let claims = match utils::authenticate_request(&req, "toggle_image_star", config.get_api_key()).await {
         Ok(claims) => claims,
         Err(response) => return Ok(response),
     };
@@ -416,7 +416,7 @@ pub async fn toggle_video_star(
     pool: web::Data<MainDbPool>,
     config: web::Data<Config>
 ) -> Result<HttpResponse, actix_web::Error> {
-    let claims = match utils::authenticate_request(&req, "toggle_video_star", config.get_api_key()) {
+    let claims = match utils::authenticate_request(&req, "toggle_video_star", config.get_api_key()).await {
         Ok(claims) => claims,
         Err(response) => return Ok(response),
     };
@@ -448,7 +448,7 @@ pub async fn get_device_ids(
     pool: web::Data<MainDbPool>,
     config: web::Data<Config>
 ) -> Result<HttpResponse, actix_web::Error> {
-    let claims = match utils::authenticate_request(&req, "get_device_ids", config.get_api_key()) {
+    let claims = match utils::authenticate_request(&req, "get_device_ids", config.get_api_key()).await {
         Ok(claims) => claims,
         Err(response) => return Ok(response),
     };
@@ -522,7 +522,7 @@ pub async fn get_random_image(
     pool: web::Data<MainDbPool>,
     config: web::Data<Config>
 ) -> Result<HttpResponse, actix_web::Error> {
-    let claims = match utils::authenticate_request(&req, "get_random_image", config.get_api_key()) {
+    let claims = match utils::authenticate_request(&req, "get_random_image", config.get_api_key()).await {
         Ok(claims) => claims,
         Err(response) => return Ok(response),
     };
@@ -614,7 +614,7 @@ pub async fn get_trash(
     pool: web::Data<MainDbPool>,
     config: web::Data<Config>,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let claims = match utils::authenticate_request(&req, "get_trash", config.get_api_key()) {
+    let claims = match utils::authenticate_request(&req, "get_trash", config.get_api_key()).await {
         Ok(claims) => claims,
         Err(response) => return Ok(response),
     };
@@ -702,7 +702,7 @@ pub async fn restore_image(
     pool: web::Data<MainDbPool>,
     config: web::Data<Config>,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let claims = match utils::authenticate_request(&req, "restore_image", config.get_api_key()) {
+    let claims = match utils::authenticate_request(&req, "restore_image", config.get_api_key()).await {
         Ok(claims) => claims,
         Err(response) => return Ok(response),
     };
@@ -729,7 +729,7 @@ pub async fn restore_video(
     pool: web::Data<MainDbPool>,
     config: web::Data<Config>,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let claims = match utils::authenticate_request(&req, "restore_video", config.get_api_key()) {
+    let claims = match utils::authenticate_request(&req, "restore_video", config.get_api_key()).await {
         Ok(claims) => claims,
         Err(response) => return Ok(response),
     };
@@ -788,7 +788,7 @@ pub async fn delete_image(
     pool: web::Data<MainDbPool>,
     config: web::Data<Config>
 ) -> Result<HttpResponse, actix_web::Error> {
-    let claims = match utils::authenticate_request(&req, "delete_image", config.get_api_key()) {
+    let claims = match utils::authenticate_request(&req, "delete_image", config.get_api_key()).await {
         Ok(claims) => claims,
         Err(response) => return Ok(response),
     };
@@ -815,7 +815,7 @@ pub async fn delete_video(
     pool: web::Data<MainDbPool>,
     config: web::Data<Config>
 ) -> Result<HttpResponse, actix_web::Error> {
-    let claims = match utils::authenticate_request(&req, "delete_video", config.get_api_key()) {
+    let claims = match utils::authenticate_request(&req, "delete_video", config.get_api_key()).await {
         Ok(claims) => claims,
         Err(response) => return Ok(response),
     };
@@ -858,7 +858,7 @@ pub async fn enhance_image(
     pool: web::Data<MainDbPool>,
     config: web::Data<Config>,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let claims = match utils::authenticate_request(&req, "enhance_image", config.get_api_key()) {
+    let claims = match utils::authenticate_request(&req, "enhance_image", config.get_api_key()).await {
         Ok(c) => c,
         Err(r) => return Ok(r),
     };
@@ -961,7 +961,7 @@ pub async fn save_enhanced_image(
     geotagging_pool: web::Data<GeotaggingDbPool>,
     config: web::Data<Config>,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let claims = match utils::authenticate_request(&req, "save_enhanced_image", config.get_api_key()) {
+    let claims = match utils::authenticate_request(&req, "save_enhanced_image", config.get_api_key()).await {
         Ok(c) => c,
         Err(r) => return Ok(r),
     };

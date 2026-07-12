@@ -38,7 +38,7 @@ pub async fn get_pool_stats(
     pool: web::Data<MainDbPool>,
     config: web::Data<Config>
 ) -> Result<HttpResponse, actix_web::Error> {
-    let claims = match utils::authenticate_request(&req, "get_pool_stats", config.get_api_key()) {
+    let claims = match utils::authenticate_request(&req, "get_pool_stats", config.get_api_key()).await {
         Ok(claims) => claims,
         Err(response) => return Ok(response),
     };

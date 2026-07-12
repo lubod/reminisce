@@ -84,7 +84,7 @@ pub async fn import_directory(
     config: web::Data<Config>,
     job_store: web::Data<ImportJobStore>,
 ) -> Result<HttpResponse, Error> {
-    let claims = match utils::authenticate_request(&req, "import_directory", config.get_api_key()) {
+    let claims = match utils::authenticate_request(&req, "import_directory", config.get_api_key()).await {
         Ok(claims) => claims,
         Err(resp) => return Ok(resp),
     };
@@ -404,7 +404,7 @@ pub async fn get_import_status(
     config: web::Data<Config>,
     job_store: web::Data<ImportJobStore>,
 ) -> Result<HttpResponse, Error> {
-    match utils::authenticate_request(&req, "get_import_status", config.get_api_key()) {
+    match utils::authenticate_request(&req, "get_import_status", config.get_api_key()).await {
         Ok(_) => {}
         Err(resp) => return Ok(resp),
     };

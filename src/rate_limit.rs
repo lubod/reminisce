@@ -102,11 +102,27 @@ where
     forward_ready!(service);
 
     fn call(&self, req: ServiceRequest) -> Self::Future {
-        // Extract IP address
-        let ip = req
+        // Extract IP address (supporting X-Forwarded-For / X-Real-IP behind reverse proxy)
+        let mut ip = req
             .peer_addr()
             .map(|addr| addr.ip())
             .unwrap_or_else(|| IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1)));
+
+        if let Some(x_forwarded_for) = req.headers().get("x-forwarded-for") {
+            if let Ok(x_forwarded_str) = x_forwarded_for.to_str() {
+                if let Some(first_ip_str) = x_forwarded_str.split(',').next() {
+                    if let Ok(parsed_ip) = first_ip_str.trim().parse::<IpAddr>() {
+                        ip = parsed_ip;
+                    }
+                }
+            }
+        } else if let Some(x_real_ip) = req.headers().get("x-real-ip") {
+            if let Ok(x_real_str) = x_real_ip.to_str() {
+                if let Ok(parsed_ip) = x_real_str.trim().parse::<IpAddr>() {
+                    ip = parsed_ip;
+                }
+            }
+        }
 
         // Determine limits based on target path
         let path = req.path();
