@@ -231,8 +231,17 @@ export const DuplicatesBrowser = observer(() => {
                                 >
                                     {/* Thumbnail */}
                                     <div
-                                        className="relative h-32 bg-gray-900 cursor-pointer"
+                                        className="relative h-32 bg-gray-900 cursor-pointer focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                        tabIndex={0}
+                                        role="button"
+                                        aria-label={`Open duplicate image ${img.name}`}
                                         onClick={() => setLightboxState({ groupIdx, imageIdx: imgIdx })}
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Enter' || e.key === ' ') {
+                                                e.preventDefault();
+                                                setLightboxState({ groupIdx, imageIdx: imgIdx });
+                                            }
+                                        }}
                                     >
                                         <img
                                             src={img.thumbnail_url}

@@ -34,7 +34,7 @@ export const PersonDetail = observer(() => {
 
     const handleImageClick = (index: number) => {
         runInAction(() => {
-            mediaStore.images = personStore.personImages.map(img => ({
+            mediaStore.customLightboxItems = personStore.personImages.map(img => ({
                 hash: img.hash,
                 name: img.name,
                 created_at: img.created_at,
@@ -44,7 +44,7 @@ export const PersonDetail = observer(() => {
                 starred: img.starred
             }));
         });
-        mediaStore.openMediaLightbox(index, 'images');
+        mediaStore.openMediaLightbox(index, 'custom');
     };
 
     const handleSetCover = async (e: React.MouseEvent, faceId: number) => {
@@ -203,8 +203,17 @@ export const PersonDetail = observer(() => {
                         return (
                             <div
                                 key={`${image.hash}-${index}`}
-                                className="relative aspect-square bg-gray-700 rounded-lg overflow-hidden cursor-pointer group"
+                                className="relative aspect-square bg-gray-700 rounded-lg overflow-hidden cursor-pointer group focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                tabIndex={0}
+                                role="button"
+                                aria-label={`Open image ${image.name}`}
                                 onClick={() => handleImageClick(index)}
+                                onKeyDown={(e) => {
+                                    if (e.key === 'Enter' || e.key === ' ') {
+                                        e.preventDefault();
+                                        handleImageClick(index);
+                                    }
+                                }}
                             >
                                 {image.thumbnailUrl ? (
                                     <img

@@ -248,23 +248,13 @@ export class PersonStore {
     };
 
     getAuthenticatedUrl = (baseUrl: string) => {
-        const token = this.rootStore.authStore.imageToken || this.rootStore.authStore.token;
+        const token = this.rootStore.authStore.imageToken;
         if (!token) return baseUrl;
         const separator = baseUrl.includes('?') ? '&' : '?';
         return `${baseUrl}${separator}token=${token}`;
     };
 
     cleanup = () => {
-        // Clean up all thumbnail URLs on unmount
-        this.persons.forEach(person => {
-            if (person.thumbnailUrl?.startsWith('blob:')) {
-                URL.revokeObjectURL(person.thumbnailUrl);
-            }
-        });
-        this.personImages.forEach(image => {
-            if (image.thumbnailUrl?.startsWith('blob:')) {
-                URL.revokeObjectURL(image.thumbnailUrl);
-            }
-        });
+        // No-op (no blob URLs are produced for person thumbnails)
     };
 }

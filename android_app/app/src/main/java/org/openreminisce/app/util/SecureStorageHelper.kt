@@ -101,13 +101,11 @@ class SecureStorageHelper {
         }
 
         fun setPassword(context: Context, password: String) {
-            val prefs = getEncryptedSharedPreferences(context)
-            prefs.edit().putString(PASSWORD_KEY, password).apply()
+            // Do not store plaintext password for security
         }
 
         fun getPassword(context: Context): String? {
-            val prefs = getEncryptedSharedPreferences(context)
-            return prefs.getString(PASSWORD_KEY, null)
+            return null
         }
 
         fun setEmail(context: Context, email: String) {

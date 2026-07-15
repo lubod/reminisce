@@ -33,7 +33,7 @@ class LabelRepository(private val context: Context) {
                 .addHeader("Accept", "application/json")
                 .build()
 
-            val response = client.newCall(request).execute()
+            val response = AuthHelper.executeWithTokenRefresh(context, client, request)
             if (response.isSuccessful) {
                 val body = response.body?.string() ?: return@withContext Result.failure(Exception("Empty response"))
                 Result.success(parseLabels(body))
@@ -64,7 +64,7 @@ class LabelRepository(private val context: Context) {
                 .addHeader("Accept", "application/json")
                 .build()
 
-            val response = client.newCall(request).execute()
+            val response = AuthHelper.executeWithTokenRefresh(context, client, request)
             if (response.isSuccessful) {
                 val body = response.body?.string() ?: return@withContext Result.failure(Exception("Empty response"))
                 Result.success(parseLabel(JSONObject(body)))
@@ -89,7 +89,7 @@ class LabelRepository(private val context: Context) {
                 .addHeader("Authorization", "Bearer $token")
                 .build()
 
-            val response = client.newCall(request).execute()
+            val response = AuthHelper.executeWithTokenRefresh(context, client, request)
             if (response.isSuccessful) Result.success(Unit)
             else Result.failure(Exception("HTTP ${response.code}"))
         } catch (e: Exception) {
@@ -112,7 +112,7 @@ class LabelRepository(private val context: Context) {
                 .addHeader("Accept", "application/json")
                 .build()
 
-            val response = client.newCall(request).execute()
+            val response = AuthHelper.executeWithTokenRefresh(context, client, request)
             if (response.isSuccessful) {
                 val body = response.body?.string() ?: return@withContext Result.failure(Exception("Empty response"))
                 Result.success(parseLabels(body))
@@ -138,7 +138,7 @@ class LabelRepository(private val context: Context) {
                 .addHeader("Authorization", "Bearer $token")
                 .build()
 
-            val response = client.newCall(request).execute()
+            val response = AuthHelper.executeWithTokenRefresh(context, client, request)
             if (response.isSuccessful) Result.success(Unit)
             else Result.failure(Exception("HTTP ${response.code}"))
         } catch (e: Exception) {
@@ -160,7 +160,7 @@ class LabelRepository(private val context: Context) {
                 .addHeader("Authorization", "Bearer $token")
                 .build()
 
-            val response = client.newCall(request).execute()
+            val response = AuthHelper.executeWithTokenRefresh(context, client, request)
             if (response.isSuccessful) Result.success(Unit)
             else Result.failure(Exception("HTTP ${response.code}"))
         } catch (e: Exception) {

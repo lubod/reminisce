@@ -302,10 +302,20 @@ export const MediaBrowser = observer(() => {
                             return (
                                 <div
                                     key={`${item.hash}_${item.device_id ?? ''}`}
-                                    className="group relative aspect-square bg-gray-800 rounded-xl overflow-hidden cursor-pointer hover:ring-2 ring-blue-500 transition-all shadow-lg"
+                                    className="group relative aspect-square bg-gray-800 rounded-xl overflow-hidden cursor-pointer hover:ring-2 ring-blue-500 transition-all shadow-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                    tabIndex={0}
+                                    role="button"
+                                    aria-label={`Open ${item.media_type === 'video' ? 'video' : 'image'} ${item.name}`}
                                     onClick={() => {
                                         const idx = mediaStore.allMedia.findIndex(m => m.hash === item.hash);
                                         if (idx !== -1) mediaStore.openMediaLightbox(idx, 'all');
+                                    }}
+                                    onKeyDown={(e) => {
+                                        if (e.key === 'Enter' || e.key === ' ') {
+                                            e.preventDefault();
+                                            const idx = mediaStore.allMedia.findIndex(m => m.hash === item.hash);
+                                            if (idx !== -1) mediaStore.openMediaLightbox(idx, 'all');
+                                        }
                                     }}
                                 >
                                     {item.thumbnailUrl ? (

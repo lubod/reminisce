@@ -23,7 +23,7 @@ import com.google.android.material.button.MaterialButton
 import com.google.android.material.textfield.MaterialAutoCompleteTextView
 import com.google.android.material.textfield.TextInputEditText
 import com.google.android.material.textfield.TextInputLayout
-import kotlinx.coroutines.CoroutineScope
+import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -219,7 +219,7 @@ class LoginActivity : AppCompatActivity() {
     private fun advanceFromServer() {
         val serverUrl = PreferenceHelper.getServerUrl(this)
         showLoading()
-        CoroutineScope(Dispatchers.IO).launch {
+        lifecycleScope.launch(Dispatchers.IO) {
             val needsSetup = try {
                 AuthHelper.checkSetupStatus(serverUrl)
             } catch (e: Exception) {
@@ -281,7 +281,7 @@ class LoginActivity : AppCompatActivity() {
         }
         Toast.makeText(this, "Testing connection...", Toast.LENGTH_SHORT).show()
         LogCollector.i(TAG, "Testing connection to $serverUrl")
-        CoroutineScope(Dispatchers.IO).launch {
+        lifecycleScope.launch(Dispatchers.IO) {
             try {
                 val ok = AuthHelper.pingServer(serverUrl)
                 LogCollector.i(TAG, if (ok) "Server reachable" else "Server unreachable")
@@ -322,7 +322,7 @@ class LoginActivity : AppCompatActivity() {
         val serverUrl = PreferenceHelper.getServerUrl(this)
         showLoading()
 
-        CoroutineScope(Dispatchers.IO).launch {
+        lifecycleScope.launch(Dispatchers.IO) {
             val error = AuthHelper.setupAdmin(username, password, serverUrl)
             if (error == null) {
                 // Auto-login after setup
@@ -360,7 +360,7 @@ class LoginActivity : AppCompatActivity() {
         val serverUrl = PreferenceHelper.getServerUrl(this)
         showLoading()
 
-        CoroutineScope(Dispatchers.IO).launch {
+        lifecycleScope.launch(Dispatchers.IO) {
             try {
                 val result = AuthHelper.loginWithCredentials(this@LoginActivity, username, password, serverUrl)
                 if (result) {

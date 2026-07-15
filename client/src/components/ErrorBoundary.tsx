@@ -1,4 +1,4 @@
-import React, { Component, ErrorInfo, ReactNode } from "react";
+import { Component, type ErrorInfo, type ReactNode } from "react";
 
 interface Props {
   children: ReactNode;
@@ -38,7 +38,7 @@ export class ErrorBoundary extends Component<Props, State> {
             >
               Reload Page
             </button>
-            {this.state.error && (
+            {this.state.error && import.meta.env.DEV && (
               <pre className="mt-6 p-4 bg-gray-950 rounded text-xs text-red-400 overflow-auto max-h-40 font-mono">
                 {this.state.error.toString()}
               </pre>

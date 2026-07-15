@@ -30,6 +30,17 @@ export const PresentationMode = observer(() => {
     const [showSettings, setShowSettings] = useState(false);
     
     const settingsRef = useRef<HTMLDivElement>(null);
+    const currentImageRef = useRef<MediaItem | null>(null);
+    const nextImageRef = useRef<MediaItem | null>(null);
+
+    // Keep refs up-to-date to prevent stale closure during unmount cleanup
+    useEffect(() => {
+        currentImageRef.current = currentImage;
+    }, [currentImage]);
+
+    useEffect(() => {
+        nextImageRef.current = nextImage;
+    }, [nextImage]);
 
     // Persist settings to localStorage
     useEffect(() => { localStorage.setItem("present.starredOnly", JSON.stringify(starredOnly)); }, [starredOnly]);
@@ -86,9 +97,9 @@ export const PresentationMode = observer(() => {
         init();
 
         return () => {
-            // Cleanup blob URLs on unmount
-            if (currentImage?.thumbnailUrl) URL.revokeObjectURL(currentImage.thumbnailUrl);
-            if (nextImage?.thumbnailUrl) URL.revokeObjectURL(nextImage.thumbnailUrl);
+            // Cleanup blob URLs on unmount using latest ref values
+            if (currentImageRef.current?.thumbnailUrl) URL.revokeObjectURL(currentImageRef.current.thumbnailUrl);
+            if (nextImageRef.current?.thumbnailUrl) URL.revokeObjectURL(nextImageRef.current.thumbnailUrl);
             // Ensure we exit fullscreen state on unmount
             uiStore.setIsFullscreen(false);
         };

@@ -22,7 +22,7 @@
          android:networkSecurityConfig is set, so this base-config entry is
          required. Self-signed HTTPS on IP addresses is handled by AuthHelper's
          TrustAllCerts path for any IPv4 server address. -->
-    <base-config cleartextTrafficPermitted="true">
+    <base-config cleartextTrafficPermitted="false">
         <trust-anchors>
             <certificates src="system"/>
         </trust-anchors>

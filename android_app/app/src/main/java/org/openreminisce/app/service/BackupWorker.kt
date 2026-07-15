@@ -59,14 +59,9 @@ class BackupWorker(context: Context, params: WorkerParameters) : Worker(context,
             val powerManager = applicationContext.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
 
             // NUCLEAR OPTION for Honor/Huawei devices with extremely aggressive battery management
-            // Use SCREEN_BRIGHT_WAKE_LOCK to keep screen fully on during backup
-            // This is the most aggressive wake lock available and most likely to work on Honor devices
-            // Screen will stay on but user can still lock device normally after backup completes
-            @Suppress("DEPRECATION")
+            // Use PARTIAL_WAKE_LOCK to keep CPU running during backup without forcing screen on
             wakeLock = powerManager.newWakeLock(
-                android.os.PowerManager.SCREEN_BRIGHT_WAKE_LOCK or
-                android.os.PowerManager.ACQUIRE_CAUSES_WAKEUP or
-                android.os.PowerManager.ON_AFTER_RELEASE,
+                android.os.PowerManager.PARTIAL_WAKE_LOCK,
                 WAKE_LOCK_TAG
             ).apply {
                 setReferenceCounted(false)

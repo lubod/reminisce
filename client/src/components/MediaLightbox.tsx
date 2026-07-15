@@ -41,6 +41,16 @@ export const MediaLightbox = observer(() => {
 
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
+            const target = e.target as HTMLElement;
+            if (
+                target && (
+                    target.tagName === "INPUT" ||
+                    target.tagName === "TEXTAREA" ||
+                    target.isContentEditable
+                )
+            ) {
+                return;
+            }
             if (e.key === "Escape") {
                 mediaStore.closeMediaLightbox();
             } else if (e.key === "ArrowRight") {

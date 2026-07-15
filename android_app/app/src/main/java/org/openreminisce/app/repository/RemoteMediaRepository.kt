@@ -73,7 +73,7 @@ class RemoteMediaRepository(private val context: Context) {
                 .addHeader("Accept", "application/json")
                 .build()
 
-            val response = client.newCall(request).execute()
+            val response = AuthHelper.executeWithTokenRefresh(context, client, request)
             Log.d(TAG, "Response code: ${response.code}")
 
             if (response.isSuccessful) {
@@ -139,7 +139,7 @@ class RemoteMediaRepository(private val context: Context) {
                 .addHeader("Accept", "application/json")
                 .build()
 
-            val response = client.newCall(request).execute()
+            val response = AuthHelper.executeWithTokenRefresh(context, client, request)
 
             if (response.isSuccessful) {
                 val body = response.body?.string() ?: return@withContext Result.failure(Exception("Empty response"))
@@ -168,7 +168,7 @@ class RemoteMediaRepository(private val context: Context) {
                 .addHeader("Accept", "application/json")
                 .build()
 
-            val response = client.newCall(request).execute()
+            val response = AuthHelper.executeWithTokenRefresh(context, client, request)
             if (response.isSuccessful) {
                 val body = response.body?.string() ?: return@withContext Result.failure(Exception("Empty response"))
                 val json = JSONObject(body)
@@ -206,7 +206,7 @@ class RemoteMediaRepository(private val context: Context) {
                 .addHeader("Accept", "application/json")
                 .build()
 
-            val response = client.newCall(request).execute()
+            val response = AuthHelper.executeWithTokenRefresh(context, client, request)
             if (response.isSuccessful) {
                 val body = response.body?.string() ?: return@withContext Result.failure(Exception("Empty response"))
                 val json = JSONObject(body)
@@ -236,7 +236,7 @@ class RemoteMediaRepository(private val context: Context) {
                 .addHeader("Authorization", "Bearer $token")
                 .build()
 
-            val response = client.newCall(request).execute()
+            val response = AuthHelper.executeWithTokenRefresh(context, client, request)
             if (response.isSuccessful) {
                 Result.success(Unit)
             } else {
@@ -261,7 +261,7 @@ class RemoteMediaRepository(private val context: Context) {
                 .addHeader("Accept", "application/json")
                 .build()
 
-            val response = client.newCall(request).execute()
+            val response = AuthHelper.executeWithTokenRefresh(context, client, request)
             if (response.isSuccessful) {
                 val body = response.body?.string() ?: return@withContext Result.failure(Exception("Empty response"))
                 val jsonArray = JSONArray(body)
@@ -290,7 +290,7 @@ class RemoteMediaRepository(private val context: Context) {
                 .addHeader("Accept", "application/json")
                 .build()
 
-            val response = client.newCall(request).execute()
+            val response = AuthHelper.executeWithTokenRefresh(context, client, request)
             if (response.isSuccessful) {
                 val body = response.body?.string() ?: return@withContext Result.failure(Exception("Empty response"))
                 val jsonArray = JSONArray(body)

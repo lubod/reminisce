@@ -9,86 +9,13 @@ import java.util.concurrent.TimeUnit
 import javax.net.ssl.*
 import java.security.cert.X509Certificate
 
-// Custom SSLSocketFactory that enables all TLS protocols for AuthHelper
-private class TLSSocketFactoryForAuth(private val delegate: SSLSocketFactory) : SSLSocketFactory() {
-    override fun getDefaultCipherSuites(): Array<String> = delegate.defaultCipherSuites
-    override fun getSupportedCipherSuites(): Array<String> = delegate.supportedCipherSuites
 
-    override fun createSocket(s: java.net.Socket?, host: String?, port: Int, autoClose: Boolean): java.net.Socket {
-        val socket = delegate.createSocket(s, host, port, autoClose)
-        return enableTLSOnSocket(socket)
-    }
-
-    override fun createSocket(host: String?, port: Int): java.net.Socket {
-        val socket = delegate.createSocket(host, port)
-        return enableTLSOnSocket(socket)
-    }
-
-    override fun createSocket(host: String?, port: Int, localHost: java.net.InetAddress?, localPort: Int): java.net.Socket {
-        val socket = delegate.createSocket(host, port, localHost, localPort)
-        return enableTLSOnSocket(socket)
-    }
-
-    override fun createSocket(host: java.net.InetAddress?, port: Int): java.net.Socket {
-        val socket = delegate.createSocket(host, port)
-        return enableTLSOnSocket(socket)
-    }
-
-    override fun createSocket(address: java.net.InetAddress?, port: Int, localAddress: java.net.InetAddress?, localPort: Int): java.net.Socket {
-        val socket = delegate.createSocket(address, port, localAddress, localPort)
-        return enableTLSOnSocket(socket)
-    }
-
-    private fun enableTLSOnSocket(socket: java.net.Socket): java.net.Socket {
-        if (socket is SSLSocket) {
-            // Enable only modern TLS protocols (TLS 1.2 and 1.3)
-            socket.enabledProtocols = arrayOf("TLSv1.2", "TLSv1.3")
-        }
-        return socket
-    }
-}
 
 class AuthHelper {
     companion object {
         private const val TAG = "AuthHelper"
 
-        /**
-         * Determines if the URL is an IP address or localhost.
-         * Returns true for IP addresses and localhost, false for domain names.
-         */
-        private fun isIpAddressOrLocalhost(url: String): Boolean {
-            val host = try {
-                java.net.URL(url).host.lowercase()
-            } catch (e: Exception) {
-                return false
-            }
 
-            // Check for localhost
-            if (host == "localhost" || host == "127.0.0.1" || host == "::1") {
-                return true
-            }
-
-            // Check for IPv4 address (basic pattern)
-            val ipv4Pattern = Regex("^\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}$")
-            if (ipv4Pattern.matches(host)) {
-                return true
-            }
-
-            // Check for IPv6 address (contains colons)
-            if (host.contains(":") && !host.contains(".")) {
-                return true
-            }
-
-            // Check for private IP ranges
-            if (host.startsWith("192.168.") || host.startsWith("10.") ||
-                host.matches(Regex("^172\\.(1[6-9]|2[0-9]|3[0-1])\\..*"))) {
-                LogCollector.d(TAG, "Detected as private IP range")
-                return true
-            }
-
-            LogCollector.d(TAG, "Detected as domain name (will use secure client)")
-            return false
-        }
 
         /**
          * Check whether the server needs first-run admin setup.
@@ -245,29 +172,15 @@ class AuthHelper {
             }
         }
 
-        /**
-         * Helper method to create HTTP client with appropriate SSL settings
-         */
         private fun createHttpClient(baseUrl: String): OkHttpClient {
-            val useInsecure = isIpAddressOrLocalhost(baseUrl)
+            val useInsecure = NetworkHelper.isPrivateOrLocalAddress(baseUrl)
             LogCollector.d(TAG, "HTTP client: ${if (useInsecure) "insecure" else "secure"} for $baseUrl")
 
             val builder = OkHttpClient.Builder()
                 .connectTimeout(30, TimeUnit.SECONDS)
                 .readTimeout(30, TimeUnit.SECONDS)
 
-            if (useInsecure) {
-                // Create SSL context that trusts all certificates for IP/localhost
-                val sslContext = SSLContext.getInstance("TLS")
-                sslContext.init(null, arrayOf(TrustAllCerts()), java.security.SecureRandom())
-
-                // Wrap with TLSSocketFactory to enable all TLS protocols
-                val tlsSocketFactory = TLSSocketFactoryForAuth(sslContext.socketFactory)
-
-                builder
-                    .sslSocketFactory(tlsSocketFactory, TrustAllCerts())
-                    .hostnameVerifier { _, _ -> true } // Accept all hostnames
-            }
+            NetworkHelper.configureInsecureSsl(builder, baseUrl)
 
             return builder.build()
         }
@@ -430,12 +343,7 @@ class AuthHelper {
             )
         }
         
-        // Custom TrustManager that accepts all certificates (for self-signed certificates)
-        class TrustAllCerts : X509TrustManager {
-            override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
-            override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
-            override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
-        }
+
 
         fun getDeviceId(context: Context): String {
             // In a real implementation, this would return a unique device identifier

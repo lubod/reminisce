@@ -113,12 +113,12 @@ export class MediaStore {
     locationSuggestions: LocationResult[] = [];
     isLoadingLocationSuggestions: boolean = false;
 
-    // Debounce timer for similarity slider
-    private similarityDebounceTimer: NodeJS.Timeout | null = null;
+    private similarityDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 
     // Unified Lightbox State
     selectedMediaIndex: number | null = null;
-    lightboxSource: 'all' | 'images' | 'videos' = 'all';
+    lightboxSource: 'all' | 'images' | 'videos' | 'custom' = 'all';
+    customLightboxItems: MediaItem[] = [];
     fullMediaUrl: string | null = null;
     comparisonMediaUrl: string | null = null;
     compareMode: boolean = false;
@@ -149,6 +149,7 @@ export class MediaStore {
     get activeLightboxItems(): MediaItem[] {
         if (this.lightboxSource === 'images') return this.images;
         if (this.lightboxSource === 'videos') return this.videos;
+        if (this.lightboxSource === 'custom') return this.customLightboxItems;
         return this.allMedia;
     }
 
@@ -495,7 +496,7 @@ export class MediaStore {
     setZoomOffset = (x: number, y: number) => { this.zoomOffset = { x, y }; };
     resetZoom = () => { this.zoomScale = 1; this.zoomOffset = { x: 0, y: 0 }; };
 
-    openMediaLightbox = async (index: number, source: 'all' | 'images' | 'videos' = 'all') => {
+    openMediaLightbox = async (index: number, source: 'all' | 'images' | 'videos' | 'custom' = 'all') => {
         this.lightboxSource = source;
         this.selectedMediaIndex = index;
         this.resetZoom();
@@ -552,10 +553,14 @@ export class MediaStore {
             );
             runInAction(() => {
                 this.fullMediaUrl = url;
-                if (item.media_type !== 'video') this.loadImageMetadata(item.hash);
-                else this.clearImageMetadata();
             });
+            if (item.media_type !== 'video') {
+                await this.loadImageMetadata(item.hash);
+            } else {
+                runInAction(() => { this.clearImageMetadata(); });
+            }
         } catch (error) {
+            console.error("Failed to load full media", error);
             this.rootStore.uiStore.setError("Failed to load media");
         }
     };
@@ -651,9 +656,10 @@ export class MediaStore {
     };
 
     deleteMedia = async (hash: string) => {
-        if (!window.confirm("Are you sure you want to delete this media?")) return;
-
-        const item = this.images.find(i => i.hash === hash) || this.videos.find(v => v.hash === hash) || this.allMedia.find(i => i.hash === hash);
+        const item = this.images.find(i => i.hash === hash) || 
+                     this.videos.find(v => v.hash === hash) || 
+                     this.allMedia.find(i => i.hash === hash) ||
+                     this.customLightboxItems.find(i => i.hash === hash);
         if (!item) return;
 
         // Perform removal from all lists
@@ -662,6 +668,7 @@ export class MediaStore {
             this.images = filterOut(this.images);
             this.videos = filterOut(this.videos);
             this.allMedia = filterOut(this.allMedia);
+            this.customLightboxItems = filterOut(this.customLightboxItems);
             
             // Adjust lightbox index if necessary
             if (this.selectedMediaIndex !== null) {
@@ -685,7 +692,7 @@ export class MediaStore {
     // --- Helper Methods ---
 
     getAuthenticatedUrl = (baseUrl: string) => {
-        const token = this.rootStore.authStore.imageToken || this.rootStore.authStore.token;
+        const token = this.rootStore.authStore.imageToken;
         if (!token) return baseUrl;
         const separator = baseUrl.includes('?') ? '&' : '?';
         return `${baseUrl}${separator}token=${token}`;
@@ -743,27 +750,27 @@ export class MediaStore {
             date: key,
             displayDate: mode === 'day' ? this.formatDisplayDate(key) : key,
             items: sortBySize
-                ? groupItems.sort((a, b) => cmp(a.file_size_bytes ?? 0, b.file_size_bytes ?? 0))
+                ? [...groupItems].sort((a, b) => cmp(a.file_size_bytes ?? 0, b.file_size_bytes ?? 0))
                 : sortByQuality
-                    ? groupItems.sort((a, b) => cmp(a.aesthetic_score ?? -1, b.aesthetic_score ?? -1))
-                    : groupItems.sort((a, b) => cmp(new Date(a.created_at).getTime(), new Date(b.created_at).getTime()))
+                    ? [...groupItems].sort((a, b) => cmp(a.aesthetic_score ?? -1, b.aesthetic_score ?? -1))
+                    : [...groupItems].sort((a, b) => cmp(new Date(a.created_at).getTime(), new Date(b.created_at).getTime()))
         }));
 
         if (sortBySize) {
-            return grouped.sort((a, b) => {
+            return [...grouped].sort((a, b) => {
                 const maxA = Math.max(...a.items.map(i => i.file_size_bytes ?? 0));
                 const maxB = Math.max(...b.items.map(i => i.file_size_bytes ?? 0));
                 return cmp(maxA, maxB);
             });
         }
         if (sortByQuality) {
-            return grouped.sort((a, b) => {
+            return [...grouped].sort((a, b) => {
                 const maxA = Math.max(...a.items.map(i => i.aesthetic_score ?? -1));
                 const maxB = Math.max(...b.items.map(i => i.aesthetic_score ?? -1));
                 return cmp(maxA, maxB);
             });
         }
-        return grouped.sort((a, b) => {
+        return [...grouped].sort((a, b) => {
             const byDate = mode === 'day' ? (asc ? a.date.localeCompare(b.date) : b.date.localeCompare(a.date)) : a.displayDate.localeCompare(b.displayDate);
             return byDate;
         });
@@ -789,8 +796,12 @@ export class MediaStore {
         try {
             const response = await axios.get(`/search/places?query=${query}&limit=20`);
             runInAction(() => { this.locationSuggestions = response.data; });
-        } catch (error) { this.locationSuggestions = []; }
-        finally { runInAction(() => { this.isLoadingLocationSuggestions = false; }); }
+        } catch (error) {
+            console.error("Location suggestions fetch failed", error);
+            this.rootStore.uiStore.setError("Failed to fetch location suggestions");
+            this.locationSuggestions = [];
+        }
+        finally { runInAction(() => { runInAction(() => { this.isLoadingLocationSuggestions = false; }); }); }
     };
 
     selectLocation = (location: LocationResult) => {
@@ -823,6 +834,9 @@ export class MediaStore {
                 place: item.place,
                 thumbnailUrl: URL.createObjectURL(imageResponse.data)
             };
-        } catch (error) { return null; }
+        } catch (error) {
+            console.error("Failed to fetch random image for presentation", error);
+            return null;
+        }
     };
 }

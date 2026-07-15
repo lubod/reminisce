@@ -361,8 +361,17 @@ export class StatsStore {
                 validateStatus: () => true,
             });
             runInAction(() => { this.serviceHealth = response.data; });
-        } catch {
-            // network error — leave serviceHealth as-is
+        } catch (error) {
+            console.error("Service health check failed", error);
+            runInAction(() => {
+                this.serviceHealth = {
+                    status: "offline",
+                    database: "disconnected",
+                    geotagging_database: "disconnected",
+                    ai_service: "disconnected",
+                    timestamp: new Date().toISOString(),
+                };
+            });
         }
     };
 

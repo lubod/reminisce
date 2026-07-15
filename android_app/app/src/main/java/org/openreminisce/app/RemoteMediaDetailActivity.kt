@@ -290,7 +290,7 @@ class RemoteMediaDetailActivity : AppCompatActivity() {
                         .url(mediaUrl)
                         .addHeader("Authorization", "Bearer $token")
                         .build()
-                    val response = client.newCall(request).execute()
+                    val response = AuthHelper.executeWithTokenRefresh(this@RemoteMediaDetailActivity, client, request)
                     if (!response.isSuccessful) return@withContext null
                     val file = File.createTempFile("rmd_", ".jpg", cacheDir)
                     try {
@@ -404,7 +404,7 @@ class RemoteMediaDetailActivity : AppCompatActivity() {
                         .url(mediaUrl)
                         .addHeader("Authorization", "Bearer $token")
                         .build()
-                    val response = client.newCall(request).execute()
+                    val response = AuthHelper.executeWithTokenRefresh(this@RemoteMediaDetailActivity, client, request)
                     if (!response.isSuccessful) return@withContext null
                     val file = File.createTempFile("cmp_${if (isLeft) "L" else "R"}_", ".jpg", cacheDir)
                     try {

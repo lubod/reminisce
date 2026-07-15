@@ -82,8 +82,17 @@ export const PersonGallery = observer(() => {
                 {personStore.persons.map((person) => (
                     <div
                         key={person.id}
-                        className="group relative bg-gray-800 rounded-lg overflow-hidden cursor-pointer hover:ring-2 hover:ring-blue-500 transition-all"
+                        className="group relative bg-gray-800 rounded-lg overflow-hidden cursor-pointer hover:ring-2 hover:ring-blue-500 transition-all focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        tabIndex={0}
+                        role="button"
+                        aria-label={`View photos of ${person.name || 'Unnamed Person'}`}
                         onClick={() => navigate(`/people/${person.id}`)}
+                        onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                                e.preventDefault();
+                                navigate(`/people/${person.id}`);
+                            }
+                        }}
                     >
                         {/* Thumbnail */}
                         <div className="aspect-square bg-gray-700 relative">

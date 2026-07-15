@@ -64,7 +64,7 @@ export class DuplicatesStore {
     }
 
     private authUrl(url: string): string {
-        const token = this.rootStore.authStore.imageToken || this.rootStore.authStore.token;
+        const token = this.rootStore.authStore.imageToken;
         if (!token) return url;
         const sep = url.includes("?") ? "&" : "?";
         return `${url}${sep}token=${token}`;
@@ -130,8 +130,8 @@ export class DuplicatesStore {
             runInAction(() => {
                 this.workerStatus = response.data;
             });
-        } catch {
-            // silently ignore
+        } catch (error) {
+            console.error("Worker status fetch failed", error);
         }
     };
 

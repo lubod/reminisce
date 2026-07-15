@@ -253,20 +253,25 @@ class WebGalleryActivity : AppCompatActivity() {
             builtInZoomControls = true
             displayZoomControls = false
 
-            // Enable mixed content for local development
-            mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+            // Enable mixed content only for local/private networks
+            val serverUrl = PreferenceHelper.getServerUrl(this@WebGalleryActivity)
+            mixedContentMode = if (NetworkHelper.isPrivateOrLocalAddress(serverUrl)) {
+                WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+            } else {
+                WebSettings.MIXED_CONTENT_NEVER_ALLOW
+            }
 
-            // Allow file access for offline page
-            allowFileAccess = true
-            allowContentAccess = true
+            // File access is disabled for security (assets load fine regardless)
+            allowFileAccess = false
+            allowContentAccess = false
 
             // Additional settings for better compatibility and caching
             loadWithOverviewMode = true
             useWideViewPort = true
 
-            // Enable safe browsing disabled for development
+            // Enable safe browsing
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                safeBrowsingEnabled = false
+                safeBrowsingEnabled = true
             }
         }
 
@@ -341,10 +346,14 @@ class WebGalleryActivity : AppCompatActivity() {
                 handler: SslErrorHandler?,
                 error: SslError?
             ) {
-                // For development with self-signed certificates
-                // WARNING: In production, you should properly validate SSL certificates
-                Log.w(TAG, "SSL error: ${error?.primaryError}, proceeding anyway for development")
-                handler?.proceed()
+                val url = error?.url ?: view?.url ?: ""
+                if (NetworkHelper.isPrivateOrLocalAddress(url)) {
+                    Log.w(TAG, "SSL error: ${error?.primaryError} on private/local network, proceeding for local development/LAN")
+                    handler?.proceed()
+                } else {
+                    Log.e(TAG, "SSL error: ${error?.primaryError} on public domain! Aborting connection!")
+                    handler?.cancel()
+                }
             }
 
             override fun onRenderProcessGone(view: WebView?, detail: android.webkit.RenderProcessGoneDetail?): Boolean {

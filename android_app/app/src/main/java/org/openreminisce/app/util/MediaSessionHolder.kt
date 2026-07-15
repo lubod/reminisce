@@ -19,5 +19,7 @@ object MediaSessionHolder {
     fun clear() {
         hashes = emptyList()
         imageInfos = emptyList()
+        starredUpdates.clear()
+        deletedHashes.clear()
     }
 }
