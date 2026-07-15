@@ -1,5 +1,6 @@
 import { makeAutoObservable, runInAction } from "mobx";
 import axios from "../api/axiosConfig";
+import { isAxiosError } from "axios";
 import { RootStore } from "./RootStore";
 
 export interface DashboardStats {
@@ -325,11 +326,12 @@ export class StatsStore {
                     `All ${response.data.verified_files} files verified successfully!`
                 );
             }
-        } catch (error: any) {
+        } catch (error: unknown) {
             console.error("Failed to verify P2P backup", error);
-            this.rootStore.uiStore.setError(
-                error.response?.data?.error || "Failed to verify backup"
-            );
+            const msg = isAxiosError(error)
+                ? (error.response?.data as { error?: string })?.error || "Failed to verify backup"
+                : "Failed to verify backup";
+            this.rootStore.uiStore.setError(msg);
             throw error;
         }
     };
@@ -341,8 +343,10 @@ export class StatsStore {
                 this.discoveredPeers = this.discoveredPeers.filter(p => p.peer_id !== nodeId);
             });
             this.rootStore.uiStore.setSuccess(`Node removed and shards deleted.`);
-        } catch (error: any) {
-            const msg = error.response?.data?.error || 'Failed to remove node';
+        } catch (error: unknown) {
+            const msg = isAxiosError(error)
+                ? (error.response?.data as { error?: string })?.error || 'Failed to remove node'
+                : 'Failed to remove node';
             this.rootStore.uiStore.setError(msg);
             throw error;
         }

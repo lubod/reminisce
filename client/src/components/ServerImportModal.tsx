@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { observer } from "mobx-react-lite";
 import { X, Upload, Folder, CheckCircle, AlertCircle, Loader } from "lucide-react";
 import axios from "../api/axiosConfig";
+import { isAxiosError } from "axios";
 
 interface ImportJob {
     status: "running" | "done" | "failed";
@@ -20,10 +21,42 @@ export const ServerImportModal = observer(({ onClose }: { onClose: () => void })
     const [job, setJob] = useState<ImportJob | null>(null);
     const [error, setError] = useState<string | null>(null);
     const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const modalRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
-        return () => { if (pollRef.current) clearInterval(pollRef.current); };
-    }, []);
+        const previouslyFocused = document.activeElement as HTMLElement;
+        modalRef.current?.focus();
+
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (e.key === "Escape" && !isLoading) {
+                onClose();
+                return;
+            }
+            if (e.key === "Tab" && modalRef.current) {
+                const focusables = modalRef.current.querySelectorAll<HTMLElement>(
+                    'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+                );
+                if (focusables.length === 0) return;
+                const first = focusables[0];
+                const last = focusables[focusables.length - 1];
+
+                if (e.shiftKey && document.activeElement === first) {
+                    e.preventDefault();
+                    last.focus();
+                } else if (!e.shiftKey && document.activeElement === last) {
+                    e.preventDefault();
+                    first.focus();
+                }
+            }
+        };
+
+        document.addEventListener("keydown", handleKeyDown);
+        return () => {
+            document.removeEventListener("keydown", handleKeyDown);
+            previouslyFocused?.focus();
+            if (pollRef.current) clearInterval(pollRef.current);
+        };
+    }, [onClose, isLoading]);
 
     const handleImport = async () => {
         if (!path.trim()) return;
@@ -55,19 +88,29 @@ export const ServerImportModal = observer(({ onClose }: { onClose: () => void })
                     setIsLoading(false);
                 }
             }, 2000);
-        } catch (err: any) {
+        } catch (err: unknown) {
             console.error("Import failed:", err);
-            setError(err.response?.data?.error || err.message || "An error occurred during import.");
+            const errorMsg = isAxiosError(err)
+                ? (err.response?.data as { error?: string })?.error || err.message
+                : String(err);
+            setError(errorMsg || "An error occurred during import.");
             setIsLoading(false);
         }
     };
 
     return (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-            <div className="bg-gray-800 rounded-lg shadow-xl max-w-lg w-full mx-4">
+            <div
+                ref={modalRef}
+                tabIndex={-1}
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="server-import-title"
+                className="bg-gray-800 rounded-lg shadow-xl max-w-lg w-full mx-4 focus:outline-none"
+            >
                 {/* Header */}
                 <div className="flex items-center justify-between p-6 border-b border-gray-700">
-                    <h2 className="text-xl font-semibold text-gray-100 flex items-center">
+                    <h2 id="server-import-title" className="text-xl font-semibold text-gray-100 flex items-center">
                         <Folder className="w-6 h-6 mr-2" />
                         Server-Side Import
                     </h2>

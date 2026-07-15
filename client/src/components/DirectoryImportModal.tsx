@@ -1,9 +1,10 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import type { ChangeEvent } from "react";
 import { observer } from "mobx-react-lite";
 import { useStore } from "../stores/RootStore";
 import { X, Upload, FolderOpen, CheckCircle, AlertCircle, Loader } from "lucide-react";
 import axios from "../api/axiosConfig";
+import { isAxiosError } from "axios";
 import { blake3 } from "hash-wasm";
 
 interface FileWithHash {
@@ -61,6 +62,41 @@ export const DirectoryImportModal = observer(({ onClose }: { onClose: () => void
     });
     const [failedFiles, setFailedFiles] = useState<string[]>([]);
     const cancelRef = useRef(false);
+    const modalRef = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+        const previouslyFocused = document.activeElement as HTMLElement;
+        modalRef.current?.focus();
+
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (e.key === "Escape") {
+                onClose();
+                return;
+            }
+            if (e.key === "Tab" && modalRef.current) {
+                const focusables = modalRef.current.querySelectorAll<HTMLElement>(
+                    'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+                );
+                if (focusables.length === 0) return;
+                const first = focusables[0];
+                const last = focusables[focusables.length - 1];
+
+                if (e.shiftKey && document.activeElement === first) {
+                    e.preventDefault();
+                    last.focus();
+                } else if (!e.shiftKey && document.activeElement === last) {
+                    e.preventDefault();
+                    first.focus();
+                }
+            }
+        };
+
+        document.addEventListener("keydown", handleKeyDown);
+        return () => {
+            document.removeEventListener("keydown", handleKeyDown);
+            previouslyFocused?.focus();
+        };
+    }, [onClose]);
 
     const handleDirectorySelect = (e: ChangeEvent<HTMLInputElement>) => {
         const files = Array.from(e.target.files || []);
@@ -69,7 +105,7 @@ export const DirectoryImportModal = observer(({ onClose }: { onClose: () => void
 
         if (mediaFiles.length > 0) {
             // Extract directory name from first file's webkitRelativePath
-            const relativePath = (mediaFiles[0] as any).webkitRelativePath || mediaFiles[0].name;
+            const relativePath = (mediaFiles[0] as File & { webkitRelativePath?: string }).webkitRelativePath || mediaFiles[0].name;
             const folderName = relativePath.split('/')[0];
             setDirectoryName(folderName);
             setLabelName(folderName);
@@ -267,8 +303,9 @@ export const DirectoryImportModal = observer(({ onClose }: { onClose: () => void
                 try {
                     await uploadFile(file, hash, labelId);
                     setProgress(prev => ({ ...prev, completed: prev.completed + 1 }));
-                } catch (error: any) {
-                    console.error(`Failed to upload ${file.name}:`, error);
+                } catch (error: unknown) {
+                    const errorMsg = isAxiosError(error) ? error.message : String(error);
+                    console.error(`Failed to upload ${file.name}:`, errorMsg);
                     setFailedFiles(prev => [...prev, file.name]);
                     setProgress(prev => ({ ...prev, failed: prev.failed + 1 }));
                 }
@@ -296,15 +333,23 @@ export const DirectoryImportModal = observer(({ onClose }: { onClose: () => void
 
     return (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-            <div className="bg-gray-800 rounded-lg shadow-xl max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto">
+            <div
+                ref={modalRef}
+                tabIndex={-1}
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="dir-import-title"
+                className="bg-gray-800 rounded-lg shadow-xl max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto focus:outline-none"
+            >
                 {/* Header */}
                 <div className="flex items-center justify-between p-6 border-b border-gray-700">
-                    <h2 className="text-xl font-semibold text-gray-100 flex items-center">
+                    <h2 id="dir-import-title" className="text-xl font-semibold text-gray-100 flex items-center">
                         <FolderOpen className="w-6 h-6 mr-2" />
                         Import Directory
                     </h2>
                     <button
                         onClick={handleCancel}
+                        aria-label="Close modal"
                         className="text-gray-400 hover:text-gray-200 transition-colors"
                     >
                         <X className="w-6 h-6" />
@@ -320,9 +365,7 @@ export const DirectoryImportModal = observer(({ onClose }: { onClose: () => void
                         </label>
                         <input
                             type="file"
-                            /* @ts-ignore */
-                            webkitdirectory=""
-                            directory=""
+                            {...({ webkitdirectory: "", directory: "" } as React.InputHTMLAttributes<HTMLInputElement>)}
                             multiple
                             onChange={handleDirectorySelect}
                             disabled={isUploading}
@@ -367,7 +410,7 @@ export const DirectoryImportModal = observer(({ onClose }: { onClose: () => void
 
                     {/* Progress Display */}
                     {progress.status !== 'idle' && (
-                        <div className="bg-gray-700 rounded-lg p-4 space-y-3">
+                        <div className="bg-gray-700 rounded-lg p-4 space-y-3" aria-live="polite">
                             <div className="flex items-center justify-between">
                                 <span className="text-sm font-medium text-gray-300">
                                     {progress.status === 'hashing' && 'Calculating hashes...'}

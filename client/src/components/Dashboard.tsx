@@ -556,12 +556,17 @@ export const Dashboard = observer(() => {
 
             {showVerifyModal && (
                 <div className="fixed inset-0 bg-black/80 backdrop-blur-xl flex items-center justify-center z-50 p-4">
-                    <div className="bg-gray-800 rounded-3xl border border-gray-700 shadow-2xl max-w-2xl w-full overflow-hidden">
+                    <div
+                        role="dialog"
+                        aria-modal="true"
+                        aria-labelledby="verify-modal-title"
+                        className="bg-gray-800 rounded-3xl border border-gray-700 shadow-2xl max-w-2xl w-full overflow-hidden"
+                    >
                         <div className="px-8 py-6 border-b border-gray-700 flex justify-between items-center bg-gray-800/50">
-                            <h3 className="text-xl font-black text-gray-100 flex items-center gap-3"><Shield className="w-6 h-6 text-emerald-400" /> SHARD VERIFICATION</h3>
-                            <button onClick={() => setShowVerifyModal(false)} className="p-2 hover:bg-gray-700 rounded-full transition-colors"><X className="w-6 h-6 text-gray-400" /></button>
+                            <h3 id="verify-modal-title" className="text-xl font-black text-gray-100 flex items-center gap-3"><Shield className="w-6 h-6 text-emerald-400" /> SHARD VERIFICATION</h3>
+                            <button onClick={() => setShowVerifyModal(false)} aria-label="Close modal" className="p-2 hover:bg-gray-700 rounded-full transition-colors"><X className="w-6 h-6 text-gray-400" /></button>
                         </div>
-                        <div className="p-8">
+                        <div className="p-8" aria-live="polite">
                             {isVerifying ? (
                                 <div className="flex flex-col items-center justify-center py-16">
                                     <RefreshCw className="w-16 h-16 text-emerald-400 animate-spin mb-6" />

@@ -526,8 +526,24 @@ class WebGalleryActivity : AppCompatActivity() {
 
     // JavaScript interface for communication between WebView and Android
     inner class WebAppInterface {
+        private fun isTrustedOrigin(): Boolean {
+            val currentUrl = webView.url ?: return false
+            val configuredUrl = PreferenceHelper.getServerUrl(this@WebGalleryActivity)
+            return try {
+                val currentHost = java.net.URL(currentUrl).host?.lowercase()
+                val configuredHost = java.net.URL(configuredUrl).host?.lowercase()
+                currentHost != null && currentHost == configuredHost
+            } catch (e: Exception) {
+                false
+            }
+        }
+
         @JavascriptInterface
         fun getAuthToken(): String {
+            if (!isTrustedOrigin()) {
+                Log.w(TAG, "Blocked getAuthToken from untrusted origin: ${webView.url}")
+                return ""
+            }
             return authToken ?: ""
         }
 
@@ -538,12 +554,19 @@ class WebGalleryActivity : AppCompatActivity() {
 
         @JavascriptInterface
         fun getServerUrl(): String {
+            if (!isTrustedOrigin()) {
+                Log.w(TAG, "Blocked getServerUrl from untrusted origin: ${webView.url}")
+                return ""
+            }
             return PreferenceHelper.getServerUrl(this@WebGalleryActivity)
         }
 
         @JavascriptInterface
         fun refreshToken(): String {
-            // This will be called from JavaScript if token expires
+            if (!isTrustedOrigin()) {
+                Log.w(TAG, "Blocked refreshToken from untrusted origin: ${webView.url}")
+                return ""
+            }
             return try {
                 AuthHelper.getValidToken(this@WebGalleryActivity) ?: ""
             } catch (e: Exception) {

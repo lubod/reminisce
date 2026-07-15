@@ -77,8 +77,7 @@ class BackupWorker(context: Context, params: WorkerParameters) : Worker(context,
                 acquire(10 * 60 * 60 * 1000L)
             }
 
-            Log.d(TAG, "ULTRA-AGGRESSIVE wake locks acquired (SCREEN_BRIGHT + PARTIAL) - Honor/OEM extreme mode")
-            Log.d(TAG, "Screen will stay ON during backup to prevent Honor battery manager from killing the process")
+            Log.d(TAG, "Wake locks acquired (PARTIAL_WAKE_LOCK) for background backup execution")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to acquire wake lock", e)
         }

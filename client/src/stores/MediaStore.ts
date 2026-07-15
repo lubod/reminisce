@@ -18,6 +18,9 @@ export interface MediaItem {
     aesthetic_score?: number;
 }
 
+export type SearchType = 'semantic' | 'text' | 'hybrid';
+export type MediaTypeFilter = 'all' | 'image' | 'video';
+
 export interface LocationResult {
     name: string;
     latitude: number;
@@ -286,7 +289,7 @@ export class MediaStore {
             }
 
             const response = await axios.get(`/search/images?${params}`);
-            const searchResults = response.data.results.map((item: any) => ({
+            const searchResults = response.data.results.map((item: MediaItem) => ({
                 ...item,
                 thumbnailUrl: item.thumbnail_url ? this.getAuthenticatedUrl(item.thumbnail_url) : undefined
             }));

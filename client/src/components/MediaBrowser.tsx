@@ -1,6 +1,7 @@
 import { useEffect, useRef, useCallback, useState } from "react";
 import { observer } from "mobx-react-lite";
 import { useStore } from "../stores/RootStore";
+import type { SearchType, MediaTypeFilter } from "../stores/MediaStore";
 import { MediaLightbox } from "./MediaLightbox";
 import { Star, Search, X, ChevronDown, ChevronUp, SlidersHorizontal, Play, MapPin } from "lucide-react";
 
@@ -109,7 +110,7 @@ export const MediaBrowser = observer(() => {
                                     <label className="text-xs font-medium text-gray-300 block mb-1">Mode:</label>
                                     <select
                                         value={mediaStore.searchType}
-                                        onChange={(e) => mediaStore.setSearchType(e.target.value as any)}
+                                        onChange={(e) => mediaStore.setSearchType(e.target.value as SearchType)}
                                         className="w-full px-3 py-2 bg-gray-700 border-gray-600 text-gray-100 rounded-md text-sm"
                                     >
                                         <option value="semantic">🤖 AI Semantic</option>
@@ -237,7 +238,7 @@ export const MediaBrowser = observer(() => {
                                 <label className="text-xs font-medium text-gray-300 block">System:</label>
                                 <select
                                     value={mediaStore.filters.allMediaTypeFilter}
-                                    onChange={(e) => mediaStore.setAllMediaTypeFilter(e.target.value as any)}
+                                    onChange={(e) => mediaStore.setAllMediaTypeFilter(e.target.value as MediaTypeFilter)}
                                     className="w-full px-3 py-2 bg-gray-700 border-gray-600 text-gray-100 rounded-md text-sm"
                                 >
                                     <option value="all">All Types</option>
