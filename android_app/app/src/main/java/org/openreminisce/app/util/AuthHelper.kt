@@ -1,6 +1,8 @@
 package org.openreminisce.app.util
 
 import android.content.Context
+import android.content.Intent
+import org.openreminisce.app.LoginActivity
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -389,11 +391,25 @@ class AuthHelper {
                     response = client.newCall(retryRequest).execute()
                     LogCollector.d(TAG, "Retry request completed. Code: ${response.code}")
                 } else {
-                    LogCollector.e(TAG, "Failed to refresh token")
+                    LogCollector.e(TAG, "Failed to refresh token (session expired), redirecting to login")
+                    redirectToLogin(context)
                 }
             }
 
             return response
+        }
+
+        fun redirectToLogin(context: Context) {
+            try {
+                SecureStorageHelper.clearCredentials(context)
+                val intent = Intent(context, LoginActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+                    putExtra("session_expired", true)
+                }
+                context.startActivity(intent)
+            } catch (e: Exception) {
+                LogCollector.e(TAG, "Failed to redirect to login: ${e.message}")
+            }
         }
     }
 }

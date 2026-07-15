@@ -113,6 +113,10 @@ class LoginActivity : AppCompatActivity() {
         setContentView(R.layout.activity_login)
         initializeViews()
         setupListeners()
+        if (intent.getBooleanExtra("session_expired", false)) {
+            showError("Session expired. Please sign in again.")
+            showLoginPhase()
+        }
     }
 
     override fun onResume() {
