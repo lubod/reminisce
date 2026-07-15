@@ -22,13 +22,15 @@ export const ServerImportModal = observer(({ onClose }: { onClose: () => void })
     const [error, setError] = useState<string | null>(null);
     const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const modalRef = useRef<HTMLDivElement>(null);
+    const isLoadingRef = useRef(isLoading);
+    isLoadingRef.current = isLoading;
 
     useEffect(() => {
         const previouslyFocused = document.activeElement as HTMLElement;
         modalRef.current?.focus();
 
         const handleKeyDown = (e: KeyboardEvent) => {
-            if (e.key === "Escape" && !isLoading) {
+            if (e.key === "Escape" && !isLoadingRef.current) {
                 onClose();
                 return;
             }
@@ -56,7 +58,7 @@ export const ServerImportModal = observer(({ onClose }: { onClose: () => void })
             previouslyFocused?.focus();
             if (pollRef.current) clearInterval(pollRef.current);
         };
-    }, [onClose, isLoading]);
+    }, [onClose]);
 
     const handleImport = async () => {
         if (!path.trim()) return;

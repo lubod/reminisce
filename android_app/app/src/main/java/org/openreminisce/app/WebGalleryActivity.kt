@@ -530,9 +530,13 @@ class WebGalleryActivity : AppCompatActivity() {
             val currentUrl = webView.url ?: return false
             val configuredUrl = PreferenceHelper.getServerUrl(this@WebGalleryActivity)
             return try {
-                val currentHost = java.net.URL(currentUrl).host?.lowercase()
-                val configuredHost = java.net.URL(configuredUrl).host?.lowercase()
-                currentHost != null && currentHost == configuredHost
+                val u1 = java.net.URL(currentUrl)
+                val u2 = java.net.URL(configuredUrl)
+                val p1 = if (u1.port != -1) u1.port else u1.defaultPort
+                val p2 = if (u2.port != -1) u2.port else u2.defaultPort
+                u1.protocol.equals(u2.protocol, ignoreCase = true) &&
+                u1.host.equals(u2.host, ignoreCase = true) &&
+                p1 == p2
             } catch (e: Exception) {
                 false
             }
