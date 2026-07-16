@@ -78,7 +78,7 @@ pub fn validate_table_name(table: &str) -> Result<(), &'static str> {
 }
 
 /// Encrypt a 32-byte key with a master key derived from the API secret key.
-pub fn encrypt_key(key: &[u8; 32], api_secret: &str) -> Vec<u8> {
+pub fn encrypt_key(key: &[u8; 32], api_secret: &str) -> Result<Vec<u8>, String> {
     use chacha20poly1305::aead::{Aead, KeyInit};
     use chacha20poly1305::{ChaCha20Poly1305, Nonce};
     use sha2::{Sha256, Digest};
@@ -88,7 +88,8 @@ pub fn encrypt_key(key: &[u8; 32], api_secret: &str) -> Vec<u8> {
     hasher.update(api_secret.as_bytes());
     let master_key = hasher.finalize();
 
-    let cipher = ChaCha20Poly1305::new_from_slice(&master_key).unwrap();
+    let cipher = ChaCha20Poly1305::new_from_slice(&master_key)
+        .map_err(|e| format!("Failed to initialize cipher: {}", e))?;
     
     // Generate a random 12-byte nonce
     let mut nonce_bytes = [0u8; 12];
@@ -96,13 +97,14 @@ pub fn encrypt_key(key: &[u8; 32], api_secret: &str) -> Vec<u8> {
     rng.fill_bytes(&mut nonce_bytes);
     let nonce = Nonce::from_slice(&nonce_bytes);
 
-    let ciphertext = cipher.encrypt(nonce, key.as_ref()).expect("Encryption failed");
+    let ciphertext = cipher.encrypt(nonce, key.as_ref())
+        .map_err(|e| format!("Encryption failed: {}", e))?;
     
     // Combine nonce + ciphertext
     let mut result = Vec::with_capacity(12 + ciphertext.len());
     result.extend_from_slice(&nonce_bytes);
     result.extend_from_slice(&ciphertext);
-    result
+    Ok(result)
 }
 
 /// Decrypt a key using the API secret key.
@@ -148,6 +150,6 @@ pub fn get_http_client() -> &'static reqwest::Client {
         reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(60))
             .build()
-            .expect("Failed to initialize global HTTP client")
+            .unwrap_or_else(|_| reqwest::Client::new())
     })
 }

@@ -1,6 +1,7 @@
 import { makeAutoObservable, runInAction, reaction } from "mobx";
 import { RootStore } from "./RootStore";
 import axios from "../api/axiosConfig";
+import { logger } from "../utils/logger";
 
 export interface MediaItem {
     hash: string;
@@ -313,7 +314,7 @@ export class MediaStore {
                 this.hasMore = false;
             });
         } catch (error) {
-            console.error("Search failed", error);
+            logger.error("Search failed", error);
             this.rootStore.uiStore.setError("Search failed");
         } finally {
             runInAction(() => {
@@ -419,7 +420,7 @@ export class MediaStore {
                 this.videoHasMore = this.videos.length < response.data.total;
             });
         } catch (error) {
-            console.error("Failed to fetch videos", error);
+            logger.error("Failed to fetch videos", error);
         } finally {
             runInAction(() => { this.isLoadingMoreVideos = false; });
         }
@@ -464,7 +465,7 @@ export class MediaStore {
                 this.allMediaHasMore = this.allMedia.length < response.data.total;
             });
         } catch (error) {
-            console.error("Failed to fetch all media", error);
+            logger.error("Failed to fetch all media", error);
         } finally {
             runInAction(() => { this.isLoadingMoreAllMedia = false; });
         }
@@ -563,7 +564,7 @@ export class MediaStore {
                 runInAction(() => { this.clearImageMetadata(); });
             }
         } catch (error) {
-            console.error("Failed to load full media", error);
+            logger.error("Failed to load full media", error);
             this.rootStore.uiStore.setError("Failed to load media");
         }
     };
@@ -577,7 +578,7 @@ export class MediaStore {
                 item.media_type === 'video' ? `/api/video/${item.hash}` : `/api/image/${item.hash}`
             );
             runInAction(() => { this.comparisonMediaUrl = url; });
-        } catch (error) { console.error("Failed to load comparison", error); }
+        } catch (error) { logger.error("Failed to load comparison", error); }
     };
 
     clearComparisonMedia = () => {
@@ -591,7 +592,7 @@ export class MediaStore {
         try {
             const response = await axios.get<ImageMetadata>(`/image/${hash}/metadata`);
             runInAction(() => { this.imageMetadata = response.data; this.lastLoadedMetadataHash = hash; });
-        } catch (error) { console.error("Metadata fetch failed", error); }
+        } catch (error) { logger.error("Metadata fetch failed", error); }
     };
 
     clearImageMetadata = () => { this.imageMetadata = null; this.lastLoadedMetadataHash = null; };
@@ -800,7 +801,7 @@ export class MediaStore {
             const response = await axios.get(`/search/places?query=${query}&limit=20`);
             runInAction(() => { this.locationSuggestions = response.data; });
         } catch (error) {
-            console.error("Location suggestions fetch failed", error);
+            logger.error("Location suggestions fetch failed", error);
             this.rootStore.uiStore.setError("Failed to fetch location suggestions");
             this.locationSuggestions = [];
         }
@@ -838,7 +839,7 @@ export class MediaStore {
                 thumbnailUrl: URL.createObjectURL(imageResponse.data)
             };
         } catch (error) {
-            console.error("Failed to fetch random image for presentation", error);
+            logger.error("Failed to fetch random image for presentation", error);
             return null;
         }
     };

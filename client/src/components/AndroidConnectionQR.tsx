@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import { Smartphone, Copy, CheckCircle, RefreshCw, AlertTriangle } from "lucide-react";
 import axios from "../api/axiosConfig";
+import { logger } from "../utils/logger";
 
 interface ConnectionInfo {
     node_id: string;
@@ -22,8 +23,8 @@ export const AndroidConnectionQR = () => {
             const response = await axios.get('/p2p/connection');
             setConnectionInfo(response.data);
         } catch (err) {
-            console.error('Failed to fetch connection info:', err);
-            setError('Failed to load connection info');
+            logger.error('Failed to fetch connection info:', err);
+            setError('Could not connect to server.');
         } finally {
             setIsLoading(false);
         }

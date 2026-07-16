@@ -1,6 +1,7 @@
 import { makeAutoObservable, runInAction } from "mobx";
 import { RootStore } from "./RootStore";
 import axios from "../api/axiosConfig";
+import { logger } from "../utils/logger";
 
 export interface Person {
     id: number;
@@ -100,7 +101,7 @@ export class PersonStore {
                 }
             });
         } catch (error) {
-            console.error("Failed to fetch persons", error);
+            logger.error("Failed to fetch persons", error);
             this.rootStore.uiStore.setError("Failed to fetch persons");
         } finally {
             runInAction(() => {
@@ -128,7 +129,7 @@ export class PersonStore {
             await this.fetchPersonImages(id);
             
         } catch (error) {
-            console.error(`Failed to fetch person ${id}`, error);
+            logger.error(`Failed to fetch person ${id}`, error);
             this.rootStore.uiStore.setError("Failed to fetch person");
         } finally {
             runInAction(() => {
@@ -172,7 +173,7 @@ export class PersonStore {
                 this.imagesHasMore = this.imagesOffset < response.data.total;
             });
         } catch (error) {
-            console.error(`Failed to fetch images for person ${personId}`, error);
+            logger.error(`Failed to fetch images for person ${personId}`, error);
             this.rootStore.uiStore.setError("Failed to fetch person images");
         } finally {
             runInAction(() => {
@@ -201,7 +202,7 @@ export class PersonStore {
                 }
             });
         } catch (error) {
-            console.error("Failed to update person name", error);
+            logger.error("Failed to update person name", error);
             this.rootStore.uiStore.setError("Failed to update person name");
         }
     };
@@ -212,7 +213,7 @@ export class PersonStore {
             // Refresh so thumbnail URL updates
             await this.fetchPerson(personId);
         } catch (error) {
-            console.error("Failed to set representative face", error);
+            logger.error("Failed to set representative face", error);
             this.rootStore.uiStore.setError("Failed to set representative face");
         }
     };
@@ -227,7 +228,7 @@ export class PersonStore {
             // Refresh persons list and the surviving target person
             await Promise.all([this.fetchPersons(), this.fetchPerson(targetId)]);
         } catch (error) {
-            console.error("Failed to merge persons", error);
+            logger.error("Failed to merge persons", error);
             this.rootStore.uiStore.setError("Failed to merge persons");
         }
     };

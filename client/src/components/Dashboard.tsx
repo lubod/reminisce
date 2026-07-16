@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { observer } from "mobx-react-lite";
 import { useStore } from "../stores/RootStore";
+import { logger } from "../utils/logger";
 import { Image, Video, Users, CheckCircle, FileText, Database, Activity, Settings, Brain, Cpu, HardDrive, MemoryStick, Zap, Upload, Folder, Network, Shield, TrendingUp, RefreshCw, AlertTriangle, Server, Clock, X, Shuffle, Trash2, Smartphone } from "lucide-react";
 import { DirectoryImportModal } from "./DirectoryImportModal";
 import { ServerImportModal } from "./ServerImportModal";
@@ -8,7 +9,7 @@ import { AndroidConnectionQR } from "./AndroidConnectionQR";
 import { UserManagement } from "./UserManagement";
 
 export const Dashboard = observer(() => {
-    const { statsStore, authStore } = useStore();
+    const { statsStore, authStore, uiStore } = useStore();
     const isAdmin = authStore.user?.role === "admin";
 
     const [activeTab, setActiveTab] = useState<'overview' | 'import' | 'system' | 'backup' | 'settings' | 'app' | 'users'>('overview');
@@ -81,7 +82,8 @@ export const Dashboard = observer(() => {
                 enable_media_backup: enableMediaBackup,
             });
         } catch (error) {
-            console.error("Failed to update settings:", error);
+            logger.error("Failed to update settings:", error);
+            uiStore.setError("Failed to update settings");
         }
     };
 

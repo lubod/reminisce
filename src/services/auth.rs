@@ -112,7 +112,30 @@ impl FromRequest for Claims {
             let user_uuid = uuid::Uuid::parse_str(&claims.user_id)
                 .map_err(|_| actix_web::error::ErrorUnauthorized("Invalid user ID in token"))?;
 
-            if let Some(pool) = pool {
+            struct CachedUserStatus {
+                role: String,
+                is_active: bool,
+                fetched_at: std::time::Instant,
+            }
+            static USER_CACHE: std::sync::OnceLock<std::sync::Arc<std::sync::Mutex<std::collections::HashMap<uuid::Uuid, CachedUserStatus>>>> = std::sync::OnceLock::new();
+            let cache = USER_CACHE.get_or_init(|| std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())));
+
+            let (role, is_active) = {
+                let cache_read = cache.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(cached) = cache_read.get(&user_uuid) {
+                    if cached.fetched_at.elapsed() < std::time::Duration::from_secs(5) {
+                        Some((cached.role.clone(), cached.is_active))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }.unzip();
+
+            let (user_role, user_active) = if let (Some(r), Some(a)) = (role, is_active) {
+                (r, a)
+            } else if let Some(pool) = pool {
                 let client = pool.0.get().await.map_err(|e| {
                     log::error!("FromRequest DB connection error: {:?}", e);
                     actix_web::error::ErrorInternalServerError("Database connection failed")
@@ -126,20 +149,29 @@ impl FromRequest for Claims {
                 })?;
 
                 if let Some(row) = row {
-                    let is_active: bool = row.get("is_active");
-                    if !is_active {
-                        return Err(actix_web::error::ErrorUnauthorized("Account is disabled"));
-                    }
-                    let mut claims_updated = claims;
-                    claims_updated.role = row.get("role");
-                    Ok(claims_updated)
+                    let r: String = row.get("role");
+                    let a: bool = row.get("is_active");
+                    let mut cache_write = cache.lock().unwrap_or_else(|e| e.into_inner());
+                    cache_write.insert(user_uuid, CachedUserStatus {
+                        role: r.clone(),
+                        is_active: a,
+                        fetched_at: std::time::Instant::now(),
+                    });
+                    (r, a)
                 } else {
-                    Err(actix_web::error::ErrorUnauthorized("User not found"))
+                    return Err(actix_web::error::ErrorUnauthorized("User not found"));
                 }
             } else {
                 log::error!("MainDbPool app data is missing in Claims FromRequest");
-                Err(actix_web::error::ErrorInternalServerError("Database configuration error"))
+                return Err(actix_web::error::ErrorInternalServerError("Database configuration error"));
+            };
+
+            if !user_active {
+                return Err(actix_web::error::ErrorUnauthorized("Account is disabled"));
             }
+            let mut claims_updated = claims;
+            claims_updated.role = user_role;
+            Ok(claims_updated)
         };
 
         Box::pin(fut)

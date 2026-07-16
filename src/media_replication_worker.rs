@@ -387,7 +387,7 @@ async fn replicate_single_file(
     let enc_size_i32 = enc_size as i32;
     let data_shards_i32 = data_shards as i32;
     let parity_shards_i32 = parity_shards as i32;
-    let encrypted_key = crate::utils::encrypt_key(&encryption_key, api_secret);
+    let encrypted_key = crate::utils::encrypt_key(&encryption_key, api_secret)?;
     // Compute a manifest hash: BLAKE3 over all stored shard hashes concatenated.
     let mut manifest_hasher = blake3::Hasher::new();
     for (_, _, _, shard_hash) in final_results.iter() { manifest_hasher.update(shard_hash.as_bytes()); }

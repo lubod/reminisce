@@ -154,13 +154,25 @@ where
 
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
 
-        // Periodic cleanup of stale entries (last update > 10 mins ago)
+        const MAX_BUCKETS: usize = 10000;
         let now = Instant::now();
-        if now.duration_since(state.last_cleanup).as_secs() > 60 {
+
+        // Periodic or capacity-triggered cleanup of stale entries (last update > 10 mins ago)
+        if now.duration_since(state.last_cleanup).as_secs() > 60 || state.buckets.len() >= MAX_BUCKETS {
             state.buckets.retain(|_, bucket| {
                 now.duration_since(bucket.last_update).as_secs() < 600
             });
             state.last_cleanup = now;
+        }
+
+        // Emergency eviction if flooded with distinct IPs beyond MAX_BUCKETS
+        if state.buckets.len() >= MAX_BUCKETS && !state.buckets.contains_key(&ip) {
+            if let Some(oldest_ip) = state.buckets.iter()
+                .min_by_key(|(_, b)| b.last_update)
+                .map(|(ip, _)| *ip)
+            {
+                state.buckets.remove(&oldest_ip);
+            }
         }
 
         let bucket = state.buckets

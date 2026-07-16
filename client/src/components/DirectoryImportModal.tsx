@@ -5,6 +5,7 @@ import { useStore } from "../stores/RootStore";
 import { X, Upload, FolderOpen, CheckCircle, AlertCircle, Loader } from "lucide-react";
 import axios from "../api/axiosConfig";
 import { isAxiosError } from "axios";
+import { logger } from "../utils/logger";
 import { blake3 } from "hash-wasm";
 
 interface FileWithHash {
@@ -145,7 +146,7 @@ export const DirectoryImportModal = observer(({ onClose }: { onClose: () => void
                     const existingSet = new Set(res.data.existing_hashes);
                     result.needs_upload.push(...images.filter(f => !existingSet.has(f.hash)).map(f => f.hash));
                 } catch (error) {
-                    console.error('Failed to batch check images:', error);
+                    logger.error('Failed to batch check images:', error);
                     result.needs_upload.push(...images.map(f => f.hash));
                 }
             }
@@ -160,7 +161,7 @@ export const DirectoryImportModal = observer(({ onClose }: { onClose: () => void
                     const existingSet = new Set(res.data.existing_hashes);
                     result.needs_upload.push(...videos.filter(f => !existingSet.has(f.hash)).map(f => f.hash));
                 } catch (error) {
-                    console.error('Failed to batch check videos:', error);
+                    logger.error('Failed to batch check videos:', error);
                     result.needs_upload.push(...videos.map(f => f.hash));
                 }
             }
@@ -187,7 +188,7 @@ export const DirectoryImportModal = observer(({ onClose }: { onClose: () => void
                 const endpoint = isVideo ? `/videos/${hash}/labels` : `/images/${hash}/labels`;
                 await axios.post(endpoint, { label_id: labelId });
             } catch (error) {
-                console.error(`Failed to apply label to ${file.name}:`, error);
+                logger.error(`Failed to apply label to ${file.name}:`, error);
             }
         }
     };
@@ -218,7 +219,7 @@ export const DirectoryImportModal = observer(({ onClose }: { onClose: () => void
                             labelId = existingLabel.id;
                         }
                     } else {
-                        console.error('Failed to create label:', error);
+                        logger.error('Failed to create label:', error);
                     }
                 }
             }
@@ -246,7 +247,7 @@ export const DirectoryImportModal = observer(({ onClose }: { onClose: () => void
                         const hash = await calculateHash(file);
                         return { file, hash };
                     } catch (error) {
-                        console.error(`Failed to hash ${file.name}:`, error);
+                        logger.error(`Failed to hash ${file.name}:`, error);
                         setFailedFiles(prev => [...prev, file.name]);
                         return null;
                     }
@@ -278,7 +279,7 @@ export const DirectoryImportModal = observer(({ onClose }: { onClose: () => void
             const toUpload = fileHashes.filter(f => checkResult.needs_upload.includes(f.hash));
             const alreadyHandled = fileHashes.length - toUpload.length;
 
-            console.info(`${alreadyHandled} files already exist or were deduplicated, uploading ${toUpload.length} new files`);
+            logger.info(`${alreadyHandled} files already exist or were deduplicated, uploading ${toUpload.length} new files`);
 
             // Phase 4: Upload sequentially
             setProgress(prev => ({
@@ -305,7 +306,7 @@ export const DirectoryImportModal = observer(({ onClose }: { onClose: () => void
                     setProgress(prev => ({ ...prev, completed: prev.completed + 1 }));
                 } catch (error: unknown) {
                     const errorMsg = isAxiosError(error) ? error.message : String(error);
-                    console.error(`Failed to upload ${file.name}:`, errorMsg);
+                    logger.error(`Failed to upload ${file.name}:`, errorMsg);
                     setFailedFiles(prev => [...prev, file.name]);
                     setProgress(prev => ({ ...prev, failed: prev.failed + 1 }));
                 }
@@ -313,7 +314,7 @@ export const DirectoryImportModal = observer(({ onClose }: { onClose: () => void
 
             setProgress(prev => ({ ...prev, status: 'complete', current: 'Import complete!' }));
         } catch (error) {
-            console.error('Import failed:', error);
+            logger.error('Import failed:', error);
             setProgress(prev => ({ ...prev, status: 'error', current: 'Import failed' }));
         }
     };

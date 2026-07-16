@@ -3,6 +3,7 @@ import { observer } from "mobx-react-lite";
 import { X, Upload, Folder, CheckCircle, AlertCircle, Loader } from "lucide-react";
 import axios from "../api/axiosConfig";
 import { isAxiosError } from "axios";
+import { logger } from "../utils/logger";
 
 interface ImportJob {
     status: "running" | "done" | "failed";
@@ -91,7 +92,7 @@ export const ServerImportModal = observer(({ onClose }: { onClose: () => void })
                 }
             }, 2000);
         } catch (err: unknown) {
-            console.error("Import failed:", err);
+            logger.error("Import failed:", err);
             const errorMsg = isAxiosError(err)
                 ? (err.response?.data as { error?: string })?.error || err.message
                 : String(err);

@@ -1,6 +1,7 @@
 import { makeAutoObservable } from "mobx";
 import { RootStore } from "./RootStore";
 import api from "../api/axiosConfig";
+import { logger } from "../utils/logger";
 import axios from "axios";
 
 export interface User {
@@ -105,7 +106,7 @@ export class AuthStore {
         try {
             await api.post("/auth/logout");
         } catch (e) {
-            console.error("Logout request failed", e);
+            logger.error("Logout request failed", e);
         }
         this.setToken(null);
         this.setImageToken(null);

@@ -1,6 +1,7 @@
 import { makeAutoObservable, runInAction } from "mobx";
 import { RootStore } from "./RootStore";
 import api from "../api/axiosConfig";
+import { logger } from "../utils/logger";
 
 export interface DuplicateImage {
     hash: string;
@@ -131,7 +132,7 @@ export class DuplicatesStore {
                 this.workerStatus = response.data;
             });
         } catch (error) {
-            console.error("Worker status fetch failed", error);
+            logger.error("Worker status fetch failed", error);
         }
     };
 

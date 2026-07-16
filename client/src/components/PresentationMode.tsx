@@ -3,6 +3,7 @@ import { observer } from "mobx-react-lite";
 import { useStore } from "../stores/RootStore";
 import type { MediaItem } from "../stores/MediaStore";
 import { Maximize2, Minimize2, Star, Tag, Settings, X, Play, Pause, Info } from "lucide-react";
+import { logger } from "../utils/logger";
 
 export const PresentationMode = observer(() => {
     const { mediaStore, uiStore, labelStore } = useStore();
@@ -146,7 +147,7 @@ export const PresentationMode = observer(() => {
             document.documentElement.requestFullscreen().then(() => {
                 uiStore.setIsFullscreen(true);
             }).catch(err => {
-                console.error(`Error attempting to enable full-screen mode: ${err.message}`);
+                logger.error(`Error attempting to enable full-screen mode: ${(err as Error).message}`);
             });
         } else {
             if (document.exitFullscreen) {

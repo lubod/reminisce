@@ -1,5 +1,6 @@
 import { makeAutoObservable, runInAction } from "mobx";
 import axios from "../api/axiosConfig";
+import { logger } from "../utils/logger";
 import { RootStore } from "./RootStore";
 
 export interface Label {
@@ -36,7 +37,7 @@ export class LabelStore {
                 this.labels = response.data.labels;
             });
         } catch (error) {
-            console.error("Failed to fetch labels", error);
+            logger.error("Failed to fetch labels", error);
             this.rootStore.uiStore.setError("Failed to fetch labels");
         } finally {
             runInAction(() => {
@@ -53,7 +54,7 @@ export class LabelStore {
             });
             return response.data;
         } catch (error) {
-            console.error("Failed to create label", error);
+            logger.error("Failed to create label", error);
             this.rootStore.uiStore.setError("Failed to create label");
             throw error;
         }
@@ -66,7 +67,7 @@ export class LabelStore {
                 this.labels = this.labels.filter(l => l.id !== labelId);
             });
         } catch (error) {
-            console.error("Failed to delete label", error);
+            logger.error("Failed to delete label", error);
             this.rootStore.uiStore.setError("Failed to delete label");
             throw error;
         }
@@ -77,7 +78,7 @@ export class LabelStore {
             const response = await axios.get<LabelsResponse>(`/images/${hash}/labels`);
             return response.data.labels;
         } catch (error) {
-            console.error("Failed to get image labels", error);
+            logger.error("Failed to get image labels", error);
             return [];
         }
     };
@@ -86,7 +87,7 @@ export class LabelStore {
         try {
             await axios.post(`/images/${hash}/labels`, { label_id: labelId });
         } catch (error) {
-            console.error("Failed to add image label", error);
+            logger.error("Failed to add image label", error);
             this.rootStore.uiStore.setError("Failed to add label");
             throw error;
         }
@@ -96,7 +97,7 @@ export class LabelStore {
         try {
             await axios.delete(`/images/${hash}/labels/${labelId}`);
         } catch (error) {
-            console.error("Failed to remove image label", error);
+            logger.error("Failed to remove image label", error);
             this.rootStore.uiStore.setError("Failed to remove label");
             throw error;
         }
@@ -107,7 +108,7 @@ export class LabelStore {
             const response = await axios.get<LabelsResponse>(`/videos/${hash}/labels`);
             return response.data.labels;
         } catch (error) {
-            console.error("Failed to get video labels", error);
+            logger.error("Failed to get video labels", error);
             return [];
         }
     };
@@ -116,7 +117,7 @@ export class LabelStore {
         try {
             await axios.post(`/videos/${hash}/labels`, { label_id: labelId });
         } catch (error) {
-            console.error("Failed to add video label", error);
+            logger.error("Failed to add video label", error);
             this.rootStore.uiStore.setError("Failed to add label");
             throw error;
         }
@@ -126,7 +127,7 @@ export class LabelStore {
         try {
             await axios.delete(`/videos/${hash}/labels/${labelId}`);
         } catch (error) {
-            console.error("Failed to remove video label", error);
+            logger.error("Failed to remove video label", error);
             this.rootStore.uiStore.setError("Failed to remove label");
             throw error;
         }

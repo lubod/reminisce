@@ -73,6 +73,7 @@
             android:exported="false"
             android:theme="@style/Theme.Reminisce" />
 
+        <!-- WebGalleryActivity retained as unexported fallback activity for WebView integration -->
         <activity
             android:name=".WebGalleryActivity"
             android:exported="false"

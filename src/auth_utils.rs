@@ -101,6 +101,13 @@ pub async fn authenticate_request(
         }
     }
 
+    // 3. Try 'access_token' HTTP cookie
+    if token.is_none() {
+        if let Some(cookie) = req.cookie("access_token") {
+            token = Some(cookie.value().to_string());
+        }
+    }
+
     if let Some(token_str) = token {
         let validation = Validation::new(Algorithm::HS512);
         match jsonwebtoken::decode::<Claims>(

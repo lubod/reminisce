@@ -143,8 +143,11 @@ fn save_persisted_peers(peers: &PeerMap, data_dir: &std::path::Path) {
     let temp_name = format!("peers.{}.tmp", rand::random::<u64>());
     let temp_path = dir.join(temp_name);
     let target_path = dir.join("peers.json");
+    static SAVE_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    let lock = SAVE_LOCK.get_or_init(|| std::sync::Mutex::new(()));
 
     tokio::task::spawn_blocking(move || {
+        let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
         let write_ok = if let Ok(file) = std::fs::File::create(&temp_path) {
             if let Err(e) = serde_json::to_writer_pretty(file, &list) {
                 warn!("[COORD] Failed to write temp peers file: {}", e);

@@ -6,6 +6,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Star, Tag, X, Plus, Columns2, Trash2, Info, Wand2, Download, Save } from "lucide-react";
 import type { Label } from "../stores/LabelStore";
+import { logger } from "../utils/logger";
 
 export const MediaLightbox = observer(() => {
     const { mediaStore, labelStore, authStore } = useStore();
@@ -204,7 +205,7 @@ export const MediaLightbox = observer(() => {
             setEnhanceOps(ops);
             setShowEnhanced(true);
         } catch (e) {
-            console.error('Enhancement failed', e);
+            logger.error('Enhancement failed', e);
         } finally {
             setEnhanceLoading(false);
         }
@@ -236,7 +237,7 @@ export const MediaLightbox = observer(() => {
             await axios.post(`/image/${selectedMedia.hash}/save-enhanced`, { image: base64 });
             setSaveState('saved');
         } catch (e) {
-            console.error('Save to library failed', e);
+            logger.error('Save to library failed', e);
             setSaveState('idle');
         }
     };

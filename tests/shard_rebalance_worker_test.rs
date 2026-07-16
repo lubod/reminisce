@@ -89,7 +89,7 @@ async fn test_find_file_info_returns_image_data() {
     let hash = "rebalance_find_img_001";
     let key = [0xA1u8; 32];
     let api_secret = "test_secret_key_which_is_at_least_32_bytes_long";
-    let encrypted_key = reminisce::utils::encrypt_key(&key, api_secret);
+    let encrypted_key = reminisce::utils::encrypt_key(&key, api_secret).unwrap();
     client.execute(
         "INSERT INTO images (user_id, deviceid, hash, name, ext, type, has_thumbnail, p2p_synced_at, p2p_encryption_key, p2p_encrypted_size)
          VALUES ($1, 'test', $2, $3, 'png', 'camera', false, NOW(), $4, 512)",
@@ -116,7 +116,7 @@ async fn test_find_file_info_returns_video_data() {
     let hash = "rebalance_find_vid_001";
     let key = [0xB2u8; 32];
     let api_secret = "test_secret_key_which_is_at_least_32_bytes_long";
-    let encrypted_key = reminisce::utils::encrypt_key(&key, api_secret);
+    let encrypted_key = reminisce::utils::encrypt_key(&key, api_secret).unwrap();
     client.execute(
         "INSERT INTO videos (user_id, deviceid, hash, name, ext, type, has_thumbnail, p2p_synced_at, p2p_encryption_key, p2p_encrypted_size)
          VALUES ($1, 'test', $2, $3, 'mp4', 'camera', false, NOW(), $4, 1024)",

@@ -1,6 +1,7 @@
 import { makeAutoObservable, runInAction } from "mobx";
 import axios from "../api/axiosConfig";
 import { isAxiosError } from "axios";
+import { logger } from "../utils/logger";
 import { RootStore } from "./RootStore";
 
 export interface DashboardStats {
@@ -168,7 +169,7 @@ export class StatsStore {
                 this.stats = response.data;
             });
         } catch (error) {
-            console.error("Failed to fetch dashboard stats", error);
+            logger.error("Failed to fetch dashboard stats", error);
             this.rootStore.uiStore.setError("Failed to load dashboard statistics.");
         } finally {
             runInAction(() => {
@@ -185,7 +186,7 @@ export class StatsStore {
                 this.poolStats = response.data;
             });
         } catch (error) {
-            console.error("Failed to fetch pool stats", error);
+            logger.error("Failed to fetch pool stats", error);
         } finally {
             runInAction(() => {
                 this.isPoolStatsLoading = false;
@@ -201,7 +202,7 @@ export class StatsStore {
                 this.geoDbStats = response.data;
             });
         } catch (error) {
-            console.error("Failed to fetch geodb stats", error);
+            logger.error("Failed to fetch geodb stats", error);
         } finally {
             runInAction(() => {
                 this.isGeoDbStatsLoading = false;
@@ -217,7 +218,7 @@ export class StatsStore {
                 this.aiSettings = response.data;
             });
         } catch (error) {
-            console.error("Failed to fetch AI settings", error);
+            logger.error("Failed to fetch AI settings", error);
         } finally {
             runInAction(() => {
                 this.isAiSettingsLoading = false;
@@ -232,7 +233,7 @@ export class StatsStore {
                 this.aiSettings = response.data;
             });
         } catch (error) {
-            console.error("Failed to update AI settings", error);
+            logger.error("Failed to update AI settings", error);
             this.rootStore.uiStore.setError("Failed to update AI settings");
             throw error;
         }
@@ -246,7 +247,7 @@ export class StatsStore {
                 this.systemStats = response.data;
             });
         } catch (error) {
-            console.error("Failed to fetch system stats", error);
+            logger.error("Failed to fetch system stats", error);
         } finally {
             runInAction(() => {
                 this.isSystemStatsLoading = false;
@@ -262,7 +263,7 @@ export class StatsStore {
                 this.p2pDaemonStatus = response.data;
             });
         } catch (error) {
-            console.error("Failed to fetch P2P status", error);
+            logger.error("Failed to fetch P2P status", error);
             runInAction(() => {
                 this.p2pDaemonStatus = null;
             });
@@ -281,7 +282,7 @@ export class StatsStore {
                 this.p2pBackupStatus = response.data;
             });
         } catch (error) {
-            console.error("Failed to fetch P2P backup status", error);
+            logger.error("Failed to fetch P2P backup status", error);
         } finally {
             runInAction(() => {
                 this.isP2PBackupStatsLoading = false;
@@ -297,7 +298,7 @@ export class StatsStore {
                 this.discoveredPeers = response.data.peers;
             });
         } catch (error) {
-            console.error("Failed to fetch discovered peers", error);
+            logger.error("Failed to fetch discovered peers", error);
         } finally {
             runInAction(() => {
                 this.isDiscoveredPeersLoading = false;
@@ -327,7 +328,7 @@ export class StatsStore {
                 );
             }
         } catch (error: unknown) {
-            console.error("Failed to verify P2P backup", error);
+            logger.error("Failed to verify P2P backup", error);
             const msg = isAxiosError(error)
                 ? (error.response?.data as { error?: string })?.error || "Failed to verify backup"
                 : "Failed to verify backup";
@@ -366,7 +367,7 @@ export class StatsStore {
             });
             runInAction(() => { this.serviceHealth = response.data; });
         } catch (error) {
-            console.error("Service health check failed", error);
+            logger.error("Service health check failed", error);
             runInAction(() => {
                 this.serviceHealth = {
                     status: "offline",

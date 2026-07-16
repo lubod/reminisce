@@ -379,8 +379,6 @@ class RemoteMediaRepository(private val context: Context) {
         )
     }
 
-    private val dateFormatter = SimpleDateFormat("yyyy-MM-dd", Locale.US)
-
     private fun formatDate(timestamp: Long): String =
-        dateFormatter.format(java.util.Date(timestamp))
+        SimpleDateFormat("yyyy-MM-dd", Locale.US).format(java.util.Date(timestamp))
 }

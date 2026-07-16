@@ -48,8 +48,10 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
     }
 
     override fun onUpgrade(db: SQLiteDatabase?, oldVersion: Int, newVersion: Int) {
-        // Handle database upgrades if needed in the future
         Log.d("DatabaseHelper", "Upgrading database from version $oldVersion to $newVersion")
+        db?.execSQL("DROP TABLE IF EXISTS $TABLE_FILE_HASHES")
+        db?.execSQL("DROP TABLE IF EXISTS $TABLE_BACKUP_INFO")
+        onCreate(db)
     }
 
     // Method to insert or update a file hash
