@@ -121,8 +121,14 @@ impl FromRequest for Claims {
             let cache = USER_CACHE.get_or_init(|| std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())));
 
             let (role, is_active) = {
-                let cache_read = cache.lock().unwrap_or_else(|e| e.into_inner());
-                if let Some(cached) = cache_read.get(&user_uuid) {
+                let mut cache_guard = cache.lock().unwrap_or_else(|e| e.into_inner());
+
+                // Evict stale entries if cache grows beyond 500 items
+                if cache_guard.len() > 500 {
+                    cache_guard.retain(|_, v| v.fetched_at.elapsed() < std::time::Duration::from_secs(60));
+                }
+
+                if let Some(cached) = cache_guard.get(&user_uuid) {
                     if cached.fetched_at.elapsed() < std::time::Duration::from_secs(5) {
                         Some((cached.role.clone(), cached.is_active))
                     } else {

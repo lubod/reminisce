@@ -10,6 +10,8 @@ import { UserInteractionInstrumentation } from '@opentelemetry/instrumentation-u
 import { Resource } from '@opentelemetry/resources';
 import { SemanticResourceAttributes } from '@opentelemetry/semantic-conventions';
 
+import { logger } from './utils/logger';
+
 const setupTelemetry = () => {
     const resource = new Resource({
         [SemanticResourceAttributes.SERVICE_NAME]: 'reminisce-frontend',
@@ -60,7 +62,7 @@ const setupTelemetry = () => {
         ],
     });
 
-    console.info('OpenTelemetry initialized');
+    logger.info('OpenTelemetry initialized');
 };
 
 export default setupTelemetry;

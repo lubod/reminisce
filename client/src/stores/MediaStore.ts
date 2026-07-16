@@ -717,7 +717,7 @@ export class MediaStore {
                     this.filters.selectedDeviceId = this.deviceIds[0];
                 }
             });
-        } catch (error) { console.error("Device ID fetch failed", error); }
+        } catch (error) { logger.error("Device ID fetch failed", error); }
     };
 
     // --- Getters for UI ---

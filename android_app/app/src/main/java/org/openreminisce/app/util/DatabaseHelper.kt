@@ -49,9 +49,20 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
 
     override fun onUpgrade(db: SQLiteDatabase?, oldVersion: Int, newVersion: Int) {
         Log.d("DatabaseHelper", "Upgrading database from version $oldVersion to $newVersion")
-        db?.execSQL("DROP TABLE IF EXISTS $TABLE_FILE_HASHES")
-        db?.execSQL("DROP TABLE IF EXISTS $TABLE_BACKUP_INFO")
-        onCreate(db)
+        // Incremental migrations preserve cached file hashes across schema version updates.
+        // Fall back to table recreation only if migrating from unhandled/ancient versions.
+        var currentVersion = oldVersion
+        if (currentVersion == 1) {
+            // Version 1 -> 2 migration example (future schema expansions)
+            currentVersion = 2
+        }
+
+        if (currentVersion < newVersion) {
+            // Unhandled version migration fallback
+            db?.execSQL("DROP TABLE IF EXISTS $TABLE_FILE_HASHES")
+            db?.execSQL("DROP TABLE IF EXISTS $TABLE_BACKUP_INFO")
+            onCreate(db)
+        }
     }
 
     // Method to insert or update a file hash
