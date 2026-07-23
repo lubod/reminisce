@@ -263,7 +263,24 @@ pub async fn get_image_metadata(
             actix_web::error::ErrorInternalServerError("Failed to retrieve image metadata")
         })?;
 
-    if let Some(row) = row {
+    let media_row = match row {
+        Some(r) => Some((r, "image")),
+        None => {
+            let v_row = client
+                .query_opt(
+                    "SELECT v.hash, v.name, v.description, v.place, v.created_at, NULL as exif,                      CASE WHEN s.hash IS NOT NULL THEN true ELSE false END as starred,                      v.deviceid, v.file_size_bytes, v.width, v.height                      FROM videos v                      LEFT JOIN starred_videos s ON v.hash = s.hash AND s.user_id =                       WHERE v.user_id =  AND v.hash =  AND v.deleted_at IS NULL LIMIT 1",
+                    &[&user_uuid, &hash_to_find]
+                ).await
+                .map_err(|e| {
+                    error!("Failed to query video metadata from database: {}", e);
+                    actix_web::error::ErrorInternalServerError("Failed to retrieve video metadata")
+                })?;
+            v_row.map(|r| (r, "video"))
+        }
+    };
+
+    if let Some((row, mtype)) = media_row {
+        let file_size: Option<i32> = row.get(8);
         let metadata = ImageMetadata {
             hash: row.get(0),
             name: row.get(1),
@@ -273,19 +290,19 @@ pub async fn get_image_metadata(
             exif: row.get(5),
             starred: row.get(6),
             device_id: row.get(7),
-            file_size_bytes: row.get(8),
+            file_size_bytes: file_size.map(|v| v as i64),
             width: row.get(9),
             height: row.get(10),
-            media_type: Some("image".to_string()),
+            media_type: Some(mtype.to_string()),
         };
 
-        info!("Serving metadata for image: {}", hash_to_find);
+        info!("Serving metadata for {}: {}", mtype, hash_to_find);
         Ok(HttpResponse::Ok().json(metadata))
     } else {
-        warn!("Image not found for hash: '{}'", &hash_to_find);
+        warn!("Media not found for hash: '{}'", &hash_to_find);
         Ok(
             HttpResponse::NotFound().json(
-                serde_json::json!({"status": "error", "message": "Image not found."})
+                serde_json::json!({"status": "error", "message": "Media not found."})
             )
         )
     }
