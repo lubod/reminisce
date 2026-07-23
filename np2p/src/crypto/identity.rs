@@ -4,6 +4,7 @@ use rcgen::{CertificateParams, DistinguishedName, KeyPair as RcKeyPair};
 use rustls_pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
 use std::sync::Arc;
 use rustls::client::danger::{ServerCertVerifier, ServerCertVerified};
+use rustls::server::danger::{ClientCertVerifier, ClientCertVerified};
 
 pub const NODE_ID_LENGTH: usize = 32;
 
@@ -93,7 +94,7 @@ impl NodeIdentity {
         let private_key = PrivateKeyDer::Pkcs8(key_der.into());
 
         let mut server_config = rustls::ServerConfig::builder()
-            .with_no_client_auth()
+            .with_client_cert_verifier(Arc::new(AcceptAnyClientCert))
             .with_single_cert(cert_chain.clone(), private_key.clone_key())
             .map_err(|e| Np2pError::Crypto(format!("TLS config error: {}", e)))?;
         server_config.alpn_protocols = vec![b"np2p".to_vec()];
@@ -275,5 +276,56 @@ mod tests {
         println!("EXTRACTED: {:?}", extracted.map(hex::encode));
         println!("EXPECTED : {}", hex::encode(identity.node_id()));
         assert_eq!(extracted.unwrap(), identity.node_id());
+    }
+}
+
+/// A verifier that requests and accepts any client certificate (so conn.peer_identity() works).
+#[derive(Debug)]
+struct AcceptAnyClientCert;
+
+impl ClientCertVerifier for AcceptAnyClientCert {
+    fn root_hint_subjects(&self) -> &[rustls::DistinguishedName] {
+        &[]
+    }
+
+    fn verify_client_cert(
+        &self,
+        _end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _now: UnixTime,
+    ) -> std::result::Result<ClientCertVerified, rustls::Error> {
+        Ok(ClientCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &rustls::crypto::ring::default_provider().signature_verification_algorithms,
+        )
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &rustls::crypto::ring::default_provider().signature_verification_algorithms,
+        )
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        vec![rustls::SignatureScheme::ED25519]
     }
 }
