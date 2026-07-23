@@ -94,14 +94,15 @@ impl NodeIdentity {
 
         let mut server_config = rustls::ServerConfig::builder()
             .with_no_client_auth()
-            .with_single_cert(cert_chain.clone(), private_key)
+            .with_single_cert(cert_chain.clone(), private_key.clone_key())
             .map_err(|e| Np2pError::Crypto(format!("TLS config error: {}", e)))?;
         server_config.alpn_protocols = vec![b"np2p".to_vec()];
 
         let mut client_config = rustls::ClientConfig::builder()
             .dangerous()
             .with_custom_certificate_verifier(Arc::new(VerifyNodeCertificate))
-            .with_no_client_auth();
+            .with_client_auth_cert(cert_chain, private_key)
+            .map_err(|e| Np2pError::Crypto(format!("TLS client cert error: {}", e)))?;
         client_config.alpn_protocols = vec![b"np2p".to_vec()];
 
         // Convert to QUIC configs
