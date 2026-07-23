@@ -127,13 +127,14 @@ where
         // Determine limits based on target path
         let path = req.path();
 
-        // Exclude system, health, metrics, and documentation endpoints from rate limiting
+        // Exclude system, health, metrics, setup-status, and documentation endpoints from rate limiting
         if path == "/ping"
             || path == "/health"
             || path == "/metrics"
             || path == "/api-doc/openapi.json"
             || path.starts_with("/swagger-ui/")
             || path == "/swagger-ui"
+            || path == "/api/auth/setup-status"
         {
             let fut = self.service.call(req);
             return Box::pin(async move {
@@ -142,12 +143,12 @@ where
             });
         }
 
-        let is_auth = path.starts_with("/api/auth/");
+        let is_login = path.contains("/user-login") || path.contains("/login") || path.contains("/register");
 
         // General limits: max 100 tokens, refills 5 tokens/second (bursts allowed, fast recovery)
-        // Stricter auth limits: max 5 tokens, refills 0.1 tokens/second (max 6 requests per minute)
-        let (max_tokens, refill_rate) = if is_auth {
-            (5.0, 0.1)
+        // Stricter login limits: max 20 tokens, refills 0.5 tokens/second
+        let (max_tokens, refill_rate) = if is_login {
+            (20.0, 0.5)
         } else {
             (100.0, 5.0)
         };

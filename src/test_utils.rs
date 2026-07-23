@@ -205,7 +205,7 @@ mod tests {
     use serial_test::serial;
 
     #[tokio::test]
-    #[serial]
+    #[serial(db)]
     async fn test_test_database_creation() {
         let test_db = TestDatabase::new().await.expect("Failed to create test database");
         let pool = test_db.pool();
@@ -237,7 +237,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[serial]
+    #[serial(db)]
     async fn test_setup_test_database_helper() {
         let pool = setup_test_database().await;
         let client = pool.get().await.expect("Failed to get client");
