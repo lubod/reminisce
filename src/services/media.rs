@@ -259,7 +259,7 @@ pub async fn get_image_metadata(
             &[&user_uuid, &hash_to_find]
         ).await
         .map_err(|e| {
-            error!("Failed to query image metadata from database: {}", e);
+            error!("Failed to query image metadata from database: {:?}", e);
             actix_web::error::ErrorInternalServerError("Failed to retrieve image metadata")
         })?;
 
@@ -295,7 +295,7 @@ pub async fn get_image_metadata(
             &[&user_uuid, &hash_to_find]
         ).await
         .map_err(|e| {
-            error!("Failed to query video metadata from database: {}", e);
+            error!("Failed to query video metadata from database: {:?}", e);
             actix_web::error::ErrorInternalServerError("Failed to retrieve video metadata")
         })?;
 
