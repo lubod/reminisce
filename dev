@@ -158,7 +158,7 @@ case "$COMMAND" in
         ;;
     test)
         check_tool "cargo"
-        export PGHOST=localhost PGPORT=5432 PGUSER=postgres PGPASSWORD=postgres
+        export PGHOST=localhost PGPORT=25432 PGUSER=postgres PGPASSWORD=postgres
         cargo test "$@"
         ;;
     e2e)

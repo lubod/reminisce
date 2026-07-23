@@ -96,11 +96,13 @@ async fn test_batch_check_images_some_exist() {
     let client = pool.get().await.expect("Failed to get client from pool");
     let config = common::utils::create_test_config();
 
+    let user_uuid = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
     // Insert existing image for this device
     client
         .execute(
-            "INSERT INTO images (hash, name, exif, created_at, type, deviceid, ext) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+            "INSERT INTO images (user_id, hash, name, exif, created_at, type, deviceid, ext) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
             &[
+                &user_uuid,
                 &"existing_hash_1",
                 &"IMG_existing.jpg",
                 &None::<&str>,
@@ -241,11 +243,13 @@ async fn test_batch_check_videos_some_exist() {
     let client = pool.get().await.expect("Failed to get client from pool");
     let config = common::utils::create_test_config();
 
+    let user_uuid = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
     // Insert existing video for this device
     client
         .execute(
-            "INSERT INTO videos (hash, name, metadata, created_at, type, deviceid, ext) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+            "INSERT INTO videos (user_id, hash, name, metadata, created_at, type, deviceid, ext) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
             &[
+                &user_uuid,
                 &"existing_video_hash",
                 &"VID_existing.mp4",
                 &None::<&str>,

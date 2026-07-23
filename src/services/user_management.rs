@@ -147,7 +147,10 @@ pub async fn create_user(
             }))
         }
         Err(e) => {
-            if e.to_string().contains("duplicate key") {
+            let is_duplicate = e.code() == Some(&tokio_postgres::error::SqlState::UNIQUE_VIOLATION)
+                || e.to_string().to_lowercase().contains("duplicate")
+                || e.to_string().to_lowercase().contains("unique");
+            if is_duplicate {
                 HttpResponse::BadRequest().json(serde_json::json!({
                     "status": "error",
                     "message": "Username already exists"

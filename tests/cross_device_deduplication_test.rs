@@ -139,10 +139,10 @@ async fn test_cross_device_deduplication_workflow() {
 
     let check_body: serde_json::Value = test::read_body_json(check_response).await;
 
-    // This is the key assertion - file exists for another device but not for this device
+    // Under user-based scoping, exists indicates whether the user already has the image
     assert_eq!(
-        check_body["exists"], false,
-        "Image should NOT exist for device2 (exists field should be false)"
+        check_body["exists"], true,
+        "Image SHOULD exist for user when checking device2"
     );
     assert_eq!(
         check_body["exists_without_deviceid"], true,
@@ -190,40 +190,33 @@ async fn test_cross_device_deduplication_workflow() {
     // ============================================================
     log::info!("STEP 5: Verifying both device entries exist in database");
 
-    let all_rows = client
+    let image_rows = client
         .query(
-            "SELECT deviceid, name, ext, verification_status FROM images WHERE hash = $1 ORDER BY deviceid",
+            "SELECT name, ext, verification_status FROM images WHERE hash = $1",
             &[&test_hash],
         )
         .await
-        .expect("Failed to query all entries for hash");
+        .expect("Failed to query image entry for hash");
 
     assert_eq!(
-        all_rows.len(),
-        2,
-        "Should have exactly 2 entries in database (one per device)"
+        image_rows.len(),
+        1,
+        "Should have exactly 1 entry in images table"
     );
 
-    // Verify device1 entry
-    let device1_row = all_rows
-        .iter()
-        .find(|row| row.get::<_, &str>("deviceid") == device1)
-        .expect("Device1 entry should exist");
+    let media_sources = client
+        .query(
+            "SELECT device_id FROM media_sources WHERE hash = $1 ORDER BY device_id",
+            &[&test_hash],
+        )
+        .await
+        .expect("Failed to query media sources");
 
-    assert_eq!(device1_row.get::<_, &str>("name"), test_name_device1);
-    assert_eq!(device1_row.get::<_, &str>("ext"), "jpg");
-    assert_eq!(device1_row.get::<_, i32>("verification_status"), 1);
-
-    // Verify device2 entry
-    let device2_row = all_rows
-        .iter()
-        .find(|row| row.get::<_, &str>("deviceid") == device2)
-        .expect("Device2 entry should exist");
-
-    assert_eq!(device2_row.get::<_, &str>("name"), test_name_device2);
-    assert_eq!(device2_row.get::<_, &str>("ext"), "jpg");
-    // Device2's verification status should be 0 (pending) since it only uploaded metadata
-    assert_eq!(device2_row.get::<_, i32>("verification_status"), 0);
+    assert_eq!(
+        media_sources.len(),
+        2,
+        "Should have 2 entries in media_sources (one per device)"
+    );
 
     log::info!("✅ SUCCESS: Both device entries verified in database");
     log::info!("  - Device1: {} (verified)", test_name_device1);

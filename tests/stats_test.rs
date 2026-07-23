@@ -18,7 +18,8 @@ async fn test_get_stats() {
 
     // Insert test data
     // Users
-    client.execute("INSERT INTO users (username, email, password_hash, role) VALUES ('admin', 'admin@test.com', 'hash', 'admin')", &[]).await.unwrap();
+    let admin_uuid = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+    client.execute("INSERT INTO users (id, username, email, password_hash, role) VALUES ($1, 'admin', 'admin@test.com', 'hash', 'admin')", &[&admin_uuid]).await.unwrap();
     client.execute("INSERT INTO users (username, email, password_hash, role) VALUES ('user', 'user@test.com', 'hash', 'user')", &[]).await.unwrap();
 
     // Images

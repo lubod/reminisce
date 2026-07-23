@@ -351,8 +351,8 @@ async fn test_remove_image_label() {
 
     // Add label directly in DB
     client.execute(
-        "INSERT INTO image_labels (image_hash, image_deviceid, label_id) VALUES ($1, 'dev1', $2) ON CONFLICT DO NOTHING",
-        &[&hash, &label_id],
+        "INSERT INTO image_labels (image_hash, image_user_id, label_id) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
+        &[&hash, &user_uuid, &label_id],
     ).await.unwrap();
 
     let main_pool = common::utils::wrap_main_pool(pool.clone());
