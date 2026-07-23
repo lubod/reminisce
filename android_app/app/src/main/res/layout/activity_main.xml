@@ -9,13 +9,17 @@
     <com.google.android.material.tabs.TabLayout
         android:id="@+id/tabLayout"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
+        android:layout_height="56dp"
         android:background="?attr/colorPrimary"
         app:tabTextColor="@color/white"
         app:tabSelectedTextColor="@color/white"
         app:tabIndicatorColor="@color/white"
+        app:tabIndicatorFullWidth="false"
+        app:tabIndicatorGravity="bottom"
+        app:tabIndicatorHeight="3dp"
         app:tabGravity="fill"
         app:tabMode="fixed"
+        app:tabTextAppearance="@style/TabTextAppearance"
         app:layout_constraintTop_toTopOf="parent"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent" />
