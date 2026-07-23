@@ -10,7 +10,7 @@
         android:id="@+id/rawExifToggle"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="Show raw EXIF"
+        android:text="@string/show_raw_exif"
         style="@style/Widget.MaterialComponents.Button.OutlinedButton"
         android:layout_marginStart="8dp" />
 

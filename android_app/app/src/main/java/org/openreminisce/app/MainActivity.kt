@@ -111,8 +111,8 @@ class MainActivity : AppCompatActivity() {
 
         TabLayoutMediator(tabLayout, viewPager) { tab, position ->
             when (position) {
-                0 -> tab.text = getString(R.string.local_gallery)
-                1 -> tab.text = getString(R.string.server_gallery)
+                0 -> tab.text = getString(R.string.local_server)
+                1 -> tab.text = getString(R.string.remote_server)
             }
         }.attach()
     }

@@ -51,6 +51,7 @@ class ImagePreviewActivity : AppCompatActivity() {
     private lateinit var prevButton: ImageButton
     private lateinit var nextButton: ImageButton
     private lateinit var backToMainButton: ImageButton
+    private lateinit var infoButton: ImageButton
     private lateinit var imageNameText: TextView
     private lateinit var imageDateText: TextView
     private lateinit var imagePlaceText: TextView
@@ -76,6 +77,7 @@ class ImagePreviewActivity : AppCompatActivity() {
         prevButton = findViewById(R.id.prevButton)
         nextButton = findViewById(R.id.nextButton)
         backToMainButton = findViewById(R.id.backToMainButton)
+        infoButton = findViewById(R.id.infoButton)
         imageNameText = findViewById(R.id.imageNameText)
         imageDateText = findViewById(R.id.imageDateText)
         imagePlaceText = findViewById(R.id.imagePlaceText)
@@ -109,6 +111,20 @@ class ImagePreviewActivity : AppCompatActivity() {
 
         backToMainButton.setOnClickListener {
             finish() // Go back to the main activity
+        }
+
+        infoButton.setOnClickListener {
+            if (isLocalMedia) {
+                showLocalMediaInfoDialog()
+            } else {
+                val hash = currentHash()
+                if (hash.isNotEmpty()) {
+                    val mediaType = if (isVideo) "video" else "image"
+                    org.openreminisce.app.fragments.MediaInfoBottomSheetFragment
+                        .newInstance(hash, mediaType)
+                        .show(supportFragmentManager, "media_info")
+                }
+            }
         }
 
         // Manage button visibility based on whether we have a list of images/videos
@@ -530,13 +546,45 @@ class ImagePreviewActivity : AppCompatActivity() {
                 val projection = arrayOf(
                     android.provider.MediaStore.MediaColumns.DISPLAY_NAME,
                     android.provider.MediaStore.MediaColumns.DATE_TAKEN,
+                    android.provider.MediaStore.MediaColumns.SIZE,
+                    android.provider.MediaStore.MediaColumns.WIDTH,
+                    android.provider.MediaStore.MediaColumns.HEIGHT,
+                    android.provider.MediaStore.MediaColumns.MIME_TYPE,
+                    android.provider.MediaStore.MediaColumns.DURATION,
+                    android.provider.MediaStore.MediaColumns.ORIENTATION,
                 )
                 contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
                     if (cursor.moveToFirst()) {
                         val nameIdx = cursor.getColumnIndex(android.provider.MediaStore.MediaColumns.DISPLAY_NAME)
                         val dateIdx = cursor.getColumnIndex(android.provider.MediaStore.MediaColumns.DATE_TAKEN)
+                        val sizeIdx = cursor.getColumnIndex(android.provider.MediaStore.MediaColumns.SIZE)
+                        val widthIdx = cursor.getColumnIndex(android.provider.MediaStore.MediaColumns.WIDTH)
+                        val heightIdx = cursor.getColumnIndex(android.provider.MediaStore.MediaColumns.HEIGHT)
+                        val mimeIdx = cursor.getColumnIndex(android.provider.MediaStore.MediaColumns.MIME_TYPE)
+                        val durationIdx = cursor.getColumnIndex(android.provider.MediaStore.MediaColumns.DURATION)
+                        val orientationIdx = cursor.getColumnIndex(android.provider.MediaStore.MediaColumns.ORIENTATION)
+
                         val name = if (nameIdx >= 0) cursor.getString(nameIdx) else null
                         val dateTaken = if (dateIdx >= 0) cursor.getLong(dateIdx) else 0L
+                        val size = if (sizeIdx >= 0) cursor.getLong(sizeIdx) else 0L
+                        val width = if (widthIdx >= 0) cursor.getInt(widthIdx) else 0
+                        val height = if (heightIdx >= 0) cursor.getInt(heightIdx) else 0
+                        val mimeType = if (mimeIdx >= 0) cursor.getString(mimeIdx) else null
+                        val duration = if (durationIdx >= 0) cursor.getLong(durationIdx) else 0L
+                        val orientation = if (orientationIdx >= 0) cursor.getInt(orientationIdx) else 0
+
+                        currentLocalMediaInfo = LocalMediaInfo(
+                            name = name ?: uriString.substringAfterLast('/'),
+                            dateTaken = dateTaken,
+                            size = size,
+                            width = width,
+                            height = height,
+                            mimeType = mimeType,
+                            duration = duration,
+                            orientation = orientation,
+                            uri = uriString
+                        )
+
                         runOnUiThread {
                             imageNameText.text = name ?: uriString.substringAfterLast('/')
                             if (dateTaken > 0) {
@@ -554,6 +602,74 @@ class ImagePreviewActivity : AppCompatActivity() {
                 Log.e(TAG, "Failed to query local media info", e)
             }
         }.start()
+    }
+
+    private var currentLocalMediaInfo: LocalMediaInfo? = null
+
+    data class LocalMediaInfo(
+        val name: String,
+        val dateTaken: Long,
+        val size: Long,
+        val width: Int,
+        val height: Int,
+        val mimeType: String?,
+        val duration: Long,
+        val orientation: Int,
+        val uri: String
+    )
+
+    private fun currentHash(): String =
+        if (imageHashes.isNotEmpty() && currentPosition >= 0 && currentPosition < imageHashes.size)
+            imageHashes[currentPosition]
+        else ""
+
+    private fun showLocalMediaInfoDialog() {
+        val info = currentLocalMediaInfo
+        if (info == null) {
+            android.widget.Toast.makeText(this, "Loading media info...", android.widget.Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val sb = StringBuilder()
+        sb.appendLine("File: ${info.name}")
+        sb.appendLine("Type: ${info.mimeType ?: (if (isVideo) "video" else "image")}")
+        if (info.dateTaken > 0) {
+            val sdf = java.text.SimpleDateFormat("d MMM yyyy, H:mm:ss", java.util.Locale.getDefault())
+            sb.appendLine("Date: ${sdf.format(java.util.Date(info.dateTaken))}")
+        }
+        if (info.width > 0 && info.height > 0) {
+            val w = if (info.orientation == 90 || info.orientation == 270) info.height else info.width
+            val h = if (info.orientation == 90 || info.orientation == 270) info.width else info.height
+            sb.appendLine("Dimensions: ${w} × ${h}")
+        }
+        if (info.size > 0) {
+            sb.appendLine("Size: ${formatFileSize(info.size)}")
+        }
+        if (isVideo && info.duration > 0) {
+            val totalSecs = info.duration / 1000
+            val mins = totalSecs / 60
+            val secs = totalSecs % 60
+            sb.appendLine("Duration: %d:%02d".format(mins, secs))
+        }
+        if (info.orientation != 0) {
+            sb.appendLine("Orientation: ${info.orientation}°")
+        }
+
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("Details")
+            .setMessage(sb.toString().trimEnd())
+            .setPositiveButton("OK", null)
+            .show()
+    }
+
+    private fun formatFileSize(bytes: Long): String {
+        if (bytes < 1024) return "$bytes B"
+        val kb = bytes / 1024.0
+        if (kb < 1024) return String.format("%.1f KB", kb)
+        val mb = kb / 1024.0
+        if (mb < 1024) return String.format("%.1f MB", mb)
+        val gb = mb / 1024.0
+        return String.format("%.1f GB", gb)
     }
 
     private fun fetchVideoFilename(mediaUrl: String, token: String, deviceId: String) {

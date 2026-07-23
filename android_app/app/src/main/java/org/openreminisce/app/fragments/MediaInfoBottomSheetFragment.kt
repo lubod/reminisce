@@ -41,7 +41,7 @@ class MediaInfoBottomSheetFragment : BottomSheetDialogFragment() {
             }
         }
 
-        private val TAB_TITLES = listOf("Details", "EXIF", "Labels", "Description")
+        private val TAB_TITLE_IDS = listOf(R.string.tab_details, R.string.tab_exif, R.string.tab_labels, R.string.tab_description)
     }
 
     private val hash get() = arguments?.getString(ARG_HASH) ?: ""
@@ -58,7 +58,7 @@ class MediaInfoBottomSheetFragment : BottomSheetDialogFragment() {
 
         viewPager.adapter = InfoPagerAdapter(requireActivity())
         TabLayoutMediator(tabLayout, viewPager) { tab, position ->
-            tab.text = TAB_TITLES[position]
+            tab.text = getString(TAB_TITLE_IDS[position])
         }.attach()
     }
 
@@ -92,15 +92,43 @@ class MediaInfoBottomSheetFragment : BottomSheetDialogFragment() {
 
         override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
             val fileNameText = view.findViewById<TextView>(R.id.detailFileName)
+            val mediaTypeText = view.findViewById<TextView>(R.id.detailMediaType)
             val dateText = view.findViewById<TextView>(R.id.detailDate)
+            val dimensionsText = view.findViewById<TextView>(R.id.detailDimensions)
+            val fileSizeText = view.findViewById<TextView>(R.id.detailFileSize)
             val placeText = view.findViewById<TextView>(R.id.detailPlace)
             val deviceIdText = view.findViewById<TextView>(R.id.detailDeviceId)
+            val hashText = view.findViewById<TextView>(R.id.detailHash)
+
+            val mediaTypeArg = arguments?.getString("media_type") ?: "image"
 
             lifecycleScope.launch {
                 viewModel().metadata.collect { meta ->
                     if (meta != null) {
                         fileNameText.text = "File: ${meta.name.ifEmpty { meta.hash.takeLast(8) }}"
+
+                        val typeLabel = meta.media_type ?: mediaTypeArg
+                        mediaTypeText.text = "Type: ${typeLabel.replaceFirstChar { it.uppercase() }}"
+
                         dateText.text = "Date: ${meta.created_at}"
+
+                        val w = meta.width
+                        val h = meta.height
+                        if (w != null && w > 0 && h != null && h > 0) {
+                            dimensionsText.text = "Dimensions: ${w} × ${h}"
+                            dimensionsText.visibility = View.VISIBLE
+                        } else {
+                            dimensionsText.visibility = View.GONE
+                        }
+
+                        val sizeBytes = meta.file_size_bytes
+                        if (sizeBytes != null && sizeBytes > 0) {
+                            fileSizeText.text = "Size: ${formatFileSize(sizeBytes)}"
+                            fileSizeText.visibility = View.VISIBLE
+                        } else {
+                            fileSizeText.visibility = View.GONE
+                        }
+
                         if (!meta.place.isNullOrEmpty()) {
                             placeText.text = "Place: ${meta.place}"
                             placeText.visibility = View.VISIBLE
@@ -113,9 +141,21 @@ class MediaInfoBottomSheetFragment : BottomSheetDialogFragment() {
                         } else {
                             deviceIdText.visibility = View.GONE
                         }
+
+                        hashText.text = "Hash: ${meta.hash}"
                     }
                 }
             }
+        }
+
+        private fun formatFileSize(bytes: Long): String {
+            if (bytes < 1024) return "$bytes B"
+            val kb = bytes / 1024.0
+            if (kb < 1024) return String.format("%.1f KB", kb)
+            val mb = kb / 1024.0
+            if (mb < 1024) return String.format("%.1f MB", mb)
+            val gb = mb / 1024.0
+            return String.format("%.1f GB", gb)
         }
     }
 
@@ -317,7 +357,7 @@ class MediaInfoBottomSheetFragment : BottomSheetDialogFragment() {
                 } else if (holder is RawVH) {
                     holder.rawText.text = rawJson
                     holder.rawText.visibility = if (rawExpanded) View.VISIBLE else View.GONE
-                    holder.toggleButton.text = if (rawExpanded) "Hide raw EXIF" else "Show raw EXIF"
+                    holder.toggleButton.text = if (rawExpanded) getString(R.string.hide_raw_exif) else getString(R.string.show_raw_exif)
                     holder.toggleButton.setOnClickListener {
                         rawExpanded = !rawExpanded
                         notifyItemChanged(position)
@@ -445,7 +485,7 @@ class MediaInfoBottomSheetFragment : BottomSheetDialogFragment() {
             val markwon = Markwon.create(requireContext())
             lifecycleScope.launch {
                 viewModel().metadata.collect { meta ->
-                    val text = meta?.description?.takeIf { it.isNotEmpty() } ?: "No description available"
+                    val text = meta?.description?.takeIf { it.isNotEmpty() } ?: getString(R.string.no_description_available)
                     markwon.setMarkdown(descText, text)
                 }
             }

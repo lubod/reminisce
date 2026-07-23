@@ -200,7 +200,12 @@ pub async fn get_video(
     "place": "Paris, France",
     "created_at": "2025-01-01T12:00:00Z",
     "exif": "{...}",
-    "starred": false
+    "starred": false,
+    "device_id": "pixel-7",
+    "file_size_bytes": 4567890,
+    "width": 4032,
+    "height": 3024,
+    "media_type": "image"
 }))]
 pub struct ImageMetadata {
     pub hash: String,
@@ -210,6 +215,11 @@ pub struct ImageMetadata {
     pub created_at: String,
     pub exif: Option<String>,
     pub starred: bool,
+    pub device_id: Option<String>,
+    pub file_size_bytes: Option<i64>,
+    pub width: Option<i32>,
+    pub height: Option<i32>,
+    pub media_type: Option<String>,
 }
 
 #[utoipa::path(
@@ -240,7 +250,12 @@ pub async fn get_image_metadata(
 
     let row = client
         .query_opt(
-            "SELECT i.hash, i.name, i.description, i.place, i.created_at, i.exif, CASE WHEN s.hash IS NOT NULL THEN true ELSE false END as starred FROM images i LEFT JOIN starred_images s ON i.hash = s.hash AND s.user_id = $1 WHERE i.user_id = $1 AND i.hash = $2 AND i.deleted_at IS NULL LIMIT 1",
+            "SELECT i.hash, i.name, i.description, i.place, i.created_at, i.exif, \
+             CASE WHEN s.hash IS NOT NULL THEN true ELSE false END as starred, \
+             i.deviceid, i.file_size_bytes, i.width, i.height \
+             FROM images i \
+             LEFT JOIN starred_images s ON i.hash = s.hash AND s.user_id = $1 \
+             WHERE i.user_id = $1 AND i.hash = $2 AND i.deleted_at IS NULL LIMIT 1",
             &[&user_uuid, &hash_to_find]
         ).await
         .map_err(|e| {
@@ -257,6 +272,11 @@ pub async fn get_image_metadata(
             created_at: row.get::<_, chrono::DateTime<chrono::Utc>>(4).to_rfc3339(),
             exif: row.get(5),
             starred: row.get(6),
+            device_id: row.get(7),
+            file_size_bytes: row.get(8),
+            width: row.get(9),
+            height: row.get(10),
+            media_type: Some("image".to_string()),
         };
 
         info!("Serving metadata for image: {}", hash_to_find);

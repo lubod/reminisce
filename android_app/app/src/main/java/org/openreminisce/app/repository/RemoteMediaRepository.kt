@@ -180,7 +180,11 @@ class RemoteMediaRepository(private val context: Context) {
                     created_at = json.optString("created_at", ""),
                     exif = if (json.has("exif") && !json.isNull("exif")) json.get("exif").toString() else null,
                     starred = json.optBoolean("starred", false),
-                    device_id = json.optString("device_id").takeIf { it.isNotEmpty() && it != "null" }
+                    device_id = json.optString("device_id").takeIf { it.isNotEmpty() && it != "null" },
+                    file_size_bytes = if (json.has("file_size_bytes") && !json.isNull("file_size_bytes")) json.optLong("file_size_bytes") else null,
+                    width = if (json.has("width") && !json.isNull("width")) json.optInt("width") else null,
+                    height = if (json.has("height") && !json.isNull("height")) json.optInt("height") else null,
+                    media_type = json.optString("media_type").takeIf { it.isNotEmpty() && it != "null" }
                 )
                 Result.success(metadata)
             } else {

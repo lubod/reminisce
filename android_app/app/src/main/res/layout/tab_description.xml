@@ -8,7 +8,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:padding="16dp"
-        android:text="No description available"
+        android:text="@string/no_description_available"
         android:textSize="14sp" />
 
 </ScrollView>

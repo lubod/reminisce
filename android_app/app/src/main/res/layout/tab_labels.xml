@@ -19,7 +19,7 @@
             android:id="@+id/addLabelButton"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="+ Add label"
+            android:text="@string/add_label"
             style="@style/Widget.MaterialComponents.Button.OutlinedButton" />
 
     </LinearLayout>

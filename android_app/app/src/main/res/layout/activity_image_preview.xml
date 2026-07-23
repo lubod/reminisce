@@ -50,6 +50,20 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toTopOf="parent" />
 
+    <!-- Info button (top-right corner) -->
+    <ImageButton
+        android:id="@+id/infoButton"
+        android:layout_width="50dp"
+        android:layout_height="50dp"
+        android:layout_margin="16dp"
+        android:background="@drawable/button_background"
+        android:src="@drawable/ic_info"
+        android:contentDescription="Info"
+        android:scaleType="fitCenter"
+        app:tint="@android:color/white"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
+
     <!-- Previous button (center-left, positioned lower) -->
     <ImageButton
         android:id="@+id/prevButton"

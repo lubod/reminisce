@@ -106,4 +106,24 @@
     <string name="status_pre_scan_complete">Pre-scan complete</string>
     <string name="clear_hash_cache">Clear Hash Cache</string>
     <string name="hash_cache_cleared">Hash cache cleared successfully</string>
+
+    <!-- Media info bottom sheet -->
+    <string name="tab_details">Details</string>
+    <string name="tab_exif">EXIF</string>
+    <string name="tab_labels">Labels</string>
+    <string name="tab_description">Description</string>
+    <string name="detail_file">File</string>
+    <string name="detail_type">Type</string>
+    <string name="detail_date">Date</string>
+    <string name="detail_dimensions">Dimensions</string>
+    <string name="detail_size">Size</string>
+    <string name="detail_place">Place</string>
+    <string name="detail_device">Device</string>
+    <string name="detail_hash">Hash</string>
+    <string name="detail_duration">Duration</string>
+    <string name="detail_orientation">Orientation</string>
+    <string name="no_description_available">No description available</string>
+    <string name="add_label">+ Add label</string>
+    <string name="show_raw_exif">Show raw EXIF</string>
+    <string name="hide_raw_exif">Hide raw EXIF</string>
 </resources>
