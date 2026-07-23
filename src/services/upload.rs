@@ -307,7 +307,7 @@ pub async fn upload_image_metadata(
                  type = EXCLUDED.type, name = EXCLUDED.name, ext = EXCLUDED.ext,
                  exif = COALESCE(EXCLUDED.exif, images.exif),
                  has_thumbnail = EXCLUDED.has_thumbnail, last_verified_at = EXCLUDED.last_verified_at,
-                 verification_status = EXCLUDED.verification_status, location = EXCLUDED.location, place = EXCLUDED.place,
+                 verification_status = GREATEST(images.verification_status, EXCLUDED.verification_status), location = EXCLUDED.location, place = EXCLUDED.place,
                  added_at = NOW()";
 
     let lat = metadata.latitude.unwrap_or(0.0);
@@ -389,7 +389,7 @@ pub async fn upload_video_metadata(
                  ON CONFLICT (user_id, hash) DO UPDATE SET
                  type = EXCLUDED.type, name = EXCLUDED.name, ext = EXCLUDED.ext, metadata = EXCLUDED.metadata,
                  has_thumbnail = EXCLUDED.has_thumbnail, last_verified_at = EXCLUDED.last_verified_at,
-                 verification_status = EXCLUDED.verification_status,
+                 verification_status = GREATEST(videos.verification_status, EXCLUDED.verification_status),
                  added_at = NOW()";
 
     if let Err(e) = client.execute(query, &[

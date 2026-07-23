@@ -131,6 +131,25 @@ async fn test_list_image_thumbnails_invalid_token() {
 #[serial]
 async fn test_get_thumbnail_success() {
     let (pool, _test_db) = setup_test_database_with_instance().await;
+    let client = pool.get().await.expect("Failed to get client");
+    let user_id = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+    client
+        .execute(
+            "INSERT INTO images (user_id, hash, name, exif, created_at, type, deviceid, ext, has_thumbnail) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+            &[
+                &user_id,
+                &common::TEST_IMAGE_HASH,
+                &common::TEST_IMAGE_NAME,
+                &None::<&str>,
+                &chrono::Utc::now(),
+                &"camera",
+                &"test_device_id",
+                &"jpg",
+                &true,
+            ]
+        ).await
+        .expect("Failed to insert test data");
+
     let main_pool = common::utils::wrap_main_pool(pool.clone());
     let config = common::utils::create_test_config();
     // Create thumbnail file for test

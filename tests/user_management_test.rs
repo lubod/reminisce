@@ -59,6 +59,12 @@ async fn test_list_users_admin() {
 async fn test_list_users_non_admin_forbidden() {
     common::init_log();
     let (pool, _db) = setup_test_database_with_instance().await;
+    let client = pool.get().await.unwrap();
+    let other_uuid = uuid::Uuid::parse_str(OTHER_UUID).unwrap();
+    client.execute(
+        "INSERT INTO users (id, username, email, password_hash, role, is_active) VALUES ($1, 'other_user', 'other@local', 'hash', 'user', true) ON CONFLICT DO NOTHING",
+        &[&other_uuid],
+    ).await.unwrap();
     let main_pool = common::utils::wrap_main_pool(pool.clone());
     let config = common::utils::create_test_config();
 
@@ -139,6 +145,12 @@ async fn test_create_user_admin() {
 async fn test_create_user_non_admin_forbidden() {
     common::init_log();
     let (pool, _db) = setup_test_database_with_instance().await;
+    let client = pool.get().await.unwrap();
+    let other_uuid = uuid::Uuid::parse_str(OTHER_UUID).unwrap();
+    client.execute(
+        "INSERT INTO users (id, username, email, password_hash, role, is_active) VALUES ($1, 'other_user', 'other@local', 'hash', 'user', true) ON CONFLICT DO NOTHING",
+        &[&other_uuid],
+    ).await.unwrap();
     let main_pool = common::utils::wrap_main_pool(pool.clone());
     let config = common::utils::create_test_config();
 

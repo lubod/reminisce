@@ -22,8 +22,9 @@ async fn test_get_image_success() {
     // Insert test data
     client
         .execute(
-            "INSERT INTO images (hash, name, exif, created_at, type, deviceid, ext) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+            "INSERT INTO images (user_id, hash, name, exif, created_at, type, deviceid, ext) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
             &[
+                &uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap(),
                 &common::TEST_IMAGE_HASH,
                 &common::TEST_IMAGE_NAME,
                 &Option::<&str>::None,
@@ -157,8 +158,9 @@ async fn test_get_video_success() {
     // Insert test data
     client
         .execute(
-            "INSERT INTO videos (hash, name, metadata, created_at, type, deviceid, ext) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+            "INSERT INTO videos (user_id, hash, name, metadata, created_at, type, deviceid, ext) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
             &[
+                &uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap(),
                 &common::TEST_VIDEO_HASH,
                 &common::TEST_VIDEO_NAME,
                 &None::<&str>,
@@ -297,8 +299,9 @@ async fn test_head_image_returns_content_disposition() {
     // Insert test data
     client
         .execute(
-            "INSERT INTO images (hash, name, exif, created_at, type, deviceid, ext) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+            "INSERT INTO images (user_id, hash, name, exif, created_at, type, deviceid, ext) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
             &[
+                &uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap(),
                 &common::TEST_IMAGE_HASH,
                 &common::TEST_IMAGE_NAME,
                 &Option::<&str>::None,
@@ -369,8 +372,9 @@ async fn test_get_video_returns_content_disposition() {
     // Insert test data
     client
         .execute(
-            "INSERT INTO videos (hash, name, metadata, created_at, type, deviceid, ext) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+            "INSERT INTO videos (user_id, hash, name, metadata, created_at, type, deviceid, ext) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
             &[
+                &uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap(),
                 &common::TEST_VIDEO_HASH,
                 &common::TEST_VIDEO_NAME,
                 &None::<&str>,

@@ -207,7 +207,9 @@ pub struct RegisterRequest {
     "password": "secure_password_123"
 }))]
 pub struct UserLoginRequest {
+    #[serde(default)]
     pub username: String,
+    #[serde(default)]
     pub password: String,
 }
 
@@ -351,6 +353,13 @@ pub async fn user_login(
     config: web::Data<Config>,
 ) -> HttpResponse {
     info!("User login attempt for username: {}", req_body.username);
+
+    if req_body.username.trim().is_empty() || req_body.password.is_empty() {
+        return HttpResponse::BadRequest().json(serde_json::json!({
+            "status": "error",
+            "message": "Username and password are required"
+        }));
+    }
 
     // Get database connection
     let client = match pool.0.get().await {

@@ -23,8 +23,10 @@ async fn test_health_check_healthy() {
             .service(health_check)
     ).await;
 
+    let token = common::utils::create_test_jwt_token().await;
     let req = test::TestRequest::get()
         .uri("/health")
+        .insert_header(("Authorization", format!("Bearer {}", token)))
         .to_request();
 
     let response = test::call_service(&app, req).await;
@@ -54,8 +56,10 @@ async fn test_health_check_response_structure() {
             .service(health_check)
     ).await;
 
+    let token = common::utils::create_test_jwt_token().await;
     let req = test::TestRequest::get()
         .uri("/health")
+        .insert_header(("Authorization", format!("Bearer {}", token)))
         .to_request();
 
     let response = test::call_service(&app, req).await;

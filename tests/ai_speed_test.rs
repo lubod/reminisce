@@ -10,6 +10,22 @@ use serial_test::serial;
 
 const AI_SERVICE_URL: &str = "http://localhost:8081";
 
+fn create_client(timeout_secs: u64) -> reqwest::Client {
+    use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
+    let mut headers = HeaderMap::new();
+    let api_key = std::env::var("API_SECRET_KEY")
+        .unwrap_or_else(|_| "test_secret_key_which_is_at_least_32_bytes_long".to_string());
+    headers.insert(
+        AUTHORIZATION,
+        HeaderValue::from_str(&format!("Bearer {}", api_key)).unwrap(),
+    );
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(timeout_secs))
+        .default_headers(headers)
+        .build()
+        .unwrap()
+}
+
 fn load_test_image() -> Vec<u8> {
     std::fs::read("tests/test_image.jpg").expect("Failed to read tests/test_image.jpg")
 }
@@ -22,7 +38,7 @@ fn to_base64(data: &[u8]) -> String {
 #[tokio::test]
 #[serial]
 async fn test_health_check() {
-    let client = reqwest::Client::new();
+    let client = create_client(60);
     let start = Instant::now();
     let resp = client
         .get(format!("{}/health", AI_SERVICE_URL))
@@ -54,10 +70,7 @@ async fn test_health_check() {
 async fn test_image_embedding_speed() {
     let image_data = load_test_image();
     let base64_image = to_base64(&image_data);
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(60))
-        .build()
-        .unwrap();
+    let client = create_client(60);
 
     // Warmup
     let _ = client
@@ -100,10 +113,7 @@ async fn test_image_embedding_speed() {
 #[tokio::test]
 #[serial]
 async fn test_text_embedding_speed() {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .unwrap();
+    let client = create_client(30);
 
     let queries = [
         "a dog playing in the snow",
@@ -157,10 +167,7 @@ async fn test_text_embedding_speed() {
 async fn test_image_description_speed() {
     let image_data = load_test_image();
     let base64_image = to_base64(&image_data);
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(120))
-        .build()
-        .unwrap();
+    let client = create_client(120);
 
     // Warmup
     let _ = client
@@ -208,10 +215,7 @@ async fn test_image_description_speed() {
 async fn test_face_detection_speed() {
     let image_data = load_test_image();
     let base64_image = to_base64(&image_data);
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(60))
-        .build()
-        .unwrap();
+    let client = create_client(60);
 
     // Warmup
     let _ = client
@@ -269,10 +273,7 @@ async fn test_face_detection_speed() {
 async fn test_image_description_fast_speed() {
     let image_data = load_test_image();
     let base64_image = to_base64(&image_data);
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(60))
-        .build()
-        .unwrap();
+    let client = create_client(60);
 
     // Warmup
     let _ = client
@@ -321,10 +322,7 @@ async fn test_image_description_fast_speed() {
 async fn test_all_services_summary() {
     let image_data = load_test_image();
     let base64_image = to_base64(&image_data);
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(120))
-        .build()
-        .unwrap();
+    let client = create_client(120);
 
     // Health check first
     let resp = client.get(format!("{}/health", AI_SERVICE_URL)).send().await;

@@ -152,10 +152,11 @@ async fn test_upload_video_metadata_success() {
 
     let config = common::utils::create_test_config();
 
+    let user_uuid = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
     // Insert a dummy video record for "original_device" (verified)
     client
         .execute(
-            "INSERT INTO videos (hash, name, metadata, created_at, type, deviceid, ext, has_thumbnail, verification_status) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+            "INSERT INTO videos (hash, name, metadata, created_at, type, deviceid, ext, has_thumbnail, verification_status, user_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
             &[
                 &"test_video_meta_hash",
                 &"VID_20250101.mp4",
@@ -166,9 +167,18 @@ async fn test_upload_video_metadata_success() {
                 &"mp4",
                 &true,
                 &1i32,
+                &user_uuid,
             ],
         ).await
         .expect("Failed to insert test video");
+
+    // Insert corresponding media source record for original_device
+    client
+        .execute(
+            "INSERT INTO media_sources (user_id, hash, media_type, device_id, uploaded_at) VALUES ($1, $2, 'video', $3, NOW())",
+            &[&user_uuid, &"test_video_meta_hash", &"original_device"],
+        ).await
+        .expect("Failed to insert test media source");
 
     let main_pool = common::utils::wrap_main_pool(pool.clone());
     let geotagging_pool = common::utils::create_geotagging_pool().await;
@@ -203,20 +213,27 @@ async fn test_upload_video_metadata_success() {
     let body: serde_json::Value = test::read_body_json(response).await;
     assert_eq!(body["status"], "success");
 
-    // Verify both records exist
-    let rows = client
-        .query("SELECT deviceid, name FROM videos WHERE hash = $1 ORDER BY deviceid", &[&"test_video_meta_hash"])
+    // Verify one record exists in videos
+    let video_rows = client
+        .query("SELECT deviceid, name FROM videos WHERE hash = $1", &[&"test_video_meta_hash"])
         .await
         .expect("Failed to query database");
+    assert_eq!(video_rows.len(), 1, "Should have 1 entry in videos");
 
-    assert_eq!(rows.len(), 2, "Should have 2 entries (one per device)");
+    // Verify both records exist in media_sources
+    let source_rows = client
+        .query("SELECT device_id FROM media_sources WHERE hash = $1 ORDER BY device_id", &[&"test_video_meta_hash"])
+        .await
+        .expect("Failed to query database");
+    assert_eq!(source_rows.len(), 2, "Should have 2 entries in media_sources (one per device)");
 
-    let device_ids: Vec<String> = rows.iter().map(|r| r.get::<_, String>("deviceid")).collect();
+    let device_ids: Vec<String> = source_rows.iter().map(|r| r.get::<_, String>("device_id")).collect();
     assert!(device_ids.contains(&"original_device".to_string()));
     assert!(device_ids.contains(&"second_device".to_string()));
 
     // Clean up
     client.execute("DELETE FROM videos WHERE hash = $1", &[&"test_video_meta_hash"]).await.ok();
+    client.execute("DELETE FROM media_sources WHERE hash = $1", &[&"test_video_meta_hash"]).await.ok();
 }
 
 /// Test soft-delete of a video (admin only).
@@ -229,10 +246,11 @@ async fn test_delete_video_soft_delete() {
 
     let config = common::utils::create_test_config();
 
+    let user_uuid = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
     // Insert test video record
     client
         .execute(
-            "INSERT INTO videos (hash, name, metadata, created_at, type, deviceid, ext) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+            "INSERT INTO videos (hash, name, metadata, created_at, type, deviceid, ext, user_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
             &[
                 &"test_delete_video_hash",
                 &"VID_delete.mp4",
@@ -241,6 +259,7 @@ async fn test_delete_video_soft_delete() {
                 &"camera",
                 &"test_device_id",
                 &"mp4",
+                &user_uuid,
             ],
         ).await
         .expect("Failed to insert test video");

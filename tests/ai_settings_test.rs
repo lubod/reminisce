@@ -114,6 +114,13 @@ async fn test_get_ai_settings_non_admin_forbidden() {
     let main_pool = common::utils::wrap_main_pool(pool.clone());
     let config = common::utils::create_test_config();
 
+    let user_uuid = uuid::Uuid::parse_str("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee").unwrap();
+    let client = pool.get().await.unwrap();
+    client.execute(
+        "INSERT INTO users (id, username, email, password_hash, role) VALUES ($1, 'testuser', 'testuser@test.com', 'hash', 'user')",
+        &[&user_uuid]
+    ).await.unwrap();
+
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(main_pool))
@@ -246,6 +253,13 @@ async fn test_update_ai_settings_non_admin_forbidden() {
     let (pool, _db) = setup_test_database_with_instance().await;
     let main_pool = common::utils::wrap_main_pool(pool.clone());
     let config = common::utils::create_test_config();
+
+    let user_uuid = uuid::Uuid::parse_str("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee").unwrap();
+    let client = pool.get().await.unwrap();
+    client.execute(
+        "INSERT INTO users (id, username, email, password_hash, role) VALUES ($1, 'testuser', 'testuser@test.com', 'hash', 'user')",
+        &[&user_uuid]
+    ).await.unwrap();
 
     let app = test::init_service(
         App::new()

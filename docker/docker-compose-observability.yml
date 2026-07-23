@@ -94,10 +94,9 @@ services:
 
   # AMD ROCm GPU exporter (replaces nvidia/dcgm-exporter)
   gpu-exporter:
-    image: python:3.12-slim
+    image: lubod/reminisce-ai-server:latest
     container_name: reminisce-gpu-exporter
     volumes:
-      - /opt/rocm:/opt/rocm:ro
       - ./observability/rocm_exporter.py:/app/rocm_exporter.py:ro
     devices:
       - /dev/kfd:/dev/kfd

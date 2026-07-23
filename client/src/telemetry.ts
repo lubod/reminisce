@@ -13,6 +13,10 @@ import { SemanticResourceAttributes } from '@opentelemetry/semantic-conventions'
 import { logger } from './utils/logger';
 
 const setupTelemetry = () => {
+    // Only enable if explicitly enabled via environment variable
+    if (import.meta.env.VITE_ENABLE_OTEL !== "true" && !import.meta.env.VITE_OTEL_EXPORTER_OTLP_ENDPOINT) {
+        return;
+    }
     const resource = new Resource({
         [SemanticResourceAttributes.SERVICE_NAME]: 'reminisce-frontend',
         [SemanticResourceAttributes.SERVICE_VERSION]: import.meta.env.VITE_APP_VERSION || '0.1.0',

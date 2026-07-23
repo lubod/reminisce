@@ -37,18 +37,29 @@ pub async fn get_p2p_backup_status(
         Err(response) => return Ok(response),
     };
 
+    let active_nodes: Vec<(String, std::net::SocketAddr)> = p2p_service.registry.all()
+        .into_iter()
+        .map(|p| (p.node_id, p.addr))
+        .collect();
+
+    if !active_nodes.is_empty() {
+        let _ = crate::shard_rebalance_worker::ensure_peers_registered(&pool.0, &active_nodes).await;
+    }
+
     let client = utils::get_db_client(&pool.0).await?;
 
     let shard_count: i64 = client.query_one("SELECT COUNT(*) FROM p2p_shards", &[]).await
         .map(|row| row.get(0)).unwrap_or(0);
 
-    let peer_count: i64 = client.query_one("SELECT COUNT(*) FROM p2p_nodes WHERE is_active = TRUE AND last_seen > NOW() - INTERVAL '1 hour'", &[]).await
+    let db_peer_count: i64 = client.query_one("SELECT COUNT(*) FROM p2p_nodes WHERE is_active = TRUE AND last_seen > NOW() - INTERVAL '1 hour'", &[]).await
         .map(|row| row.get(0)).unwrap_or(0);
+
+    let active_peers = std::cmp::max(db_peer_count as usize, active_nodes.len());
 
     let response = P2PBackupStatusResponse {
         local_peer_id: hex::encode(p2p_service.identity().node_id()),
         is_healthy: true,
-        active_peers: peer_count as usize,
+        active_peers,
         total_shards_stored: shard_count,
     };
 

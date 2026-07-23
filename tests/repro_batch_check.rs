@@ -17,13 +17,15 @@ async fn test_repro_deduplication_across_devices() {
 
     // 1. Simulate Device A uploading a file (verified)
     let hash = "hash_xyz_123";
+    let user_uuid = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
     let device_a = "device_A";
     let device_b = "device_B";
 
     client
         .execute(
-            "INSERT INTO images (hash, name, exif, created_at, type, deviceid, ext, verification_status) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+            "INSERT INTO images (user_id, hash, name, exif, created_at, type, deviceid, ext, verification_status) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
             &[
+                &user_uuid,
                 &hash,
                 &"IMG_origin.jpg",
                 &None::<&str>,
@@ -69,27 +71,17 @@ async fn test_repro_deduplication_across_devices() {
 
     println!("Response Body: {:?}", body);
 
-    // The hash exists for device_a but NOT for device_b, so batch_check
-    // should NOT list it in existing_hashes (it checks per-device)
+    // Under user-based scoping, batch_check returns hashes existing for the user across devices
     let existing = body["existing_hashes"].as_array().unwrap();
-    assert_eq!(existing.len(), 0, "Should not exist for Device B yet");
+    assert_eq!(existing.len(), 1, "Should exist for user");
 
-    // 3. Now insert a record for Device B and check again
+    // 3. Now insert a media source record for Device B and check again
     client
         .execute(
-            "INSERT INTO images (hash, name, exif, created_at, type, deviceid, ext, verification_status) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
-            &[
-                &hash,
-                &"IMG_copy_on_B.jpg",
-                &None::<&str>,
-                &chrono::Utc::now(),
-                &"camera",
-                &device_b,
-                &"jpg",
-                &0i32,
-            ]
+            "INSERT INTO media_sources (user_id, hash, media_type, device_id, uploaded_at) VALUES ($1, $2, 'image', $3, NOW()) ON CONFLICT DO NOTHING",
+            &[&user_uuid, &hash, &device_b],
         ).await
-        .expect("Failed to insert data for Device B");
+        .expect("Failed to insert media source for Device B");
 
     let req2 = test::TestRequest::post()
         .uri("/upload/batch-check-images")
