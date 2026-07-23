@@ -163,16 +163,39 @@ pub async fn streaming_hash_to_temp(
     field: &mut actix_multipart::Field,
     temp_dir: &std::path::Path,
 ) -> Result<(PathBuf, String), actix_web::Error> {
-    tokio::fs::create_dir_all(temp_dir).await
-        .map_err(|_| actix_web::error::ErrorInternalServerError("Failed to create temp dir"))?;
-    let temp_path = temp_dir.join(format!("{}.tmp", uuid::Uuid::new_v4()));
-    let mut f = tokio::fs::File::create(&temp_path).await
-        .map_err(|_| actix_web::error::ErrorInternalServerError("Failed to create temp file"))?;
+    let effective_temp_dir = if tokio::fs::create_dir_all(temp_dir).await.is_ok() {
+        temp_dir.to_path_buf()
+    } else {
+        let fallback = std::env::temp_dir().join("reminisce_uploads");
+        let _ = tokio::fs::create_dir_all(&fallback).await;
+        fallback
+    };
+
+    let temp_filename = format!("{}.tmp", uuid::Uuid::new_v4());
+    let mut temp_path = effective_temp_dir.join(&temp_filename);
+
+    let mut f = match tokio::fs::File::create(&temp_path).await {
+        Ok(file) => file,
+        Err(e) => {
+            log::warn!("Failed to create temp file at {:?}: {}. Falling back to system temp dir.", temp_path, e);
+            let fallback_dir = std::env::temp_dir().join("reminisce_uploads");
+            let _ = tokio::fs::create_dir_all(&fallback_dir).await;
+            temp_path = fallback_dir.join(&temp_filename);
+            tokio::fs::File::create(&temp_path).await.map_err(|err| {
+                log::error!("Fallback temp file creation failed at {:?}: {}", temp_path, err);
+                actix_web::error::ErrorInternalServerError("Failed to create temp file")
+            })?
+        }
+    };
+
     let mut hasher = blake3::Hasher::new();
     while let Ok(Some(chunk)) = field.try_next().await {
         hasher.update(&chunk);
         f.write_all(&chunk).await
-            .map_err(|_| actix_web::error::ErrorInternalServerError("Failed to write temp file"))?;
+            .map_err(|e| {
+                log::error!("Failed to write temp file {:?}: {}", temp_path, e);
+                actix_web::error::ErrorInternalServerError("Failed to write temp file")
+            })?;
     }
     Ok((temp_path, hasher.finalize().to_hex().to_string()))
 }
