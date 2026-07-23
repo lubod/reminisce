@@ -9,8 +9,8 @@
     <LinearLayout
         android:id="@+id/topBar"
         android:layout_width="0dp"
-        android:layout_height="48dp"
-        android:background="#88000000"
+        android:layout_height="56dp"
+        android:background="#CC000000"
         android:gravity="center_vertical"
         android:orientation="horizontal"
         android:paddingStart="4dp"
@@ -25,7 +25,8 @@
             android:layout_height="48dp"
             android:background="?attr/selectableItemBackgroundBorderless"
             android:contentDescription="Back"
-            android:src="@drawable/ic_arrow_back" />
+            android:src="@drawable/ic_arrow_back"
+            app:tint="@android:color/white" />
 
         <Space
             android:layout_width="0dp"
@@ -38,7 +39,8 @@
             android:layout_height="48dp"
             android:background="?attr/selectableItemBackgroundBorderless"
             android:contentDescription="Compare"
-            android:src="@drawable/ic_compare" />
+            android:src="@drawable/ic_compare"
+            app:tint="@android:color/white" />
 
         <ImageButton
             android:id="@+id/deleteButton"
@@ -46,7 +48,8 @@
             android:layout_height="48dp"
             android:background="?attr/selectableItemBackgroundBorderless"
             android:contentDescription="Delete"
-            android:src="@drawable/ic_delete" />
+            android:src="@drawable/ic_delete"
+            app:tint="@android:color/white" />
 
         <ImageButton
             android:id="@+id/starButton"
@@ -54,7 +57,8 @@
             android:layout_height="48dp"
             android:background="?attr/selectableItemBackgroundBorderless"
             android:contentDescription="Star"
-            android:src="@drawable/ic_star_outline" />
+            android:src="@drawable/ic_star_outline"
+            app:tint="@android:color/white" />
 
         <ImageButton
             android:id="@+id/infoButton"
@@ -62,7 +66,8 @@
             android:layout_height="48dp"
             android:background="?attr/selectableItemBackgroundBorderless"
             android:contentDescription="Info"
-            android:src="@drawable/ic_info" />
+            android:src="@drawable/ic_info"
+            app:tint="@android:color/white" />
 
     </LinearLayout>
 
