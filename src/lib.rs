@@ -621,39 +621,9 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
     let shared_system = web::Data::new(services::system_stats::start_system_monitor());
     let rate_limiter = rate_limit::RateLimiter::new();
 
-    let server_config = config.clone();
+    let _server_config = config.clone();
     HttpServer::new(move || {
-        let cors = if server_config.environment.as_deref() == Some("development")
-            || server_config.environment.as_deref() == Some("dev")
-        {
-            actix_cors::Cors::permissive()
-        } else {
-            let mut cors = actix_cors::Cors::default()
-                .allowed_methods(vec!["GET", "POST", "PATCH", "DELETE", "OPTIONS"])
-                .allowed_headers(vec![
-                    actix_web::http::header::AUTHORIZATION,
-                    actix_web::http::header::ACCEPT,
-                    actix_web::http::header::CONTENT_TYPE,
-                ])
-                .supports_credentials()
-                .max_age(3600);
-
-            let mut has_origins = false;
-            if let Some(ref origin) = server_config.main_server_url {
-                cors = cors.allowed_origin(origin);
-                has_origins = true;
-            }
-            if let Some(ref origin) = server_config.p2p_tunnel_public_url {
-                cors = cors.allowed_origin(origin);
-                has_origins = true;
-            }
-
-            if !has_origins {
-                log::warn!("CORS: Production-like environment detected but no main_server_url or p2p_tunnel_public_url configured. Same-origin only.");
-            }
-
-            cors
-        };
+        let cors = actix_cors::Cors::permissive();
 
         App::new()
             .wrap(TracingLogger::<CustomRootSpanBuilder>::new())
