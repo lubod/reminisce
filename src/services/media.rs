@@ -248,14 +248,14 @@ pub async fn get_image_metadata(
     let user_uuid = utils::parse_user_uuid(&claims.user_id)?;
     let client = utils::get_db_client(&pool.0).await?;
 
-    let row = client
+    let img_row = client
         .query_opt(
-            "SELECT i.hash, i.name, i.description, i.place, i.created_at, i.exif, \
-             CASE WHEN s.hash IS NOT NULL THEN true ELSE false END as starred, \
-             i.deviceid, i.file_size_bytes, i.width, i.height \
-             FROM images i \
-             LEFT JOIN starred_images s ON i.hash = s.hash AND s.user_id = $1 \
-             WHERE i.user_id = $1 AND i.hash = $2 AND i.deleted_at IS NULL LIMIT 1",
+            "SELECT i.hash, i.name, i.description, i.place, i.created_at, i.exif, 
+             CASE WHEN s.hash IS NOT NULL THEN true ELSE false END as starred, 
+             i.deviceid, i.file_size_bytes, i.width, i.height 
+             FROM images i 
+             LEFT JOIN starred_images s ON i.hash = s.hash AND s.user_id =  
+             WHERE i.user_id =  AND i.hash =  AND i.deleted_at IS NULL LIMIT 1",
             &[&user_uuid, &hash_to_find]
         ).await
         .map_err(|e| {
@@ -263,23 +263,7 @@ pub async fn get_image_metadata(
             actix_web::error::ErrorInternalServerError("Failed to retrieve image metadata")
         })?;
 
-    let media_row = match row {
-        Some(r) => Some((r, "image")),
-        None => {
-            let v_row = client
-                .query_opt(
-                    "SELECT v.hash, v.name, v.description, v.place, v.created_at, NULL as exif,                      CASE WHEN s.hash IS NOT NULL THEN true ELSE false END as starred,                      v.deviceid, v.file_size_bytes, v.width, v.height                      FROM videos v                      LEFT JOIN starred_videos s ON v.hash = s.hash AND s.user_id =                       WHERE v.user_id =  AND v.hash =  AND v.deleted_at IS NULL LIMIT 1",
-                    &[&user_uuid, &hash_to_find]
-                ).await
-                .map_err(|e| {
-                    error!("Failed to query video metadata from database: {}", e);
-                    actix_web::error::ErrorInternalServerError("Failed to retrieve video metadata")
-                })?;
-            v_row.map(|r| (r, "video"))
-        }
-    };
-
-    if let Some((row, mtype)) = media_row {
+    if let Some(row) = img_row {
         let file_size: Option<i32> = row.get(8);
         let metadata = ImageMetadata {
             hash: row.get(0),
@@ -293,19 +277,55 @@ pub async fn get_image_metadata(
             file_size_bytes: file_size.map(|v| v as i64),
             width: row.get(9),
             height: row.get(10),
-            media_type: Some(mtype.to_string()),
+            media_type: Some("image".to_string()),
         };
 
-        info!("Serving metadata for {}: {}", mtype, hash_to_find);
-        Ok(HttpResponse::Ok().json(metadata))
-    } else {
-        warn!("Media not found for hash: '{}'", &hash_to_find);
-        Ok(
-            HttpResponse::NotFound().json(
-                serde_json::json!({"status": "error", "message": "Media not found."})
-            )
-        )
+        info!("Serving metadata for image: {}", hash_to_find);
+        return Ok(HttpResponse::Ok().json(metadata));
     }
+
+    let vid_row = client
+        .query_opt(
+            "SELECT v.hash, v.name, v.description, NULL::text as place, v.created_at, NULL::text as exif, 
+             CASE WHEN s.hash IS NOT NULL THEN true ELSE false END as starred, 
+             v.deviceid, v.file_size_bytes, NULL::integer as width, NULL::integer as height 
+             FROM videos v 
+             LEFT JOIN starred_videos s ON v.hash = s.hash AND s.user_id =  
+             WHERE v.user_id =  AND v.hash =  AND v.deleted_at IS NULL LIMIT 1",
+            &[&user_uuid, &hash_to_find]
+        ).await
+        .map_err(|e| {
+            error!("Failed to query video metadata from database: {}", e);
+            actix_web::error::ErrorInternalServerError("Failed to retrieve video metadata")
+        })?;
+
+    if let Some(row) = vid_row {
+        let file_size: Option<i64> = row.get(8);
+        let metadata = ImageMetadata {
+            hash: row.get(0),
+            name: row.get(1),
+            description: row.get(2),
+            place: row.get(3),
+            created_at: row.get::<_, chrono::DateTime<chrono::Utc>>(4).to_rfc3339(),
+            exif: row.get(5),
+            starred: row.get(6),
+            device_id: row.get(7),
+            file_size_bytes: file_size,
+            width: row.get(9),
+            height: row.get(10),
+            media_type: Some("video".to_string()),
+        };
+
+        info!("Serving metadata for video: {}", hash_to_find);
+        return Ok(HttpResponse::Ok().json(metadata));
+    }
+
+    warn!("Media not found for hash: '{}'", &hash_to_find);
+    Ok(
+        HttpResponse::NotFound().json(
+            serde_json::json!({"status": "error", "message": "Media not found."})
+        )
+    )
 }
 
 #[derive(Serialize, ToSchema)]
