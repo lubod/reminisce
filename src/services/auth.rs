@@ -169,7 +169,9 @@ pub struct RegisterRequest {
     "password": "secure_password_123"
 }))]
 pub struct UserLoginRequest {
+    #[serde(default)]
     pub username: String,
+    #[serde(default)]
     pub password: String,
 }
 
