@@ -21,8 +21,8 @@ export interface ManagedUser {
 }
 
 export class AuthStore {
-    token: string | null = null; // Memory-only token to prevent XSS localStorage theft (H2)
-    imageToken: string | null = null; // Scoped memory-only token for media/images (H2)
+    token: string | null = null; // Persisted to localStorage so session survives page reload
+    imageToken: string | null = null; // Scoped image/media token, persisted to localStorage
     user: User | null = null;
     isAuthenticated: boolean = false;
     needsSetup: boolean = false;
