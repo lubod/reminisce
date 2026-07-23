@@ -114,10 +114,20 @@ export class AuthStore {
 
     setToken = (token: string | null) => {
         this.token = token;
+        if (token) {
+            localStorage.setItem("token", token);
+        } else {
+            localStorage.removeItem("token");
+        }
     };
 
     setImageToken = (token: string | null) => {
         this.imageToken = token;
+        if (token) {
+            localStorage.setItem("imageToken", token);
+        } else {
+            localStorage.removeItem("imageToken");
+        }
     };
 
     setUser = (user: User | null) => {
