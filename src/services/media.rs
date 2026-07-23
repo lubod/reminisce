@@ -254,8 +254,8 @@ pub async fn get_image_metadata(
              CASE WHEN s.hash IS NOT NULL THEN true ELSE false END as starred, 
              i.deviceid, i.file_size_bytes, i.width, i.height 
              FROM images i 
-             LEFT JOIN starred_images s ON i.hash = s.hash AND s.user_id =  
-             WHERE i.user_id =  AND i.hash =  AND i.deleted_at IS NULL LIMIT 1",
+             LEFT JOIN starred_images s ON i.hash = s.hash AND s.user_id = $1 
+             WHERE i.user_id = $1 AND i.hash = $2 AND i.deleted_at IS NULL LIMIT 1",
             &[&user_uuid, &hash_to_find]
         ).await
         .map_err(|e| {
@@ -290,8 +290,8 @@ pub async fn get_image_metadata(
              CASE WHEN s.hash IS NOT NULL THEN true ELSE false END as starred, 
              v.deviceid, v.file_size_bytes, NULL::integer as width, NULL::integer as height 
              FROM videos v 
-             LEFT JOIN starred_videos s ON v.hash = s.hash AND s.user_id =  
-             WHERE v.user_id =  AND v.hash =  AND v.deleted_at IS NULL LIMIT 1",
+             LEFT JOIN starred_videos s ON v.hash = s.hash AND s.user_id = $1 
+             WHERE v.user_id = $1 AND v.hash = $2 AND v.deleted_at IS NULL LIMIT 1",
             &[&user_uuid, &hash_to_find]
         ).await
         .map_err(|e| {
