@@ -85,6 +85,9 @@ class RemoteMediaDetailActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_remote_media_detail)
 
+        supportActionBar?.hide()
+        window.statusBarColor = android.graphics.Color.BLACK
+
         imagePreview = findViewById(R.id.imagePreview)
         playerView = findViewById(R.id.playerView)
         singleViewContainer = findViewById(R.id.singleViewContainer)

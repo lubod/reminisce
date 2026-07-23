@@ -71,6 +71,9 @@ class ImagePreviewActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_image_preview)
 
+        supportActionBar?.hide()
+        window.statusBarColor = android.graphics.Color.BLACK
+
         imagePreview = findViewById(R.id.imagePreview)
         playerView = findViewById(R.id.playerView)
         loadingSpinner = findViewById(R.id.loadingSpinner)
