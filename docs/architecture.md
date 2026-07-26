@@ -49,10 +49,21 @@
 | `services/` | One file per HTTP handler group |
 | `*_worker.rs` | Background Tokio tasks (see Workers section) |
 | `p2p_restore.rs` | P2P restore core logic (shared by HTTP handler and CLI binary) |
-| `media_utils.rs` | EXIF extraction, thumbnail generation, geo parsing |
+| `media_utils.rs` | EXIF extraction and thumbnail generation |
+| `geo_utils.rs` | Reverse geocoding & location parsing |
 | `query_builder.rs` | Dynamic SQL for media gallery queries (filters, pagination, sorting) |
 | `metrics.rs` | Prometheus counters/gauges exposed at `GET /metrics` |
 | `telemetry.rs` | OpenTelemetry + tracing-subscriber initialization |
+
+## Module Documentation Index
+
+Minimalistic, co-located architecture and invariant guides are maintained alongside code modules:
+
+- **Backend (Rust)**: [src/README.md](file:///Users/ldr/work/reminisce/src/README.md) • [src/services/README.md](file:///Users/ldr/work/reminisce/src/services/README.md)
+- **Client (React SPA)**: [client/README.md](file:///Users/ldr/work/reminisce/client/README.md) • [client/src/README.md](file:///Users/ldr/work/reminisce/client/src/README.md) • [client/src/stores/README.md](file:///Users/ldr/work/reminisce/client/src/stores/README.md) • [client/src/api/README.md](file:///Users/ldr/work/reminisce/client/src/api/README.md) • [client/src/components/README.md](file:///Users/ldr/work/reminisce/client/src/components/README.md)
+- **P2P & Storage Crate**: [np2p/README.md](file:///Users/ldr/work/reminisce/np2p/README.md) • [np2p/src/network/README.md](file:///Users/ldr/work/reminisce/np2p/src/network/README.md) • [np2p/src/storage/README.md](file:///Users/ldr/work/reminisce/np2p/src/storage/README.md)
+- **Coordinator Daemon**: [coordinator/README.md](file:///Users/ldr/work/reminisce/coordinator/README.md)
+- **AI Inference Service**: [ai/README.md](file:///Users/ldr/work/reminisce/ai/README.md)
 
 ## Workers
 

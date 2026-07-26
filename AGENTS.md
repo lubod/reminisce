@@ -54,3 +54,10 @@ npm run build
 
 The database initialization and composite indexes are defined in:
 - [db/init.sql](file:///Users/ldr/work/reminisce/db/init.sql)
+
+---
+
+## Documentation Maintenance
+
+- When adding, removing, or relocating code modules, HTTP handlers, or state stores, update the corresponding `README.md` file in that directory to keep the architecture map and invariants accurate.
+
