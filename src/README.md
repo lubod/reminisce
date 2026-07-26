@@ -4,8 +4,8 @@
 Core server implementation for Reminisce, containing the Actix-web HTTP API server, background worker tasks, database pool wrappers, and media processing utilities.
 
 ## Architecture & Startup Sequence
-Startup is orchestrated by `lib.rs::run_server`:
-1. Load configuration (`config.rs`) & initialize OpenTelemetry (`telemetry.rs`).
+`main.rs` loads configuration (`config.rs`) and initializes telemetry (`telemetry.rs`), then calls `lib.rs::run_server(config)`, which performs startup in this order:
+1. Force-register Prometheus metrics (`metrics::init_metrics()`) and create the shutdown `CancellationToken`.
 2. Initialize database pools (`db.rs` -> `MainDbPool` and `GeotaggingDbPool`).
 3. Run pending database migrations automatically.
 4. Initialize P2P node context if P2P mode is enabled (`np2p`).
@@ -13,11 +13,13 @@ Startup is orchestrated by `lib.rs::run_server`:
 6. Bind and run Actix HTTP server (`services/`) with the configured middleware stack.
 
 ```
-main.rs -> lib.rs::run_server ──┬──▶ DB Pools & Migrations
-                                ├──▶ P2P Node Context
-                                ├──▶ Tokio Workers (AI, Verification, Replication, Audit, Rebalance, Duplicates)
-                                └──▶ Actix HTTP Server (Middleware: Tracing, CORS, Auth, OpenAPI)
+main.rs (config + telemetry) -> lib.rs::run_server ──┬──▶ Metrics & DB Pools & Migrations
+                                                     ├──▶ P2P Node Context
+                                                     ├──▶ Tokio Workers (AI, Verification, Replication, Audit, Rebalance, Duplicates)
+                                                     └──▶ Actix HTTP Server
 ```
+
+**Middleware stack** (outermost → innermost, applied via `.wrap()` in `lib.rs`): `TracingLogger` (per-request spans) → `PrometheusMetrics` → permissive `Cors` → custom per-IP `RateLimiter`. Authentication is NOT middleware — it is enforced per-handler (see `src/services/README.md`). Swagger UI is a mounted route, not middleware.
 
 ## Key Patterns & Conventions
 - **Dependency Injection (DI)**: State is passed to Actix handlers using custom newtypes around `deadpool_postgres::Pool`: `MainDbPool` and `GeotaggingDbPool`.

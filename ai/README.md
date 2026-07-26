@@ -14,7 +14,7 @@ Backend (Rust) ──HTTP POST / :8081 (Header: X-API-Key)──▶ Flask (ai_se
 ```
 
 ## Security & Authentication
-- All endpoints require the `X-API-Key` HTTP header. Requests with missing or non-matching keys return HTTP 401 Unauthorized.
+- All endpoints require authentication via **either** the `Authorization: Bearer <key>` header **or** the `X-API-Key` header. Requests with missing or non-matching keys return HTTP 401 Unauthorized.
 
 ## Hardware & Acceleration Auto-Detection
 The service automatically detects and configures available hardware accelerators upon startup:
@@ -28,9 +28,14 @@ The service automatically detects and configures available hardware accelerators
 | Endpoint | Method | Purpose | Model / Engine |
 |----------|--------|---------|----------------|
 | `/health` | GET | Health & hardware acceleration status | - |
-| `/embed` | POST | Image/text vector embedding generation | SigLIP2 |
-| `/describe` | POST | Visual scene description generation | SmolVLM / Qwen |
-| `/detect-faces` | POST | Face detection, bounding box & embeddings | InsightFace |
+| `/embed/image` | POST | Image vector embedding generation | SigLIP2 |
+| `/embed/text` | POST | Text query vector embedding generation | SigLIP2 |
+| `/describe` | POST | Fast visual scene description generation | SmolVLM |
+| `/describe/qwen` | POST | High-quality visual scene description generation | Qwen2.5-VL |
+| `/quality` | POST | Aesthetic quality & sharpness scoring | SigLIP2 + OpenCV |
+| `/orientation` | POST | Image orientation detection | Qwen2.5-VL |
+| `/detect` | POST | Face detection, bounding box & embeddings | InsightFace |
+| `/enhance` | POST | Photo enhancement pipeline | OpenCV |
 
 ## Key Files
 - [ai_service.py](file:///Users/ldr/work/reminisce/ai/ai_service.py): Flask application entry point, model loading, and route handlers.

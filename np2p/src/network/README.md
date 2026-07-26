@@ -10,12 +10,12 @@ Manages QUIC transport connections, peer discovery on local networks, coordinato
 
 ## Discovery & Routing Topology
 ```
-Local LAN ──▶ UDP Broadcast (:5054) ──▶ Signed Announcement (90s TTL) ──▶ Direct QUIC Mesh
+Local LAN ──▶ UDP Broadcast (:5066) ──▶ Signed Announcement (90s TTL) ──▶ Direct QUIC Mesh
                                                                                   │
 WAN Fallback ──▶ Coordinator (VPS) ──▶ Reverse Tunnel / QUIC Relay ───────────────┘
 ```
 
-1. **LAN Discovery (`discovery.rs`)**: Nodes broadcast signed UDP packets on port 5054 every 30 seconds. Peers maintain local registry entries with 90-second TTLs.
+1. **LAN Discovery (`discovery.rs`)**: Nodes broadcast signed UDP packets on port 5066 every 10 seconds. Peers maintain local registry entries with 90-second TTLs.
 2. **Direct Connection**: Primary mode connects directly to target node IP via QUIC.
 3. **Coordinator Relay (`coordinator.rs`, `tunnel.rs`)**: If direct connection fails (NAT/firewall), nodes establish reverse tunnels through the VPS Coordinator.
 4. **Channels (`channel.rs`)**: High-level bi-directional streaming abstraction over raw QUIC streams.

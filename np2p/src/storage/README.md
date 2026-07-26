@@ -24,6 +24,6 @@ Shards are stored under the storage root directory partitioned by the first two 
 - [disk.rs](file:///Users/ldr/work/reminisce/np2p/src/storage/disk.rs): Content-addressed filesystem read/write, disk quota, and space checks.
 
 ## Critical Invariants & Gotchas
-- **Deterministic Nonce Invariant**: ChaCha20-Poly1305 nonces MUST be generated deterministically using `blake3(file_hash + chunk_index)`. **NEVER generate random nonces**. Deterministic nonces are required so independent nodes and audit workers can verify and repair missing shards without needing shared state.
+- **Deterministic Nonce Invariant**: ChaCha20-Poly1305 nonces MUST be derived deterministically via BLAKE3 from a caller-supplied nonce context (unique per file/key/segment; see `encryption.rs::encrypt`). **NEVER generate random nonces**. Deterministic nonces are required so independent nodes and audit workers can verify and repair missing shards without needing shared state.
 - **Atomic Disk Writes**: Always write incoming shards to `<path>.tmp` first, then atomically rename to `<path>` upon byte completion and BLAKE3 verification.
 - **Storage Space Safety Guard**: `disk.rs` MUST verify that the target filesystem has at least 100 MB free space available before accepting or writing new shards.

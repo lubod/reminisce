@@ -20,7 +20,7 @@ Node A (behind NAT) ──▶ Coordinator (:5055 QUIC / :8443 TCP) ──▶ Nod
 
 ## State Management & Persistence
 - **`peers.json`**: Active node registry serialized to disk on update.
-- **Node TTL**: Registered nodes must send periodic keep-alives; nodes inactive for over 90 seconds are automatically marked offline.
+- **Node TTL**: Registered nodes must send periodic keep-alives; nodes inactive for over 60 seconds (default `--peer-ttl-secs`) are automatically excluded from peer lists.
 
 ## Key Files
 - [src/main.rs](file:///Users/ldr/work/reminisce/coordinator/src/main.rs): Standalone coordinator binary entry point, listener setup, node table, and tunnel proxying.

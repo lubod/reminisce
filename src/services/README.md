@@ -9,7 +9,7 @@ HTTP API handlers grouped by feature domain. All REST endpoints exposed by Remin
 - **Authentication**:
   - Declarative: Add `claims: Claims` parameter to handler signature (`Claims` implements `FromRequest`).
   - Imperative: Use `auth_utils::authenticate_request(&req, &config)` for custom stream/websocket/query-param token checks.
-  - Admin Check: Handlers needing admin privileges check `claims.is_admin` (returning 403 Forbidden if false).
+  - Admin Check: Handlers needing admin privileges check `claims.role != "admin"` inline (returning 403 Forbidden if not admin).
 - **Route Registration**: New service modules must be registered in `lib.rs` under `HttpServer::new(...)` app configuration and added to the `ApiDoc` struct in `lib.rs` for Swagger UI generation.
 
 ## Service Inventory (25 Modules)

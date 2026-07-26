@@ -19,7 +19,7 @@ main.tsx ──▶ telemetry.ts (OpenTelemetry initialization)
 4. **Routing**: `ProtectedRoute` gates authenticated routes, rendering `Layout.tsx` with sidebar navigation.
 
 ## Dual-Token Authentication Model
-- **Header Auth**: Standard API calls append `Authorization: Bearer <token>` automatically via the Axios interceptor in `api/client.ts`.
+- **Header Auth**: Standard API calls append `Authorization: Bearer <token>` automatically via the Axios interceptor in `api/axiosConfig.ts`.
 - **Query Param Auth (`imageToken`)**: Native HTML elements (`<img src="...">`, `<video src="...">`) cannot send HTTP headers. The backend accepts `?token=` for thumbnail/media endpoints. `AuthStore` maintains `imageToken` for embedding image URLs directly in JSX.
 
 ## Three-Tier Error Handling
