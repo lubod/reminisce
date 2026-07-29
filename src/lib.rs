@@ -20,6 +20,7 @@ pub mod shard_rebalance_worker;
 pub mod db_backup_worker;
 pub mod p2p_restore;
 pub mod db_restore;
+pub mod p2p_upload;
 pub mod ai_worker;
 pub mod ai_client;
 pub mod telemetry;

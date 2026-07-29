@@ -5,7 +5,7 @@
 //! distribution stays balanced. Triggered via POST /api/p2p/backup/rebalance.
 
 use crate::config::Config;
-use crate::media_replication_worker::{rendezvous_select_nodes, MIN_NODES_REQUIRED};
+use crate::p2p_upload::{rendezvous_select, MIN_NODES_REQUIRED};
 use deadpool_postgres::Pool;
 use log::{info, warn, error};
 use np2p::network::{P2PService, Message, Protocol};
@@ -165,7 +165,7 @@ async fn rebalance_file(
     let total_shards = data_shards + parity_shards;
 
     // Compute ideal placement
-    let ideal_nodes = rendezvous_select_nodes(file_hash, active_nodes, total_shards.min(active_nodes.len()));
+    let ideal_nodes = rendezvous_select(file_hash, active_nodes, total_shards.min(active_nodes.len()));
 
     let mut migrated_any = false;
 

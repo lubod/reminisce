@@ -9,7 +9,7 @@ use log::{info, warn, error};
 use deadpool_postgres::Pool;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use futures::stream::{self, StreamExt};
 use std::time::Duration;
 use crate::utils::{get_load_average, get_cpu_count, calculate_worker_concurrency};
@@ -17,49 +17,16 @@ use crate::metrics::{
     BACKUP_PEERS_AVAILABLE, BACKUP_ATTEMPTS_TOTAL, BACKUP_SUCCESS_TOTAL,
     BACKUP_FAILURES_TOTAL, BACKUP_SIZE_BYTES, BACKUP_DURATION_SECONDS,
 };
-use np2p::network::{P2PService, Message, Protocol};
+use crate::p2p_upload::{self, MIN_NODES_REQUIRED, SEGMENT_THRESHOLD, SHARD_COUNT};
+use np2p::network::P2PService;
 use np2p::storage::StorageEngine;
-use tokio::sync::{Mutex, mpsc};
-use tokio::io::AsyncReadExt;
 
 // Constants
 const BATCH_SIZE: i64 = 10; // Smaller batches for sharding as it is more CPU intensive
-pub const SHARD_COUNT: usize = 5;
-pub const MIN_NODES_REQUIRED: usize = 1;
-
-/// Files larger than this are processed in segments instead of all at once.
-/// Keeps peak RAM at ~940 MB (256 MB segment + 256 MB encrypted + ~427 MB for 5 sub-shards).
-const SEGMENT_THRESHOLD: usize = 256 * 1024 * 1024; // 256 MB
-
-/// Max bytes per StoreShardChunk protocol message. Must stay under the 100 MB protocol limit.
-const CHUNK_MSG_SIZE: usize = 32 * 1024 * 1024; // 32 MB
 
 struct MediaToReplicate {
     hash: String,
     ext: String,
-}
-
-struct ShardResult {
-    idx: usize,
-    node_id: String,
-    addr_str: String,
-    shard_hash_hex: String,
-}
-
-// (shard_index, node_id, addr_str, shard_hash)
-type ShardUploadResults = std::sync::Arc<Mutex<Vec<(usize, String, String, String)>>>;
-
-/// Rendezvous hashing (HRW): rank nodes by hash(file_hash || node_id),
-/// return top `count`. Uses the stable hex node_id (public key) for consistent
-/// assignment across restarts — not the socket address which may change.
-pub fn rendezvous_select_nodes(file_hash: &str, nodes: &[(String, SocketAddr)], count: usize) -> Vec<(String, SocketAddr)> {
-    let mut scored: Vec<(u64, usize)> = nodes.iter().enumerate().map(|(i, (node_id, _))| {
-        let hash = blake3::hash(format!("{}:{}", file_hash, node_id).as_bytes());
-        let score = u64::from_le_bytes(hash.as_bytes()[0..8].try_into().unwrap());
-        (score, i)
-    }).collect();
-    scored.sort_by_key(|&x| std::cmp::Reverse(x.0));
-    scored.into_iter().take(count).map(|(_, i)| nodes[i].clone()).collect()
 }
 
 pub async fn media_replication_loop(
@@ -265,99 +232,10 @@ async fn replicate_single_file(
     // nonce_context = key: key is randomly generated once per file, ensuring unique nonce per file.
     let (shards, enc_size) = StorageEngine::process_for_backup(&file_data, &encryption_key, &encryption_key, data_shards, parity_shards)?;
 
-    // 2. Select nodes via rendezvous hashing (HRW)
-    // We always want to distribute among available nodes, but we MUST store ALL shards.
-    let target_nodes = rendezvous_select_nodes(&file.hash, nodes, total_shards.min(nodes.len()));
+    // 2. Upload shards in parallel to rendezvous-selected nodes.
+    info!("Sharding {} into {} pieces (rendezvous)", file.hash, shards.len());
+    let final_results = p2p_upload::upload_inmemory(p2p_service, nodes, &file.hash, shards).await?;
 
-    info!("Sharding {} into {} pieces across {} nodes (rendezvous)", file.hash, shards.len(), target_nodes.len());
-
-    // 3. Upload Shards in Parallel
-    // Results: (shard_index, node_id, addr_str, shard_hash)
-    let shard_results: ShardUploadResults = Arc::new(Mutex::new(Vec::new()));
-    let mut set = tokio::task::JoinSet::new();
-
-    for (idx, shard_data) in shards.into_iter().enumerate() {
-        let (node_id, addr) = &target_nodes[idx % target_nodes.len()];
-        let p2p_service = p2p_service.clone();
-        let node_id = node_id.clone();
-        let addr = *addr;
-        let results = shard_results.clone();
-
-        set.spawn(async move {
-            let shard_hash = blake3::hash(&shard_data).to_hex().to_string();
-            let mut last_err = String::new();
-
-            for attempt in 1..=3 {
-                if attempt > 1 {
-                    tokio::time::sleep(Duration::from_millis(500 * (attempt - 1))).await;
-                }
-                match p2p_service.connect_to_addr(addr).await {
-                    Ok(conn) => {
-                        let open_res = conn.open_bi().await.map_err(|e| e.to_string());
-                        let (mut send, mut recv) = match open_res {
-                            Ok(s) => s,
-                            Err(e) => {
-                                last_err = format!("open_bi failed: {}", e);
-                                conn.close(0u32.into(), b"error");
-                                continue;
-                            }
-                        };
-                        let shard_hash_bytes = blake3::hash(&shard_data).into();
-                        let token = p2p_service.identity().create_shard_token(&shard_hash_bytes);
-                        let req = Message::StoreShardRequest {
-                            shard_hash: shard_hash_bytes,
-                            data: shard_data.clone(),
-                            token,
-                        };
-                        if let Err(e) = Protocol::send(&mut send, &req).await.map_err(|e| e.to_string()) {
-                            last_err = format!("send failed: {}", e);
-                            let _ = send.finish();
-                            conn.close(0u32.into(), b"error");
-                            continue;
-                        }
-                        let resp = Protocol::receive(&mut recv).await.map_err(|e| e.to_string());
-                        let msg = match resp {
-                            Ok(m) => m,
-                            Err(e) => {
-                                last_err = format!("receive failed: {}", e);
-                                let _ = send.finish();
-                                conn.close(0u32.into(), b"error");
-                                continue;
-                            }
-                        };
-
-                        if let Message::StoreShardResponse { success, .. } = msg {
-                            if success {
-                                let mut r = results.lock().await;
-                                r.push((idx, node_id, addr.to_string(), shard_hash));
-                                let _ = send.finish();
-                                conn.close(0u32.into(), b"done");
-                                return Ok(());
-                            } else {
-                                last_err = "Node rejected shard".to_string();
-                            }
-                        } else {
-                            last_err = "Unexpected response".to_string();
-                        }
-                        let _ = send.finish();
-                        conn.close(0u32.into(), b"error");
-                    }
-                    Err(e) => {
-                        last_err = format!("Connection to {} failed: {}", addr, e);
-                    }
-                }
-            }
-            Err(last_err)
-        });
-    }
-
-    while let Some(res) = set.join_next().await {
-        if let Err(e) = res? {
-            warn!("Shard upload failed: {}", e);
-        }
-    }
-
-    let final_results = shard_results.lock().await;
     if final_results.len() < data_shards {
         return Err(format!("Only {}/{} shards stored. Minimum {} required (for reconstruction).", final_results.len(), total_shards, data_shards).into());
     }
@@ -367,23 +245,23 @@ async fn replicate_single_file(
 
     // Upsert nodes first in a separate statement (outside the per-file transaction)
     // so concurrent file transactions don't race on the same p2p_nodes rows.
-    for (_, node_id, addr_str, _) in final_results.iter() {
+    for s in final_results.iter() {
         client.execute(
             "INSERT INTO p2p_nodes (node_id, public_addr, is_active)
              VALUES ($1, $2, TRUE)
              ON CONFLICT (node_id) DO UPDATE SET public_addr = $2, is_active = TRUE, last_seen = NOW()",
-            &[node_id, addr_str],
+            &[&s.node_id, &s.addr],
         ).await?;
     }
 
     let trans = client.transaction().await?;
 
-    for (idx, node_id, _addr_str, shard_hash) in final_results.iter() {
+    for s in final_results.iter() {
         trans.execute(
             "INSERT INTO p2p_shards (file_hash, shard_index, node_id, shard_hash)
              VALUES ($1, $2, $3, $4)
              ON CONFLICT (file_hash, shard_index) DO UPDATE SET node_id = $3, shard_hash = $4",
-            &[&file.hash, &(*idx as i32), node_id, shard_hash]
+            &[&file.hash, &(s.idx as i32), &s.node_id, &s.shard_hash_hex]
         ).await?;
     }
 
@@ -394,7 +272,7 @@ async fn replicate_single_file(
     let encrypted_key = crate::utils::encrypt_key(&encryption_key, api_secret)?;
     // Compute a manifest hash: BLAKE3 over all stored shard hashes concatenated.
     let mut manifest_hasher = blake3::Hasher::new();
-    for (_, _, _, shard_hash) in final_results.iter() { manifest_hasher.update(shard_hash.as_bytes()); }
+    for s in final_results.iter() { manifest_hasher.update(s.shard_hash_hex.as_bytes()); }
     let manifest_hash = manifest_hasher.finalize().to_hex().to_string();
 
     crate::utils::validate_table_name(table).unwrap();
@@ -439,114 +317,13 @@ async fn replicate_large_file(
     table: &str,
     nodes: &[(String, SocketAddr)],
     file: &MediaToReplicate,
-    file_path: &PathBuf,
+    file_path: &Path,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut encryption_key = [0u8; 32];
     rand::fill(&mut encryption_key);
 
-    // Stable [u8; 32] file identifier for StoreShardStreamInit (Pi uses it as temp-file key).
-    let file_hash_bytes: [u8; 32] = blake3::hash(file.hash.as_bytes()).into();
-
-    let target_nodes = rendezvous_select_nodes(&file.hash, nodes, SHARD_COUNT.min(nodes.len()));
-
-    // One bounded channel per shard — provides backpressure so the main loop never buffers
-    // more than 2 unsent chunks per shard (2 × 32 MB × 5 shards = 320 MB max channel overhead).
-    let mut senders: Vec<mpsc::Sender<Vec<u8>>> = Vec::with_capacity(SHARD_COUNT);
-    let mut handles = Vec::with_capacity(SHARD_COUNT);
-
-    for idx in 0..SHARD_COUNT {
-        let (tx, rx) = mpsc::channel::<Vec<u8>>(2);
-        senders.push(tx);
-
-        let (node_id, addr) = target_nodes[idx % target_nodes.len()].clone();
-        let p2p_service = p2p_service.clone();
-
-        handles.push(tokio::spawn(async move {
-            let conn = p2p_service.connect_to_addr(addr).await
-                .map_err(|e| e.to_string())?;
-            let (mut send, mut recv) = conn.open_bi().await
-                .map_err(|e| e.to_string())?;
-
-            Protocol::send(&mut send, &Message::StoreShardStreamInit {
-                file_hash: file_hash_bytes,
-                shard_index: idx as u8,
-                total_shard_bytes: 0, // not used by Pi handler
-                segment_count: 0,     // not used by Pi handler
-            }).await.map_err(|e| e.to_string())?;
-
-            match Protocol::receive(&mut recv).await.map_err(|e| e.to_string())? {
-                Message::StoreShardStreamAck { ready: true } => {}
-                other => return Err(format!("Unexpected ack for shard {}: {:?}", idx, other)),
-            }
-
-            // Receive chunks from the main loop, hash and forward via QUIC.
-            let mut hasher = blake3::Hasher::new();
-            let mut rx = rx;
-            while let Some(chunk) = rx.recv().await {
-                hasher.update(&chunk);
-                Protocol::send(&mut send, &Message::StoreShardChunk { data: chunk })
-                    .await.map_err(|e| e.to_string())?;
-            }
-
-            // Channel closed — all segments sent. Finalise.
-            let shard_b3 = hasher.finalize();
-            let shard_hash: [u8; 32] = shard_b3.into();
-            Protocol::send(&mut send, &Message::StoreShardStreamFinal { shard_hash })
-                .await.map_err(|e| e.to_string())?;
-
-            match Protocol::receive(&mut recv).await.map_err(|e| e.to_string())? {
-                Message::StoreShardStreamResponse { success: true } => {}
-                _ => return Err(format!("Pi rejected shard {}", idx)),
-            }
-            let _ = send.finish();
-
-            Ok::<ShardResult, String>(ShardResult {
-                idx,
-                node_id,
-                addr_str: addr.to_string(),
-                shard_hash_hex: shard_b3.to_hex().to_string(),
-            })
-        }));
-    }
-
-    // Process file in SEGMENT_THRESHOLD-sized segments.
-    let mut file_handle = tokio::fs::File::open(file_path).await?;
-    let mut buf = vec![0u8; SEGMENT_THRESHOLD];
-    let mut segment_enc_sizes: Vec<i64> = Vec::new();
-
     info!("Replicating large file {} using segmented streaming", file.hash);
-
-    loop {
-        let n = read_chunk(&mut file_handle, &mut buf).await?;
-        if n == 0 { break; }
-
-        // nonce_context includes segment index to prevent nonce reuse across segments.
-        let seg_idx = segment_enc_sizes.len() as u32;
-        let nonce_ctx: Vec<u8> = encryption_key.iter().chain(seg_idx.to_le_bytes().iter()).cloned().collect();
-        let (sub_shards, enc_size) = StorageEngine::process_for_backup(&buf[..n], &encryption_key, &nonce_ctx, 3, 2)?;
-        segment_enc_sizes.push(enc_size as i64);
-
-        for (idx, sub_shard) in sub_shards.iter().enumerate() {
-            for chunk in sub_shard.chunks(CHUNK_MSG_SIZE) {
-                if senders[idx].send(chunk.to_vec()).await.is_err() {
-                    break;
-                }
-            }
-        }
-        // sub_shards drops here, reclaiming ~427 MB before the next segment is read.
-    }
-
-    // Signal completion to all shard tasks by dropping the senders.
-    drop(senders);
-
-    let mut shard_results: Vec<ShardResult> = Vec::new();
-    for handle in handles {
-        match handle.await {
-            Ok(Ok(r)) => shard_results.push(r),
-            Ok(Err(e)) => warn!("Large-file shard task failed: {}", e),
-            Err(e) => warn!("Large-file shard task panicked: {}", e),
-        }
-    }
+    let (shard_results, segment_enc_sizes) = p2p_upload::upload_segmented(p2p_service, nodes, &file.hash, file_path, &encryption_key).await?;
 
     if shard_results.len() < np2p::storage::DATA_SHARDS {
         return Err(format!(
@@ -561,7 +338,7 @@ async fn replicate_large_file(
         client.execute(
             "INSERT INTO p2p_nodes (node_id, public_addr, is_active) VALUES ($1, $2, TRUE)
              ON CONFLICT (node_id) DO UPDATE SET public_addr = $2, is_active = TRUE, last_seen = NOW()",
-            &[&r.node_id, &r.addr_str],
+            &[&r.node_id, &r.addr],
         ).await?;
     }
 
@@ -586,16 +363,4 @@ async fn replicate_large_file(
 
     info!("Replicated {} ({} segments, {} shards stored)", file.hash, segment_count, shard_results.len());
     Ok(())
-}
-
-/// Fills `buf` from `file`, reading until the buffer is full or EOF. Returns bytes read.
-async fn read_chunk(file: &mut tokio::fs::File, buf: &mut [u8]) -> std::io::Result<usize> {
-    let mut total = 0;
-    while total < buf.len() {
-        match file.read(&mut buf[total..]).await? {
-            0 => break,
-            n => total += n,
-        }
-    }
-    Ok(total)
 }

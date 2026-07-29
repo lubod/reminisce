@@ -1,6 +1,6 @@
 /// Tests for media_replication_worker — focused on the pure rendezvous hashing
 /// function which is the critical data-placement algorithm.
-use reminisce::media_replication_worker::{rendezvous_select_nodes, SHARD_COUNT, MIN_NODES_REQUIRED};
+use reminisce::p2p_upload::{rendezvous_select as rendezvous_select_nodes, SHARD_COUNT, MIN_NODES_REQUIRED};
 use std::net::SocketAddr;
 
 fn make_nodes(n: usize) -> Vec<(String, SocketAddr)> {

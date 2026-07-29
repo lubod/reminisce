@@ -5,7 +5,7 @@
 //! Large files are repaired by streaming the local file segment-by-segment.
 
 use crate::config::Config;
-use crate::media_replication_worker::{rendezvous_select_nodes, SHARD_COUNT, MIN_NODES_REQUIRED};
+use crate::p2p_upload::{rendezvous_select, SHARD_COUNT, MIN_NODES_REQUIRED};
 use crate::shard_rebalance_worker::{find_file_info, upload_shard_to_node, lookup_node_addr};
 use log::{info, warn, error};
 use crate::metrics::{
@@ -244,7 +244,7 @@ async fn repair_file(
         return Err("Not enough active nodes for repair".into());
     }
 
-    let ideal_nodes = rendezvous_select_nodes(file_hash, &active_nodes, SHARD_COUNT.min(active_nodes.len()));
+    let ideal_nodes = rendezvous_select(file_hash, &active_nodes, SHARD_COUNT.min(active_nodes.len()));
     let (target_node_id, target_node_addr) = &ideal_nodes[failed_shard_index % ideal_nodes.len()];
 
     // Check if this is a segmented large file and get segment metadata
