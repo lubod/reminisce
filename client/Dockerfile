@@ -6,7 +6,7 @@ WORKDIR /app
 COPY package*.json ./
 # Use cache mount for npm registry
 RUN --mount=type=cache,target=/root/.npm \
-    npm ci --prefer-offline
+    npm ci --prefer-offline --legacy-peer-deps
 
 COPY . .
 # Use cache mount for vite/build artifacts

@@ -130,10 +130,10 @@ models_loaded = False
 
 def load_models():
     """Load all AI models on startup"""
-    global models_loaded, siglip_model
+    global models_loaded, siglip_model, siglip_processor, vlm_model, vlm_processor, smolvlm_model, smolvlm_processor, face_app, device
     if models_loaded:
         return
-    models_loaded = True, siglip_processor, vlm_model, vlm_processor, smolvlm_model, smolvlm_processor, face_app, device
+    models_loaded = True
 
     # Compatibility patch for models with missing config attributes (SigLIP, Moondream2, etc.)
     try:
@@ -304,12 +304,16 @@ load_models()
 
 # Start gRPC server in background thread
 try:
+    import site
+    for p in ["/opt/venv/lib/python3.12/site-packages", os.path.dirname(os.path.abspath(__file__))]:
+        if os.path.exists(p) and p not in sys.path:
+            sys.path.insert(0, p)
     import ai_service_grpc
     grpc_port = int(os.environ.get("GRPC_PORT", "50051"))
     grpc_server = ai_service_grpc.serve_grpc(port=grpc_port)
     logger.info(f"gRPC server started on port {grpc_port}")
 except Exception as e:
-    logger.warning(f"Could not start gRPC server: {e}")
+    logger.error(f"Could not start gRPC server: {e}", exc_info=True)
 
 if __name__ == '__main__':
     logger.info("Starting Unified AI Service on 0.0.0.0:8081 (Flask HTTP) and 0.0.0.0:50051 (gRPC)")

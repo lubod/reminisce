@@ -69,6 +69,7 @@ services:
       - ai_dev_model_cache:/root/.cache/huggingface
       - face_dev_model_cache:/root/.insightface
       - ./ai/ai_service.py:/app/ai_service.py
+      - ./ai/ai_service_grpc.py:/app/ai_service_grpc.py
     environment:
       - API_SECRET_KEY=${API_SECRET_KEY:-}
       - HSA_OVERRIDE_GFX_VERSION=11.5.0

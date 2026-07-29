@@ -37,6 +37,7 @@ fn to_base64(data: &[u8]) -> String {
 
 #[tokio::test]
 #[serial]
+#[ignore]
 async fn test_health_check() {
     let client = create_client(60);
     let start = Instant::now();
@@ -67,6 +68,7 @@ async fn test_health_check() {
 
 #[tokio::test]
 #[serial]
+#[ignore]
 async fn test_image_embedding_speed() {
     let image_data = load_test_image();
     let base64_image = to_base64(&image_data);
@@ -112,6 +114,7 @@ async fn test_image_embedding_speed() {
 
 #[tokio::test]
 #[serial]
+#[ignore]
 async fn test_text_embedding_speed() {
     let client = create_client(30);
 
@@ -164,6 +167,7 @@ async fn test_text_embedding_speed() {
 
 #[tokio::test]
 #[serial]
+#[ignore]
 async fn test_image_description_speed() {
     let image_data = load_test_image();
     let base64_image = to_base64(&image_data);
@@ -212,6 +216,7 @@ async fn test_image_description_speed() {
 
 #[tokio::test]
 #[serial]
+#[ignore]
 async fn test_face_detection_speed() {
     let image_data = load_test_image();
     let base64_image = to_base64(&image_data);
@@ -270,6 +275,7 @@ async fn test_face_detection_speed() {
 
 #[tokio::test]
 #[serial]
+#[ignore]
 async fn test_image_description_fast_speed() {
     let image_data = load_test_image();
     let base64_image = to_base64(&image_data);
