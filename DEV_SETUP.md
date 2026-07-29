@@ -119,6 +119,9 @@ The `./dev` script is your primary tool for development:
 | `./dev clean-docker` | **Destructive**: Remove all project containers AND volumes |
 | `./dev restore <file>`| Restore database from a backup SQL file |
 | `./dev start-obs`    | Start observability stack (Grafana/Prometheus) |
+| `./dev install-hooks`| Install git pre-push hook (runs cargo check, clippy, unit tests, client build before every push) |
+
+> **Recommended once per clone:** run `./dev install-hooks` so the pre-push verification hook guards every push. Bypass with `git push --no-verify` if needed.
 
 ---
 

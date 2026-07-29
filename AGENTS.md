@@ -27,6 +27,13 @@ To run Clippy lints across the workspace:
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
+### Pre-Push Verification Hook
+A repo-checked-in git hook runs the full local verification suite (cargo check, clippy, unit tests, client build) before every `git push`. Install it once per clone:
+```bash
+./dev install-hooks        # or: git config core.hooksPath githooks
+```
+The hook lives at [githooks/pre-push](file:///Users/ldr/work/reminisce/githooks/pre-push). Full DB integration tests are NOT run by the hook (they need Docker) — run them separately with `./dev test`. Bypass in an emergency with `git push --no-verify`.
+
 ---
 
 ## Client Application (Vite / React)

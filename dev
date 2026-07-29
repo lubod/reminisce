@@ -71,6 +71,7 @@ function show_help {
     echo "  clean-docker           Force remove all project containers & volumes"
     echo "  restore <file>         Restore database from backup"
     echo "  shell <svc>            Get shell into a container"
+    echo "  install-hooks          Install git pre-push verification hook (one-time)"
 }
 
 check_service_health() {
@@ -203,6 +204,12 @@ case "$COMMAND" in
         info "Starting observability..."
         docker compose --project-directory . -p "$PROJECT_NAME" -f "$OBS_FILE" up -d
         success "Grafana: http://localhost:3000"
+        ;;
+    install-hooks)
+        info "Installing git hooks (core.hooksPath → githooks)..."
+        git config core.hooksPath githooks
+        chmod +x githooks/pre-push
+        success "Git hooks installed. pre-push will now run cargo check, clippy, unit tests, and the client build."
         ;;
     *)
         show_help

@@ -38,9 +38,17 @@ This endpoint returns `403` if any user already exists, so it's safe to call ide
 
 Copy `config-fullstack.yaml.example` to `config-fullstack.yaml`. Required fields:
 
+### Secret management (`api_secret_key`)
+
+`api_secret_key` is the **master secret** for the whole system — JWT signing, backup-key wrapping, the P2P node identity (when `p2p_deterministic_identity` is on), and mesh-manifest encryption all chain off it. Treat it accordingly:
+
+- **Prefer env injection** over the file: set `API_SECRET_KEY` in the environment (it takes precedence over `config.yaml`, so the secret never touches disk).
+- If it must live in `config.yaml`, lock the file down: `chmod 600 config.yaml`. The server **warns at startup** if the file is readable by group/others.
+- Rotate it with care: rotating invalidates existing JWTs and changes the deterministic P2P node identity (existing shard tokens/owner-pins must be re-established).
+
 | Key | Required | Description |
 |-----|----------|-------------|
-| `api_secret_key` | Yes | JWT signing key — `openssl rand -base64 32` |
+| `api_secret_key` | Yes | JWT signing key — `openssl rand -base64 32` (or set `API_SECRET_KEY` env var) |
 | `database_url` | Yes | `postgres://user:pass@host:5432/reminisce` |
 | `geotagging_database_url` | Yes | Separate PostGIS DB with offline geo data |
 | `images_dir` | Yes | Absolute path where uploaded images are stored |

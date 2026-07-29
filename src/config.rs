@@ -268,14 +268,45 @@ fn default_p2p_discovery_port() -> u16 {
     5066
 }
 
+/// Warn (loudly) if a config file that contains the master secret is readable by
+/// group or others. Only relevant on Unix; a no-op elsewhere.
+#[cfg(unix)]
+fn warn_if_config_world_readable(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    if let Ok(meta) = fs::metadata(path) {
+        let mode = meta.permissions().mode() & 0o777;
+        if mode & 0o077 != 0 {
+            log::warn!(
+                "⚠️  SECURITY: {:?} is mode {:o} and holds api_secret_key — readable by group/others. \
+                 Run `chmod 600 {:?}` or inject the secret via the API_SECRET_KEY environment variable instead.",
+                path, mode, path
+            );
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn warn_if_config_world_readable(_path: &Path) {}
+
 fn default_p2p_namespace() -> String {
     "default".to_string()
 }
 
 impl Config {
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn std::error::Error>> {
-        let contents = fs::read_to_string(path)?;
+        let path_ref = path.as_ref();
+        let contents = fs::read_to_string(path_ref)?;
         let mut config: Config = serde_yaml::from_str(&contents)?;
+
+        // The API_SECRET_KEY environment variable takes precedence over the config
+        // file, so the master secret never has to live in a plaintext file.
+        let env_secret = std::env::var("API_SECRET_KEY").ok().filter(|s| !s.is_empty());
+        if let Some(secret) = env_secret {
+            config.api_secret_key = Some(secret);
+        } else {
+            // Secret comes from the config file — warn if it's readable by others.
+            warn_if_config_world_readable(path_ref);
+        }
 
         // Validate API key at startup
         config.get_api_key().map_err(std::io::Error::other)?;

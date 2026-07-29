@@ -1,0 +1,43 @@
+#!/bin/bash
+#
+# Reminisce pre-push hook — runs the full local verification suite before any push.
+# Install once with:  ./dev install-hooks   (or: git config core.hooksPath githooks)
+#
+# Skip in an emergency with:  git push --no-verify
+
+set -uo pipefail
+
+# Run from the repository root regardless of where git invokes us.
+cd "$(git rev-parse --show-toplevel)" || exit 1
+
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+step() { echo -e "${BLUE}==>${NC} $1"; }
+pass() { echo -e "${GREEN}  ✓${NC} $1"; }
+fail() { echo -e "${RED}  ✗ $1${NC}"; echo -e "${RED}Push aborted — fix the failure above (or use --no-verify).${NC}"; exit 1; }
+
+step "cargo check --workspace --all-targets"
+cargo check --workspace --all-targets || fail "cargo check failed"
+pass "cargo check"
+
+step "cargo clippy --workspace --all-targets -- -D warnings"
+cargo clippy --workspace --all-targets -- -D warnings || fail "clippy failed"
+pass "clippy"
+
+step "cargo test --workspace --lib -- --skip test_utils (unit tests, no Docker needed)"
+cargo test --workspace --lib -- --skip test_utils || fail "unit tests failed"
+pass "unit tests"
+
+step "npm --prefix client run build (tsc + vite)"
+if [ -d client ]; then
+    npm --prefix client run build || fail "client build failed"
+    pass "client build"
+else
+    echo "  (client/ not found — skipping)"
+fi
+
+echo -e "${GREEN}All pre-push checks passed.${NC}"
+exit 0
