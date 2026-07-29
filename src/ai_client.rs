@@ -91,6 +91,22 @@ impl AiClient {
         Ok(response.into_inner().faces)
     }
 
+    pub async fn quality_score(&self, image_data: Vec<u8>) -> Result<QualityScoreResponse, String> {
+        let mut client = self.client().await?;
+        let request = self.make_request(QualityScoreRequest { image_data });
+
+        let response = client.quality_score(request).await.map_err(|e| format!("QualityScore gRPC call failed: {}", e))?;
+        Ok(response.into_inner())
+    }
+
+    pub async fn enhance_image(&self, image_data: Vec<u8>, mode: String) -> Result<EnhanceImageResponse, String> {
+        let mut client = self.client().await?;
+        let request = self.make_request(EnhanceImageRequest { image_data, mode });
+
+        let response = client.enhance_image(request).await.map_err(|e| format!("EnhanceImage gRPC call failed: {}", e))?;
+        Ok(response.into_inner())
+    }
+
     pub async fn health_check(&self) -> Result<HealthCheckResponse, String> {
         let mut client = self.client().await?;
         let request = self.make_request(HealthCheckRequest {});

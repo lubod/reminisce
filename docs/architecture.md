@@ -38,7 +38,7 @@
 | `reminisce` | `/` | REST API, background worker orchestration, multi-tenancy, dynamic query building |
 | `np2p` | `np2p/` | P2P storage engine: QUIC transport, ChaCha20-Poly1305 encryption, 3/5 Reed-Solomon erasure coding, UDP LAN discovery |
 | `coordinator` | `coordinator/` | VPS-hosted peer signaling registry + QUIC/TCP reverse tunnel relay for WAN traversal |
-| `ai-service` | `ai/` | Python sidecar serving two interfaces on shared models: Flask HTTP `:8081` (health/enhance/quality/orientation) and gRPC `:50051` (SigLIP2 embeddings, SmolVLM/Qwen captions, InsightFace detection) |
+| `ai-service` | `ai/` | Python sidecar serving gRPC `:50051` for all inference (SigLIP2 embeddings, SmolVLM/Qwen captions, InsightFace detection, quality scoring, image enhancement) over shared models; HTTP `:8081` kept only for `/health` |
 
 ---
 
@@ -118,7 +118,7 @@ Raw Media Stream ──▶ ChaCha20-Poly1305 Encrypt ──▶ Reed-Solomon (3 D
 ## 3. AI & Multi-Modal Vector Search Architecture
 
 ### Transport: gRPC + HTTP
-The backend talks to the AI service over **gRPC (`:50051`)** for the hot inference path (image/text embeddings, descriptions, face detection) using binary protobuf — see `proto/ai_service.proto` and the Rust client `src/ai_client.rs` (a shared, lazily-connected `tonic` `Channel`). The **Flask HTTP server (`:8081`)** remains for `/health`, `/enhance`, `/quality`, and `/orientation`. Both interfaces are authenticated with the same API key (`x-api-key` gRPC metadata / `X-API-Key` or Bearer HTTP header).
+The backend talks to the AI service over **gRPC (`:50051`)** for all inference (image/text embeddings, descriptions, face detection, quality scoring, image enhancement) using binary protobuf — see `proto/ai_service.proto` and the Rust client `src/ai_client.rs` (a shared, lazily-connected `tonic` `Channel`). The **Flask HTTP server (`:8081`)** is kept only for `/health` (container healthchecks). Both interfaces are authenticated with the same API key (`x-api-key` gRPC metadata / `X-API-Key` or Bearer HTTP header).
 
 ### Model Inventory
 - **SigLIP 2** (`google/siglip2-so400m-patch14-384`): Generates 1152-dimensional multi-modal vector embeddings for image-to-text and image-to-image semantic search.

@@ -53,9 +53,7 @@ Copy `config-fullstack.yaml.example` to `config-fullstack.yaml`. Required fields
 | `geotagging_database_url` | Yes | Separate PostGIS DB with offline geo data |
 | `images_dir` | Yes | Absolute path where uploaded images are stored |
 | `videos_dir` | Yes | Absolute path where uploaded videos are stored |
-| `embedding_service_url` | Yes | AI service HTTP base URL for health/enhance/quality/orientation (default `http://localhost:8081`) |
-| `face_service_url` | Yes | AI face detection URL (often same as embedding service) |
-| `ai_grpc_url` | Yes | AI service gRPC URL for embed/describe/detect (default `http://localhost:50051`; use `http://ai-server:50051` when the backend runs inside the compose network) |
+| `ai_grpc_url` | Yes | AI service gRPC URL for all inference (default `http://localhost:50051`; use `http://ai-server:50051` when the backend runs inside the compose network). Legacy `embedding_service_url`/`face_service_url` were removed. |
 | `p2p_data_dir` | Yes | Directory for P2P node identity and shard storage |
 | `p2p_namespace` | Yes | Namespace to isolate peer groups (e.g. `production`, `home`) |
 | `port` | No | HTTP listen port (default `8080`) |

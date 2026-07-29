@@ -890,12 +890,6 @@ pub struct EnhanceQuery {
     mode: Option<String>,
 }
 
-#[derive(Deserialize)]
-struct EnhanceAiResponse {
-    image: String,
-    operations: Vec<String>,
-}
-
 #[utoipa::path(
     post,
     path = "/image/{hash}/enhance",
@@ -947,48 +941,20 @@ pub async fn enhance_image(
         actix_web::error::ErrorInternalServerError("Failed to read image file")
     })?;
 
-    let base64_image = general_purpose::STANDARD.encode(&image_data);
     let mode = query.mode.clone().unwrap_or_else(|| "auto".to_string());
 
-    let http_client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(120))
-        .build()
-        .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
-
-    let ai_url = format!("{}/enhance", config.embedding_service_url);
-    let ai_resp = http_client
-        .post(&ai_url)
-        .bearer_auth(config.get_api_key().unwrap())
-        .json(&serde_json::json!({"image": base64_image, "mode": mode}))
-        .send()
-        .await
-        .map_err(|e| {
-            error!("AI service unreachable for enhance: {}", e);
-            actix_web::error::ErrorServiceUnavailable("AI service unavailable")
-        })?;
-
-    if !ai_resp.status().is_success() {
-        let body = ai_resp.text().await.unwrap_or_default();
-        return Ok(HttpResponse::InternalServerError().json(
-            serde_json::json!({"error": format!("Enhancement failed: {}", body)})
-        ));
-    }
-
-    let enhance_resp: EnhanceAiResponse = ai_resp.json().await.map_err(|e| {
-        error!("Failed to parse enhance response: {}", e);
-        actix_web::error::ErrorInternalServerError("Failed to parse AI response")
-    })?;
-
-    let enhanced_bytes = general_purpose::STANDARD.decode(&enhance_resp.image).map_err(|e| {
-        error!("Failed to decode enhanced image bytes: {}", e);
-        actix_web::error::ErrorInternalServerError("Failed to decode enhanced image")
+    let api_key = config.get_api_key().unwrap_or("").to_string();
+    let ai_client = crate::ai_client::AiClient::new(config.ai_grpc_url.clone(), api_key);
+    let enhance_resp = ai_client.enhance_image(image_data.to_vec(), mode).await.map_err(|e| {
+        error!("AI service enhance failed: {}", e);
+        actix_web::error::ErrorServiceUnavailable("AI service unavailable")
     })?;
 
     info!("Enhanced image {}: ops={:?}", hash, enhance_resp.operations);
     Ok(HttpResponse::Ok()
         .content_type("image/jpeg")
         .insert_header(("X-Enhance-Operations", enhance_resp.operations.join(",")))
-        .body(enhanced_bytes))
+        .body(enhance_resp.image_data))
 }
 
 // ── Save enhanced image to library ───────────────────────────────────────────

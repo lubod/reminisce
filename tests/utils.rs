@@ -16,8 +16,6 @@ pub fn create_test_config() -> config::Config {
         videos_dir: Some("uploaded_videos_test".to_string()),
         enable_local_geocoding: true,
         enable_external_geocoding_fallback: true,
-        embedding_service_url: "http://localhost:8081".to_string(),
-        face_service_url: "http://localhost:8082".to_string(),
         ai_grpc_url: "http://localhost:50051".to_string(),
         p2p_daemon_host: Some("127.0.0.1".to_string()),
         p2p_daemon_port: Some(5050),

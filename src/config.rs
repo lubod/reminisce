@@ -21,11 +21,7 @@ pub struct Config {
     pub enable_local_geocoding: bool,
     #[serde(default = "default_enable_external_geocoding_fallback")]
     pub enable_external_geocoding_fallback: bool,
-    // AI service configuration
-    #[serde(default = "default_embedding_service_url", alias = "clip_service_url", alias = "ai_service_url")]
-    pub embedding_service_url: String,
-    #[serde(default = "default_face_service_url")]
-    pub face_service_url: String,
+    // AI service configuration (gRPC; legacy HTTP URLs removed)
     #[serde(default = "default_ai_grpc_url")]
     pub ai_grpc_url: String,
     // P2P daemon connection
@@ -230,14 +226,6 @@ fn default_enable_local_geocoding() -> bool {
 
 fn default_enable_external_geocoding_fallback() -> bool {
     true
-}
-
-fn default_embedding_service_url() -> String {
-    "http://localhost:8081".to_string()
-}
-
-fn default_face_service_url() -> String {
-    "http://localhost:8081".to_string()  // Consolidated with embedding service
 }
 
 fn default_ai_grpc_url() -> String {

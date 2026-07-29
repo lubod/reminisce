@@ -7,6 +7,8 @@ service AIService {
   rpc EmbedText (EmbedTextRequest) returns (EmbedTextResponse);
   rpc DescribeImage (DescribeImageRequest) returns (DescribeImageResponse);
   rpc DetectFaces (DetectFacesRequest) returns (DetectFacesResponse);
+  rpc QualityScore (QualityScoreRequest) returns (QualityScoreResponse);
+  rpc EnhanceImage (EnhanceImageRequest) returns (EnhanceImageResponse);
   rpc HealthCheck (HealthCheckRequest) returns (HealthCheckResponse);
 }
 
@@ -51,6 +53,28 @@ message DetectFacesRequest {
 
 message DetectFacesResponse {
   repeated FaceBoundingBox faces = 1;
+}
+
+message QualityScoreRequest {
+  bytes image_data = 1;
+}
+
+message QualityScoreResponse {
+  float aesthetic_score = 1;
+  float sharpness_score = 2;
+  int32 width = 3;
+  int32 height = 4;
+}
+
+message EnhanceImageRequest {
+  bytes image_data = 1;
+  // "auto" (default), "exposure", "restore", "all"
+  string mode = 2;
+}
+
+message EnhanceImageResponse {
+  bytes image_data = 1;
+  repeated string operations = 2;
 }
 
 message HealthCheckRequest {}

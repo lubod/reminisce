@@ -222,6 +222,118 @@ class AIServiceServicer(ai_service_pb2_grpc.AIServiceServicer):
             logger.error(f"Error in gRPC DetectFaces: {e}", exc_info=True)
             context.abort(grpc.StatusCode.INTERNAL, str(e))
 
+    def QualityScore(self, request, context):
+        check_api_key(context)
+        svc = get_ai_service()
+        if svc.siglip_model is None:
+            context.abort(grpc.StatusCode.UNAVAILABLE, "SigLIP model not loaded")
+        if not request.image_data:
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, "Missing image_data")
+
+        try:
+            image = Image.open(io.BytesIO(request.image_data))
+            if image.mode != 'RGB':
+                image = image.convert('RGB')
+            w, h = image.size
+            if w < 3 or h < 3:
+                context.abort(grpc.StatusCode.INVALID_ARGUMENT, f"Image too small ({w}x{h})")
+
+            # Sharpness: Laplacian variance on grayscale
+            gray = np.array(image.convert('L'))
+            sharpness = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+
+            # Aesthetic: zero-shot SigLIP text comparison
+            inputs = svc.siglip_processor(text=svc.QUALITY_TEXTS, images=image, return_tensors="pt", padding="max_length")
+            inputs = {k: v.to(svc.device) for k, v in inputs.items()}
+            model_dtype = next(svc.siglip_model.parameters()).dtype
+            inputs = {k: v.to(model_dtype) if v.is_floating_point() else v for k, v in inputs.items()}
+
+            with torch.no_grad():
+                outputs = svc.siglip_model(**inputs)
+            probs = outputs.logits_per_image.softmax(dim=-1)[0]
+            aesthetic_score = float(probs[0].item()) * 10.0  # 0-10
+
+            return ai_service_pb2.QualityScoreResponse(
+                aesthetic_score=aesthetic_score,
+                sharpness_score=sharpness,
+                width=w,
+                height=h,
+            )
+        except Exception as e:
+            logger.error(f"Error in gRPC QualityScore: {e}", exc_info=True)
+            context.abort(grpc.StatusCode.INTERNAL, str(e))
+
+    def EnhanceImage(self, request, context):
+        check_api_key(context)
+        if not request.image_data:
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, "Missing image_data")
+
+        mode = request.mode or 'auto'
+        if mode not in ('auto', 'exposure', 'restore', 'all'):
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, f"Invalid mode '{mode}'. Use auto, exposure, restore, or all")
+
+        try:
+            img = Image.open(io.BytesIO(request.image_data))
+            if img.mode != 'RGB':
+                img = img.convert('RGB')
+            if img.width < 3 or img.height < 3:
+                context.abort(grpc.StatusCode.INVALID_ARGUMENT, f"Image too small ({img.width}x{img.height})")
+
+            result = np.array(img)
+            operations = []
+
+            # Analysis
+            gray = cv2.cvtColor(result, cv2.COLOR_RGB2GRAY)
+            mean_brightness = float(gray.mean())
+            sharpness = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+
+            do_exposure = mode in ('exposure', 'all') or (mode == 'auto' and (mean_brightness < 80 or mean_brightness > 190))
+            do_denoise = mode in ('restore', 'all') or (mode == 'auto' and sharpness < 50)
+            do_restore = mode in ('restore', 'all')
+            do_sharpen = mode in ('restore', 'exposure', 'all') or (mode == 'auto' and sharpness < 150)
+
+            # 1. Denoise (before sharpening)
+            if do_denoise:
+                bgr = cv2.cvtColor(result, cv2.COLOR_RGB2BGR)
+                bgr = cv2.fastNlMeansDenoisingColored(bgr, None, h=8, hColor=8, templateWindowSize=7, searchWindowSize=21)
+                result = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+                operations.append('denoised')
+
+            # 2. Exposure correction via CLAHE on L channel
+            if do_exposure:
+                lab = cv2.cvtColor(result, cv2.COLOR_RGB2LAB)
+                l_ch, a_ch, b_ch = cv2.split(lab)
+                clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+                l_ch = clahe.apply(l_ch)
+                result = cv2.cvtColor(cv2.merge([l_ch, a_ch, b_ch]), cv2.COLOR_LAB2RGB)
+                operations.append('exposure_corrected')
+
+            # 3. Per-channel histogram stretch for faded photos
+            if do_restore:
+                for i in range(3):
+                    lo = float(np.percentile(result[:, :, i], 2))
+                    hi = float(np.percentile(result[:, :, i], 98))
+                    if hi > lo:
+                        result[:, :, i] = np.clip(
+                            (result[:, :, i].astype(np.float32) - lo) * 255.0 / (hi - lo),
+                            0, 255
+                        ).astype(np.uint8)
+                operations.append('color_restored')
+
+            # 4. Unsharp mask
+            if do_sharpen:
+                blurred = cv2.GaussianBlur(result, (0, 0), sigmaX=2.0)
+                result = cv2.addWeighted(result, 1.4, blurred, -0.4, 0)
+                result = np.clip(result, 0, 255).astype(np.uint8)
+                operations.append('sharpened')
+
+            buf = io.BytesIO()
+            Image.fromarray(result).save(buf, format='JPEG', quality=92)
+            return ai_service_pb2.EnhanceImageResponse(image_data=buf.getvalue(), operations=operations)
+        except Exception as e:
+            logger.error(f"Error in gRPC EnhanceImage: {e}", exc_info=True)
+            context.abort(grpc.StatusCode.INTERNAL, str(e))
+
     def HealthCheck(self, request, context):
         device_str = str(get_ai_service().device) if get_ai_service().device else "unknown"
         return ai_service_pb2.HealthCheckResponse(

@@ -78,18 +78,17 @@ pub async fn health_check(
         }
     };
 
-    let ai_url = format!("{}/health", config.embedding_service_url.trim_end_matches('/'));
     let ai_service = match tokio::time::timeout(
         std::time::Duration::from_secs(10),
-        reqwest::get(&ai_url),
+        async {
+            let api_key = config.get_api_key().unwrap_or("").to_string();
+            let client = crate::ai_client::AiClient::new(config.ai_grpc_url.clone(), api_key);
+            client.health_check().await
+        },
     ).await {
-        Ok(Ok(r)) if r.status().is_success() => "connected".to_string(),
-        Ok(Ok(r)) => {
-            log::error!("AI service health check returned error: {}", r.status());
-            "unhealthy".to_string()
-        }
+        Ok(Ok(_)) => "connected".to_string(),
         Ok(Err(e)) => {
-            log::error!("AI service health check connection failed: {}", e);
+            log::error!("AI service gRPC health check failed: {}", e);
             "unhealthy".to_string()
         }
         Err(_) => {

@@ -34,10 +34,10 @@ The service automatically detects and configures available hardware accelerators
 ### HTTP (Flask, `:8081`)
 | Endpoint | Method | Purpose | Model / Engine |
 |----------|--------|---------|----------------|
-| `/health` | GET | Health & hardware acceleration status | - |
-| `/quality` | POST | Aesthetic quality & sharpness scoring | SigLIP2 + OpenCV |
-| `/orientation` | POST | Image orientation detection | Qwen2.5-VL |
-| `/enhance` | POST | Photo enhancement pipeline | OpenCV |
+| `/health` | GET | Health & model-load status | - |
+| `/` | GET | Service info / endpoint list | - |
+
+HTTP is kept **only** for container healthchecks. All inference moved to gRPC.
 
 ### gRPC (`:50051`) — `proto/ai_service.proto`
 | RPC | Purpose | Model / Engine |
@@ -46,13 +46,15 @@ The service automatically detects and configures available hardware accelerators
 | `EmbedText` | Text query vector embedding (1152-dim) | SigLIP2 |
 | `DescribeImage` | Visual scene description (`use_qwen` selects model) | SmolVLM / Qwen2.5-VL |
 | `DetectFaces` | Face detection, bounding box & embeddings | InsightFace |
+| `QualityScore` | Aesthetic quality & sharpness scoring | SigLIP2 + OpenCV |
+| `EnhanceImage` | Photo enhancement (exposure, denoise, restore, sharpen) | OpenCV |
 | `HealthCheck` | Model-load & device status | - |
 
-The HTTP embed/describe/detect routes (`/embed/*`, `/describe*`, `/detect`) still exist for backward compatibility but the backend uses the gRPC path for these.
+The legacy HTTP inference routes (`/embed/*`, `/describe*`, `/detect`, `/quality`, `/orientation`, `/enhance`) were removed. Note: `/orientation` had no backend caller (orientation is handled via EXIF in Rust), so no gRPC equivalent was added.
 
 ## Key Files
-- [ai_service.py](file:///Users/ldr/work/reminisce/ai/ai_service.py): Model loading, Flask HTTP routes, and gRPC server startup.
-- [ai_service_grpc.py](file:///Users/ldr/work/reminisce/ai/ai_service_grpc.py): gRPC servicer implementing embed/describe/detect/health RPCs.
+- [ai_service.py](file:///Users/ldr/work/reminisce/ai/ai_service.py): Model loading, HTTP `/health` + `/`, and gRPC server startup.
+- [ai_service_grpc.py](file:///Users/ldr/work/reminisce/ai/ai_service_grpc.py): gRPC servicer implementing all inference + health RPCs.
 - [proto/ai_service.proto](file:///Users/ldr/work/reminisce/proto/ai_service.proto): gRPC service & message definitions (source of truth for the wire contract).
 - [requirements.txt](file:///Users/ldr/work/reminisce/ai/requirements.txt): Python package dependencies.
 - [Dockerfile](file:///Users/ldr/work/reminisce/ai/Dockerfile): Container setup with CUDA/ROCm dependencies; regenerates gRPC stubs from the proto at build time.
