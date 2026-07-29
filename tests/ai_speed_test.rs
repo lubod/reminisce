@@ -246,7 +246,7 @@ async fn test_face_detection_speed() {
 
         if let Some(faces) = body["faces"].as_array() {
             for face in faces {
-                assert!(face["embedding"].as_array().map_or(false, |e| e.len() == 512),
+                assert!(face["embedding"].as_array().is_some_and(|e| e.len() == 512),
                     "Face embedding should be 512-dim");
                 assert!(face["confidence"].as_f64().unwrap_or(0.0) > 0.0,
                     "Face confidence should be > 0");

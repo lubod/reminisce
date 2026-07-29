@@ -179,7 +179,7 @@ async fn test_update_ai_settings() {
     let req = test::TestRequest::put()
         .uri("/ai-settings")
         .insert_header(("Authorization", format!("Bearer {}", token)))
-        .set_json(&serde_json::json!({
+        .set_json(serde_json::json!({
             "enable_ai_descriptions": false,
             "enable_embeddings": false,
             "embedding_parallel_count": 5
@@ -214,7 +214,7 @@ async fn test_update_ai_settings_invalid_parallel_count_zero() {
     let req = test::TestRequest::put()
         .uri("/ai-settings")
         .insert_header(("Authorization", format!("Bearer {}", token)))
-        .set_json(&serde_json::json!({"embedding_parallel_count": 0}))
+        .set_json(serde_json::json!({"embedding_parallel_count": 0}))
         .to_request();
     let resp = test::call_service(&app, req).await;
     assert_eq!(resp.status(), http::StatusCode::BAD_REQUEST);
@@ -240,7 +240,7 @@ async fn test_update_ai_settings_parallel_count_too_high() {
     let req = test::TestRequest::put()
         .uri("/ai-settings")
         .insert_header(("Authorization", format!("Bearer {}", token)))
-        .set_json(&serde_json::json!({"face_detection_parallel_count": 101}))
+        .set_json(serde_json::json!({"face_detection_parallel_count": 101}))
         .to_request();
     let resp = test::call_service(&app, req).await;
     assert_eq!(resp.status(), http::StatusCode::BAD_REQUEST);
@@ -273,7 +273,7 @@ async fn test_update_ai_settings_non_admin_forbidden() {
     let req = test::TestRequest::put()
         .uri("/ai-settings")
         .insert_header(("Authorization", format!("Bearer {}", token)))
-        .set_json(&serde_json::json!({"enable_embeddings": false}))
+        .set_json(serde_json::json!({"enable_embeddings": false}))
         .to_request();
     let resp = test::call_service(&app, req).await;
     assert_eq!(resp.status(), http::StatusCode::FORBIDDEN);
@@ -311,7 +311,7 @@ async fn test_update_ai_settings_partial_update() {
     let req = test::TestRequest::put()
         .uri("/ai-settings")
         .insert_header(("Authorization", format!("Bearer {}", token)))
-        .set_json(&serde_json::json!({"enable_media_backup": true}))
+        .set_json(serde_json::json!({"enable_media_backup": true}))
         .to_request();
     let resp = test::call_service(&app, req).await;
     assert_eq!(resp.status(), http::StatusCode::OK);

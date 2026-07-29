@@ -101,6 +101,7 @@ pub async fn filter_existing_hashes(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn process_image_file(
     temp_path: &Path,
     name: &str,
@@ -244,6 +245,7 @@ pub async fn process_image_file(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn process_video_file(
     temp_path: &Path,
     name: &str,

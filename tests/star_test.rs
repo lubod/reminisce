@@ -360,7 +360,7 @@ async fn test_starred_filter() {
     let starred_thumbnails = starred_json["thumbnails"].as_array().unwrap();
 
     // Should have exactly 1 starred image
-    assert!(starred_thumbnails.len() >= 1);
+    assert!(!starred_thumbnails.is_empty());
 
     // Verify the starred image is in the results
     let has_starred_image = starred_thumbnails.iter().any(|item| {
@@ -497,7 +497,7 @@ async fn test_starred_video_filter() {
     let starred_json: Value = serde_json::from_slice(&starred_body).unwrap();
     let starred_thumbnails = starred_json["thumbnails"].as_array().unwrap();
     
-    assert!(starred_thumbnails.len() >= 1);
+    assert!(!starred_thumbnails.is_empty());
 
     // Verify the starred video is in the results
     let has_starred_video = starred_thumbnails.iter().any(|item| {

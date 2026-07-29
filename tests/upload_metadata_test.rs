@@ -4,7 +4,6 @@ use reminisce::test_utils::setup_test_database_with_instance;
 use chrono::{self, TimeZone, Utc};
 use serial_test::serial;
 mod common;
-mod utils;
 
 const TEST_IMAGE_HASH: &str = "test_image_hash_metadata";
 const TEST_IMAGE_NAME: &str = "test_image_name_metadata.jpg";
@@ -16,7 +15,7 @@ async fn test_upload_image_metadata_success() {
     let (pool, _test_db) = setup_test_database_with_instance().await;
     let client = pool.get().await.expect("Failed to get client from pool");
 
-    let config = utils::create_test_config();
+    let config = common::utils::create_test_config();
 
     let user_id = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
 
@@ -43,9 +42,9 @@ async fn test_upload_image_metadata_success() {
 
     // Wrap pools for dependency injection
 
-    let main_pool = utils::wrap_main_pool(pool.clone());
+    let main_pool = common::utils::wrap_main_pool(pool.clone());
 
-    let geotagging_pool = utils::create_geotagging_pool().await;
+    let geotagging_pool = common::utils::create_geotagging_pool().await;
 
 
     let app = test::init_service(
@@ -57,7 +56,7 @@ async fn test_upload_image_metadata_success() {
     )
     .await;
 
-    let token = utils::create_test_jwt_token().await;
+    let token = common::utils::create_test_jwt_token().await;
     let new_name = "new_image_name.jpg";
 
     let request_body = serde_json::json!({
@@ -119,9 +118,9 @@ async fn test_upload_image_metadata_filename_date() {
     let (pool, _test_db) = setup_test_database_with_instance().await;
     let client = pool.get().await.expect("Failed to get client");
 
-    let config = utils::create_test_config();
-    let main_pool = utils::wrap_main_pool(pool.clone());
-    let geotagging_pool = utils::create_geotagging_pool().await;
+    let config = common::utils::create_test_config();
+    let main_pool = common::utils::wrap_main_pool(pool.clone());
+    let geotagging_pool = common::utils::create_geotagging_pool().await;
 
     let app = test::init_service(
         App::new()
@@ -131,7 +130,7 @@ async fn test_upload_image_metadata_filename_date() {
             .service(upload_image_metadata),
     ).await;
 
-    let token = utils::create_test_jwt_token().await;
+    let token = common::utils::create_test_jwt_token().await;
     let hash = "test_meta_filename_date_hash";
     let name = "IMG-20210615-WA0000.jpg";
 
@@ -179,9 +178,9 @@ async fn test_upload_video_metadata_filename_date() {
     let (pool, _test_db) = setup_test_database_with_instance().await;
     let client = pool.get().await.expect("Failed to get client");
 
-    let config = utils::create_test_config();
-    let main_pool = utils::wrap_main_pool(pool.clone());
-    let geotagging_pool = utils::create_geotagging_pool().await;
+    let config = common::utils::create_test_config();
+    let main_pool = common::utils::wrap_main_pool(pool.clone());
+    let geotagging_pool = common::utils::create_geotagging_pool().await;
 
     let app = test::init_service(
         App::new()
@@ -191,7 +190,7 @@ async fn test_upload_video_metadata_filename_date() {
             .service(upload_video_metadata),
     ).await;
 
-    let token = utils::create_test_jwt_token().await;
+    let token = common::utils::create_test_jwt_token().await;
     let hash = "test_meta_vid_filename_date_hash";
     let name = "VID_20210615_143025.mp4";
 

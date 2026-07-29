@@ -17,11 +17,12 @@ Shards are stored under the storage root directory partitioned by the first two 
 ```
 <storage_dir>/shards/<hash[0..2]>/<hash[2..]>
 ```
+Name-addressed **pinned objects** (small critical metadata, overwritable) are stored separately under `<storage_dir>/pinned/<blake3(name)>`.
 
 ## Key Files
 - [encryption.rs](file:///Users/ldr/work/reminisce/np2p/src/storage/encryption.rs): ChaCha20-Poly1305 cipher implementation.
 - [erasure.rs](file:///Users/ldr/work/reminisce/np2p/src/storage/erasure.rs): 3/5 Reed-Solomon encoder and decoder.
-- [disk.rs](file:///Users/ldr/work/reminisce/np2p/src/storage/disk.rs): Content-addressed filesystem read/write, disk quota, and space checks.
+- [disk.rs](file:///Users/ldr/work/reminisce/np2p/src/storage/disk.rs): Content-addressed filesystem read/write, name-addressed pinned-object store, disk quota, and space checks.
 
 ## Critical Invariants & Gotchas
 - **Deterministic Nonce Invariant**: ChaCha20-Poly1305 nonces MUST be derived deterministically via BLAKE3 from a caller-supplied nonce context (unique per file/key/segment; see `encryption.rs::encrypt`). **NEVER generate random nonces**. Deterministic nonces are required so independent nodes and audit workers can verify and repair missing shards without needing shared state.

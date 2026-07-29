@@ -82,7 +82,7 @@ pub async fn get_image(
                     }
                     _ => data,
                 };
-                info!("Serving image: {:?}", &image_path);
+                info!("Serving image: {:?}", image_path);
                 let mut response = HttpResponse::Ok();
                 response.content_type(mime_type.as_ref());
                 response.insert_header(("Content-Disposition", format!("inline; filename=\"{}\"", original_name)));
@@ -97,15 +97,15 @@ pub async fn get_image(
             Err(e) => {
                 error!(
                     "Local image file not found. Hash: '{}', Path: {:?}, Error: {}",
-                    &hash_to_find,
-                    &image_path,
+                    hash_to_find,
+                    image_path,
                     e
                 );
                 Err(actix_web::error::ErrorInternalServerError("Could not read image file."))
             }
         }
     } else {
-        warn!("Image not found for hash: '{}'", &hash_to_find);
+        warn!("Image not found for hash: '{}'", hash_to_find);
         Ok(
             HttpResponse::NotFound().json(
                 serde_json::json!({"status": "error", "message": "Image not found."})
@@ -163,7 +163,7 @@ pub async fn get_video(
 
         match actix_files::NamedFile::open(&video_path) {
             Ok(file) => {
-                info!("Serving video: {:?}", &video_path);
+                info!("Serving video: {:?}", video_path);
                 Ok(file
                     .set_content_type(mime_type)
                     .set_content_disposition(actix_web::http::header::ContentDisposition {
@@ -175,15 +175,15 @@ pub async fn get_video(
             Err(e) => {
                 error!(
                     "Local video file not found. Hash: '{}', Path: {:?}, Error: {}",
-                    &hash_to_find,
-                    &video_path,
+                    hash_to_find,
+                    video_path,
                     e
                 );
                 Err(actix_web::error::ErrorInternalServerError("Could not open video file for streaming."))
             }
         }
     } else {
-        warn!("Video not found for hash: '{}'", &hash_to_find);
+        warn!("Video not found for hash: '{}'", hash_to_find);
         Ok(
             HttpResponse::NotFound().json(
                 serde_json::json!({"status": "error", "message": "Video not found."})
@@ -320,7 +320,7 @@ pub async fn get_image_metadata(
         return Ok(HttpResponse::Ok().json(metadata));
     }
 
-    warn!("Media not found for hash: '{}'", &hash_to_find);
+    warn!("Media not found for hash: '{}'", hash_to_find);
     Ok(
         HttpResponse::NotFound().json(
             serde_json::json!({"status": "error", "message": "Media not found."})

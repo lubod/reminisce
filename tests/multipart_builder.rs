@@ -1,6 +1,7 @@
 use actix_web::web::Bytes;
 
 /// Core multipart builder. All public functions delegate here.
+#[allow(clippy::too_many_arguments)]
 fn build_multipart(
     hash: &str,
     name: &str,

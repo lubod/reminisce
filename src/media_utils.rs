@@ -297,6 +297,7 @@ pub async fn check_if_exists(
 
 // ---- Thumbnail Listing ------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 pub async fn list_thumbnails(
     user_id: &str,
     device_id: Option<&str>,
@@ -531,6 +532,7 @@ pub async fn list_thumbnails(
     Ok(thumbnails)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn total_thumbnails(
     user_id: &str,
     device_id: Option<&str>,
@@ -859,7 +861,7 @@ pub async fn extract_video_keyframes(
 
     let fps_filter = format!("fps=1/{}", interval_secs);
     let result = tokio::process::Command::new("ffmpeg")
-        .args(&[
+        .args([
             "-i", video_str,
             "-vf", &fps_filter,
             "-vframes", &max_keyframes.to_string(),

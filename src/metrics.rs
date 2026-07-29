@@ -1,7 +1,7 @@
-/// Custom business metrics for the Reminisce application
-///
-/// This module defines Prometheus metrics for tracking application-specific
-/// events and behaviors beyond standard HTTP metrics.
+// Custom business metrics for the Reminisce application
+//
+// This module defines Prometheus metrics for tracking application-specific
+// events and behaviors beyond standard HTTP metrics.
 
 use prometheus::{
     IntCounter, IntGauge, Histogram, HistogramOpts,
@@ -317,6 +317,71 @@ pub static BACKUP_RATE_LIMITED_TOTAL: Lazy<IntCounter> = Lazy::new(|| {
         "backup_rate_limited_total",
         "Total number of times backup was rate limited"
     ).expect("Failed to register backup_rate_limited_total metric")
+});
+
+// ============================================================================
+// Database Backup (P2P snapshot) Metrics
+// ============================================================================
+
+/// Total successful database snapshots uploaded to P2P
+pub static DB_BACKUP_SUCCESS_TOTAL: Lazy<IntCounter> = Lazy::new(|| {
+    register_int_counter!(
+        "db_backup_success_total",
+        "Total number of successful database snapshots replicated to P2P"
+    ).expect("Failed to register db_backup_success_total metric")
+});
+
+/// Total failed database snapshot attempts
+pub static DB_BACKUP_FAILURES_TOTAL: Lazy<IntCounter> = Lazy::new(|| {
+    register_int_counter!(
+        "db_backup_failures_total",
+        "Total number of failed database snapshot attempts"
+    ).expect("Failed to register db_backup_failures_total metric")
+});
+
+/// Database snapshot (plaintext dump) size in bytes
+pub static DB_BACKUP_SIZE_BYTES: Lazy<Histogram> = Lazy::new(|| {
+    register_histogram!(
+        HistogramOpts::new(
+            "db_backup_size_bytes",
+            "Size of database snapshot dumps in bytes"
+        )
+        .buckets(vec![
+            1_000_000.0,      // 1 MB
+            10_000_000.0,     // 10 MB
+            50_000_000.0,     // 50 MB
+            100_000_000.0,    // 100 MB
+            500_000_000.0,    // 500 MB
+            1_000_000_000.0,  // 1 GB
+        ])
+    ).expect("Failed to register db_backup_size_bytes metric")
+});
+
+/// Database snapshot duration in seconds
+pub static DB_BACKUP_DURATION_SECONDS: Lazy<Histogram> = Lazy::new(|| {
+    register_histogram!(
+        HistogramOpts::new(
+            "db_backup_duration_seconds",
+            "Duration of database snapshot backup cycle in seconds"
+        )
+        .buckets(vec![1.0, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0, 600.0])
+    ).expect("Failed to register db_backup_duration_seconds metric")
+});
+
+/// Current number of database snapshots kept in the P2P manifest
+pub static DB_BACKUP_SNAPSHOTS_KEPT: Lazy<IntGauge> = Lazy::new(|| {
+    register_int_gauge!(
+        "db_backup_snapshots_kept",
+        "Current number of database snapshots retained in the P2P manifest"
+    ).expect("Failed to register db_backup_snapshots_kept metric")
+});
+
+/// Total database snapshots pruned by the retention policy
+pub static DB_BACKUP_PRUNED_TOTAL: Lazy<IntCounter> = Lazy::new(|| {
+    register_int_counter!(
+        "db_backup_pruned_total",
+        "Total number of old database snapshots pruned by retention policy"
+    ).expect("Failed to register db_backup_pruned_total metric")
 });
 
 // ============================================================================
@@ -644,6 +709,12 @@ pub fn init_metrics() {
     Lazy::force(&BACKUP_PEERS_AVAILABLE);
     Lazy::force(&BACKUP_DEDUPLICATED_TOTAL);
     Lazy::force(&BACKUP_RATE_LIMITED_TOTAL);
+    Lazy::force(&DB_BACKUP_SUCCESS_TOTAL);
+    Lazy::force(&DB_BACKUP_FAILURES_TOTAL);
+    Lazy::force(&DB_BACKUP_SIZE_BYTES);
+    Lazy::force(&DB_BACKUP_DURATION_SECONDS);
+    Lazy::force(&DB_BACKUP_SNAPSHOTS_KEPT);
+    Lazy::force(&DB_BACKUP_PRUNED_TOTAL);
     Lazy::force(&VERIFICATION_DURATION);
     Lazy::force(&VERIFICATION_SUCCESS_TOTAL);
     Lazy::force(&VERIFICATION_FAILURES_TOTAL);

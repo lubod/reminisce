@@ -1,4 +1,3 @@
-use env_logger;
 
 #[path = "utils.rs"]
 pub mod utils;

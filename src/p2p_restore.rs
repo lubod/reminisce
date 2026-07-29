@@ -203,7 +203,7 @@ pub(crate) fn restore_segmented(
 
     for &enc_size in segment_enc_sizes {
         let enc_size = enc_size as usize;
-        let sub_shard_size = (enc_size + DATA_SHARDS - 1) / DATA_SHARDS;
+        let sub_shard_size = enc_size.div_ceil(DATA_SHARDS);
 
         let segment_shards: Vec<Option<Vec<u8>>> = full_shards.iter().map(|opt| {
             opt.as_ref().map(|s| {
@@ -247,7 +247,7 @@ mod tests {
     fn concat_shards(segments: &[(Vec<Vec<u8>>, usize)]) -> Vec<Option<Vec<u8>>> {
         let mut full: Vec<Vec<u8>> = vec![Vec::new(); TOTAL_SHARDS];
         for (shards, enc_size) in segments {
-            let sub_size = (enc_size + DATA_SHARDS - 1) / DATA_SHARDS;
+            let sub_size = enc_size.div_ceil(DATA_SHARDS);
             for (i, shard) in shards.iter().enumerate() {
                 // Pad to exact sub_size (process_for_backup pads to multiple of DATA_SHARDS)
                 let mut chunk = shard[..sub_size.min(shard.len())].to_vec();

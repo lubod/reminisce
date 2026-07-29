@@ -122,6 +122,7 @@ fn test_shard_count_is_five() {
 }
 
 #[test]
+#[allow(clippy::assertions_on_constants)]
 fn test_min_nodes_required_documented() {
     // MIN_NODES_REQUIRED = 1 allows replication even with a single node.
     // NOTE: With a single node, all 5 shards land on one device and EC provides

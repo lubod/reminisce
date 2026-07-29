@@ -423,6 +423,38 @@ CREATE TABLE IF NOT EXISTS p2p_shards (
 CREATE INDEX IF NOT EXISTS idx_p2p_shards_file_hash ON p2p_shards(file_hash);
 CREATE INDEX IF NOT EXISTS idx_p2p_shards_node_id ON p2p_shards(node_id);
 
+-- Database backup manifest: rolling list of P2P-backed pg_dump snapshots.
+-- Kept separate from media p2p_shards so the audit worker's orphan cleanup never
+-- touches DB-backup shards (they have no corresponding images/videos row).
+CREATE TABLE IF NOT EXISTS db_backups (
+    id BIGSERIAL PRIMARY KEY,
+    backup_hash VARCHAR(64) NOT NULL UNIQUE, -- BLAKE3 of the plaintext dump
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    size_bytes BIGINT NOT NULL, -- plaintext dump size
+    encrypted_size BIGINT NOT NULL, -- ciphertext size before erasure coding (single-segment)
+    data_shards INTEGER NOT NULL DEFAULT 3,
+    parity_shards INTEGER NOT NULL DEFAULT 2,
+    encryption_key BYTEA NOT NULL, -- per-backup ChaCha20 key, encrypted with master key
+    segment_count INTEGER NOT NULL DEFAULT 1,
+    segment_enc_sizes BIGINT[] DEFAULT NULL -- per-segment encrypted sizes for large dumps
+);
+
+CREATE INDEX IF NOT EXISTS idx_db_backups_created_at ON db_backups(created_at DESC);
+
+-- Shard placement map for DB backups (which node holds which shard).
+CREATE TABLE IF NOT EXISTS db_backup_shards (
+    id BIGSERIAL PRIMARY KEY,
+    backup_hash VARCHAR(64) NOT NULL REFERENCES db_backups(backup_hash) ON DELETE CASCADE,
+    shard_index INTEGER NOT NULL, -- 0 to 4 for 3/5 EC
+    node_id VARCHAR(64) NOT NULL,
+    shard_hash VARCHAR(64) NOT NULL, -- BLAKE3 hash of the shard itself
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(backup_hash, shard_index)
+);
+
+CREATE INDEX IF NOT EXISTS idx_db_backup_shards_backup_hash ON db_backup_shards(backup_hash);
+CREATE INDEX IF NOT EXISTS idx_db_backup_shards_node_id ON db_backup_shards(node_id);
+
 ALTER TABLE videos ADD COLUMN IF NOT EXISTS file_size_bytes BIGINT;
 ALTER TABLE videos ADD COLUMN IF NOT EXISTS p2p_segment_count INTEGER NOT NULL DEFAULT 1;
 ALTER TABLE videos ADD COLUMN IF NOT EXISTS p2p_segment_enc_sizes BIGINT[] DEFAULT NULL;

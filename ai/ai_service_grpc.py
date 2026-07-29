@@ -232,7 +232,11 @@ class AIServiceServicer(ai_service_pb2_grpc.AIServiceServicer):
 
 
 def serve_grpc(port=50051, max_workers=4):
-    server = grpc.server(futures.ThreadPoolExecutor(max_workers=max_workers))
+    options = [
+        ('grpc.max_send_message_length', 64 * 1024 * 1024),
+        ('grpc.max_receive_message_length', 64 * 1024 * 1024),
+    ]
+    server = grpc.server(futures.ThreadPoolExecutor(max_workers=max_workers), options=options)
     ai_service_pb2_grpc.add_AIServiceServicer_to_server(AIServiceServicer(), server)
     server.add_insecure_port(f"[::]:{port}")
     server.start()

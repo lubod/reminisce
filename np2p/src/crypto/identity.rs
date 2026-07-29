@@ -27,6 +27,18 @@ impl NodeIdentity {
         Self { signing_key }
     }
 
+    /// Derive a deterministic node identity from the account master secret.
+    ///
+    /// The same secret always yields the same node_id, so the P2P identity — and
+    /// therefore the ability to authenticate to storage nodes (which pin
+    /// `allowed_owner_id` to this node_id) — survives a full disk loss. It can be
+    /// regenerated from the master secret the user holds, with no on-disk state.
+    pub fn from_secret(secret: &str) -> Self {
+        let hash = blake3::hash(format!("reminisce-p2p-identity:{}", secret).as_bytes());
+        let signing_key = SigningKey::from_bytes(hash.as_bytes());
+        Self { signing_key }
+    }
+
     pub fn from_secret_bytes(bytes: &[u8]) -> Result<Self> {
         if bytes.len() != 32 {
             return Err(Np2pError::Identity(format!("Invalid secret key size: expected 32, got {}", bytes.len())));
@@ -249,6 +261,20 @@ pub fn verify_shard_token(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_from_secret_is_deterministic() {
+        let a = NodeIdentity::from_secret("my-master-secret");
+        let b = NodeIdentity::from_secret("my-master-secret");
+        assert_eq!(a.node_id(), b.node_id(), "same secret must yield same node_id");
+
+        let c = NodeIdentity::from_secret("different-secret");
+        assert_ne!(a.node_id(), c.node_id(), "different secret must yield different node_id");
+
+        // A random identity is (overwhelmingly) not the derived one.
+        let r = NodeIdentity::generate();
+        assert_ne!(a.node_id(), r.node_id());
+    }
 
     #[test]
     fn test_print_cert_der() {

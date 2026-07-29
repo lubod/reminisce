@@ -33,6 +33,7 @@ fn memory_fetcher(
 }
 
 /// Insert a minimal `images` row with p2p backup fields already populated.
+#[allow(clippy::too_many_arguments)]
 async fn insert_image(
     client: &deadpool_postgres::Object,
     hash: &str,
@@ -62,6 +63,7 @@ async fn insert_image(
 }
 
 /// Insert a minimal `videos` row with p2p backup fields already populated.
+#[allow(clippy::too_many_arguments)]
 async fn insert_video(
     client: &deadpool_postgres::Object,
     hash: &str,
@@ -306,7 +308,7 @@ async fn test_restore_multi_segment_full_fetch() {
     let full_shards: Vec<Vec<u8>> = (0..5).map(|i| {
         let mut buf = Vec::new();
         for (shards, enc_size) in [(&s0, e0), (&s1, e1), (&s2, e2)] {
-            let sub = (enc_size + 3 - 1) / 3;
+            let sub = enc_size.div_ceil(3);
             let mut chunk = shards[i][..sub.min(shards[i].len())].to_vec();
             chunk.resize(sub, 0);
             buf.extend_from_slice(&chunk);
@@ -353,7 +355,7 @@ async fn test_restore_multi_segment_one_shard_missing() {
     let full_shards: Vec<Vec<u8>> = (0..5).map(|i| {
         let mut buf = Vec::new();
         for (shards, enc_size) in [(&s0, e0), (&s1, e1)] {
-            let sub = (enc_size + 3 - 1) / 3;
+            let sub = enc_size.div_ceil(3);
             let mut chunk = shards[i][..sub.min(shards[i].len())].to_vec();
             chunk.resize(sub, 0);
             buf.extend_from_slice(&chunk);

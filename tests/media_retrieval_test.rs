@@ -1,7 +1,6 @@
 use actix_web::{ http, test, web, App };
 use reminisce::*;
 use reminisce::test_utils::setup_test_database_with_instance;
-use chrono;
 use serial_test::serial;
 use std::fs;
 use std::path::Path;
@@ -40,7 +39,7 @@ async fn test_get_image_success() {
     let subdir = &common::TEST_IMAGE_HASH[..2];
     let sub_dir_path = Path::new(config.get_images_dir()).join(subdir);
     tokio::fs::create_dir_all(&sub_dir_path).await.unwrap();
-    let extension = common::TEST_IMAGE_NAME.split('.').last().unwrap_or("jpg");
+    let extension = common::TEST_IMAGE_NAME.split('.').next_back().unwrap_or("jpg");
     let image_path = format!(
         "{}/{}/{}.{}",
         config.get_images_dir(),
@@ -176,7 +175,7 @@ async fn test_get_video_success() {
     let subdir = &common::TEST_VIDEO_HASH[..2];
     let sub_dir_path = Path::new(config.get_videos_dir()).join(subdir);
     tokio::fs::create_dir_all(&sub_dir_path).await.unwrap();
-    let extension = common::TEST_VIDEO_NAME.split('.').last().unwrap_or("mp4");
+    let extension = common::TEST_VIDEO_NAME.split('.').next_back().unwrap_or("mp4");
     let video_path = format!(
         "{}/{}/{}.{}",
         config.get_videos_dir(),

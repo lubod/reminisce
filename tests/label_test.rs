@@ -78,7 +78,7 @@ async fn test_create_label() {
     let req = test::TestRequest::post()
         .uri("/labels")
         .insert_header(("Authorization", format!("Bearer {}", token)))
-        .set_json(&serde_json::json!({"name": "Vacation", "color": "#FF0000"}))
+        .set_json(serde_json::json!({"name": "Vacation", "color": "#FF0000"}))
         .to_request();
     let resp = test::call_service(&app, req).await;
     assert_eq!(resp.status(), http::StatusCode::OK);
@@ -105,7 +105,7 @@ async fn test_create_label_default_color() {
     let req = test::TestRequest::post()
         .uri("/labels")
         .insert_header(("Authorization", format!("Bearer {}", token)))
-        .set_json(&serde_json::json!({"name": "DefaultColor"}))
+        .set_json(serde_json::json!({"name": "DefaultColor"}))
         .to_request();
     let resp = test::call_service(&app, req).await;
     assert_eq!(resp.status(), http::StatusCode::OK);
@@ -131,7 +131,7 @@ async fn test_create_label_upsert_on_duplicate() {
     let req = test::TestRequest::post()
         .uri("/labels")
         .insert_header(("Authorization", format!("Bearer {}", token.clone())))
-        .set_json(&serde_json::json!({"name": "Upsert", "color": "#AAAAAA"}))
+        .set_json(serde_json::json!({"name": "Upsert", "color": "#AAAAAA"}))
         .to_request();
     let resp = test::call_service(&app, req).await;
     let original: serde_json::Value = test::read_body_json(resp).await;
@@ -141,7 +141,7 @@ async fn test_create_label_upsert_on_duplicate() {
     let req = test::TestRequest::post()
         .uri("/labels")
         .insert_header(("Authorization", format!("Bearer {}", token)))
-        .set_json(&serde_json::json!({"name": "Upsert", "color": "#BBBBBB"}))
+        .set_json(serde_json::json!({"name": "Upsert", "color": "#BBBBBB"}))
         .to_request();
     let resp = test::call_service(&app, req).await;
     assert_eq!(resp.status(), http::StatusCode::OK);
@@ -163,7 +163,7 @@ async fn test_create_label_empty_name() {
     let req = test::TestRequest::post()
         .uri("/labels")
         .insert_header(("Authorization", format!("Bearer {}", token)))
-        .set_json(&serde_json::json!({"name": "   "}))
+        .set_json(serde_json::json!({"name": "   "}))
         .to_request();
     let resp = test::call_service(&app, req).await;
     assert_eq!(resp.status(), http::StatusCode::BAD_REQUEST);
@@ -273,7 +273,7 @@ async fn test_add_image_label_and_get() {
     let req = test::TestRequest::post()
         .uri(&format!("/images/{}/labels", hash))
         .insert_header(("Authorization", format!("Bearer {}", token.clone())))
-        .set_json(&serde_json::json!({"label_id": label_id}))
+        .set_json(serde_json::json!({"label_id": label_id}))
         .to_request();
     let resp = test::call_service(&app, req).await;
     assert_eq!(resp.status(), http::StatusCode::OK);
@@ -320,7 +320,7 @@ async fn test_add_image_label_image_not_found() {
     let req = test::TestRequest::post()
         .uri("/images/nonexistent_hash_xyz/labels")
         .insert_header(("Authorization", format!("Bearer {}", token)))
-        .set_json(&serde_json::json!({"label_id": label_id}))
+        .set_json(serde_json::json!({"label_id": label_id}))
         .to_request();
     let resp = test::call_service(&app, req).await;
     assert_eq!(resp.status(), http::StatusCode::NOT_FOUND);
@@ -414,7 +414,7 @@ async fn test_add_video_label_and_get() {
     let req = test::TestRequest::post()
         .uri(&format!("/videos/{}/labels", hash))
         .insert_header(("Authorization", format!("Bearer {}", token.clone())))
-        .set_json(&serde_json::json!({"label_id": label_id}))
+        .set_json(serde_json::json!({"label_id": label_id}))
         .to_request();
     let resp = test::call_service(&app, req).await;
     assert_eq!(resp.status(), http::StatusCode::OK);

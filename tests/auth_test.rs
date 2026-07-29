@@ -21,7 +21,7 @@ async fn test_register_user_disabled() {
     let req = test::TestRequest::post()
         .uri("/auth/register")
         .insert_header(("Content-Type", "application/json"))
-        .set_json(&serde_json::json!({
+        .set_json(serde_json::json!({
             "username": "someuser",
             "email": "someuser@example.com",
             "password": "securepassword123"
@@ -73,7 +73,7 @@ async fn test_setup_admin_success() {
     let req = test::TestRequest::post()
         .uri("/auth/setup")
         .insert_header(("Content-Type", "application/json"))
-        .set_json(&serde_json::json!({
+        .set_json(serde_json::json!({
             "username": "myadmin",
             "password": "adminpassword123"
         }))
@@ -103,7 +103,7 @@ async fn test_setup_admin_already_exists() {
     let req1 = test::TestRequest::post()
         .uri("/auth/setup")
         .insert_header(("Content-Type", "application/json"))
-        .set_json(&serde_json::json!({"username": "admin1", "password": "adminpassword123"}))
+        .set_json(serde_json::json!({"username": "admin1", "password": "adminpassword123"}))
         .to_request();
     let r1 = test::call_service(&app, req1).await;
     assert_eq!(r1.status(), http::StatusCode::CREATED);
@@ -112,7 +112,7 @@ async fn test_setup_admin_already_exists() {
     let req2 = test::TestRequest::post()
         .uri("/auth/setup")
         .insert_header(("Content-Type", "application/json"))
-        .set_json(&serde_json::json!({"username": "admin2", "password": "adminpassword456"}))
+        .set_json(serde_json::json!({"username": "admin2", "password": "adminpassword456"}))
         .to_request();
     let r2 = test::call_service(&app, req2).await;
     assert_eq!(r2.status(), http::StatusCode::FORBIDDEN);
@@ -139,7 +139,7 @@ async fn test_user_login_success() {
     let setup_req = test::TestRequest::post()
         .uri("/auth/setup")
         .insert_header(("Content-Type", "application/json"))
-        .set_json(&serde_json::json!({"username": "login_test_user", "password": "securepassword123"}))
+        .set_json(serde_json::json!({"username": "login_test_user", "password": "securepassword123"}))
         .to_request();
     let setup_resp = test::call_service(&app, setup_req).await;
     assert_eq!(setup_resp.status(), http::StatusCode::CREATED);
@@ -148,7 +148,7 @@ async fn test_user_login_success() {
     let login_req = test::TestRequest::post()
         .uri("/auth/user-login")
         .insert_header(("Content-Type", "application/json"))
-        .set_json(&serde_json::json!({"username": "login_test_user", "password": "securepassword123"}))
+        .set_json(serde_json::json!({"username": "login_test_user", "password": "securepassword123"}))
         .to_request();
 
     let login_response = test::call_service(&app, login_req).await;
@@ -181,14 +181,14 @@ async fn test_user_login_wrong_password() {
     let setup_req = test::TestRequest::post()
         .uri("/auth/setup")
         .insert_header(("Content-Type", "application/json"))
-        .set_json(&serde_json::json!({"username": "wrong_pass_user", "password": "correctpassword123"}))
+        .set_json(serde_json::json!({"username": "wrong_pass_user", "password": "correctpassword123"}))
         .to_request();
     test::call_service(&app, setup_req).await;
 
     let login_req = test::TestRequest::post()
         .uri("/auth/user-login")
         .insert_header(("Content-Type", "application/json"))
-        .set_json(&serde_json::json!({"username": "wrong_pass_user", "password": "wrongpassword123"}))
+        .set_json(serde_json::json!({"username": "wrong_pass_user", "password": "wrongpassword123"}))
         .to_request();
 
     let response = test::call_service(&app, login_req).await;
@@ -214,7 +214,7 @@ async fn test_user_login_nonexistent_user() {
     let login_req = test::TestRequest::post()
         .uri("/auth/user-login")
         .insert_header(("Content-Type", "application/json"))
-        .set_json(&serde_json::json!({"username": "nonexistent_user", "password": "somepassword123"}))
+        .set_json(serde_json::json!({"username": "nonexistent_user", "password": "somepassword123"}))
         .to_request();
 
     let response = test::call_service(&app, login_req).await;
@@ -241,14 +241,14 @@ async fn test_user_login_minimal_body() {
     let setup_req = test::TestRequest::post()
         .uri("/auth/setup")
         .insert_header(("Content-Type", "application/json"))
-        .set_json(&serde_json::json!({"username": "default_device_user", "password": "securepassword123"}))
+        .set_json(serde_json::json!({"username": "default_device_user", "password": "securepassword123"}))
         .to_request();
     test::call_service(&app, setup_req).await;
 
     let login_req = test::TestRequest::post()
         .uri("/auth/user-login")
         .insert_header(("Content-Type", "application/json"))
-        .set_json(&serde_json::json!({"username": "default_device_user", "password": "securepassword123"}))
+        .set_json(serde_json::json!({"username": "default_device_user", "password": "securepassword123"}))
         .to_request();
 
     let response = test::call_service(&app, login_req).await;

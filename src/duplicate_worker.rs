@@ -33,6 +33,12 @@ impl DuplicateWorkerStatus {
     }
 }
 
+impl Default for DuplicateWorkerStatus {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub type SharedDuplicateStatus = Arc<Mutex<DuplicateWorkerStatus>>;
 
 /// Minimum similarity threshold stored in the pairs table.

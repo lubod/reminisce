@@ -1,5 +1,5 @@
-/// Proxy stream manager. This is a fully functional multiplexed WS stream
-/// registration and routing manager component for P2P connection tunneling.
+// Proxy stream manager. This is a fully functional multiplexed WS stream
+// registration and routing manager component for P2P connection tunneling.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -45,5 +45,11 @@ impl ProxyManager {
     pub async fn remove(&self, request_id: &str) {
         let mut streams = self.streams.write().await;
         streams.remove(request_id);
+    }
+}
+
+impl Default for ProxyManager {
+    fn default() -> Self {
+        Self::new()
     }
 }

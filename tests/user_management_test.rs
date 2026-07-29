@@ -51,7 +51,7 @@ async fn test_list_users_admin() {
     assert_eq!(resp.status(), http::StatusCode::OK);
 
     let body: serde_json::Value = test::read_body_json(resp).await;
-    assert!(body.as_array().unwrap().len() >= 1);
+    assert!(!body.as_array().unwrap().is_empty());
 }
 
 #[actix_web::test]
@@ -126,7 +126,7 @@ async fn test_create_user_admin() {
     let req = test::TestRequest::post()
         .uri("/users")
         .insert_header(("Authorization", format!("Bearer {}", token)))
-        .set_json(&serde_json::json!({
+        .set_json(serde_json::json!({
             "username": "newuser",
             "password": "password123",
             "role": "user"
@@ -166,7 +166,7 @@ async fn test_create_user_non_admin_forbidden() {
     let req = test::TestRequest::post()
         .uri("/users")
         .insert_header(("Authorization", format!("Bearer {}", token)))
-        .set_json(&serde_json::json!({
+        .set_json(serde_json::json!({
             "username": "anotheruser",
             "password": "password123"
         }))
@@ -195,7 +195,7 @@ async fn test_create_user_short_password() {
     let req = test::TestRequest::post()
         .uri("/users")
         .insert_header(("Authorization", format!("Bearer {}", token)))
-        .set_json(&serde_json::json!({
+        .set_json(serde_json::json!({
             "username": "someuser",
             "password": "short"
         }))
@@ -224,7 +224,7 @@ async fn test_create_user_invalid_role() {
     let req = test::TestRequest::post()
         .uri("/users")
         .insert_header(("Authorization", format!("Bearer {}", token)))
-        .set_json(&serde_json::json!({
+        .set_json(serde_json::json!({
             "username": "someuser",
             "password": "password123",
             "role": "superuser"
@@ -255,7 +255,7 @@ async fn test_create_user_duplicate_username() {
     let req = test::TestRequest::post()
         .uri("/users")
         .insert_header(("Authorization", format!("Bearer {}", token.clone())))
-        .set_json(&serde_json::json!({"username": "dupuser", "password": "password123"}))
+        .set_json(serde_json::json!({"username": "dupuser", "password": "password123"}))
         .to_request();
     let resp = test::call_service(&app, req).await;
     assert_eq!(resp.status(), http::StatusCode::CREATED);
@@ -264,7 +264,7 @@ async fn test_create_user_duplicate_username() {
     let req = test::TestRequest::post()
         .uri("/users")
         .insert_header(("Authorization", format!("Bearer {}", token)))
-        .set_json(&serde_json::json!({"username": "dupuser", "password": "password456"}))
+        .set_json(serde_json::json!({"username": "dupuser", "password": "password456"}))
         .to_request();
     let resp = test::call_service(&app, req).await;
     assert_eq!(resp.status(), http::StatusCode::BAD_REQUEST);
@@ -304,7 +304,7 @@ async fn test_update_user_role() {
     let req = test::TestRequest::patch()
         .uri(&format!("/users/{}", target_id))
         .insert_header(("Authorization", format!("Bearer {}", token)))
-        .set_json(&serde_json::json!({"role": "viewer"}))
+        .set_json(serde_json::json!({"role": "viewer"}))
         .to_request();
     let resp = test::call_service(&app, req).await;
     assert_eq!(resp.status(), http::StatusCode::OK);
@@ -338,7 +338,7 @@ async fn test_update_user_cannot_demote_self() {
     let req = test::TestRequest::patch()
         .uri(&format!("/users/{}", ADMIN_UUID))
         .insert_header(("Authorization", format!("Bearer {}", token)))
-        .set_json(&serde_json::json!({"role": "user"}))
+        .set_json(serde_json::json!({"role": "user"}))
         .to_request();
     let resp = test::call_service(&app, req).await;
     assert_eq!(resp.status(), http::StatusCode::BAD_REQUEST);
@@ -366,7 +366,7 @@ async fn test_update_user_cannot_deactivate_self() {
     let req = test::TestRequest::patch()
         .uri(&format!("/users/{}", ADMIN_UUID))
         .insert_header(("Authorization", format!("Bearer {}", token)))
-        .set_json(&serde_json::json!({"is_active": false}))
+        .set_json(serde_json::json!({"is_active": false}))
         .to_request();
     let resp = test::call_service(&app, req).await;
     assert_eq!(resp.status(), http::StatusCode::BAD_REQUEST);

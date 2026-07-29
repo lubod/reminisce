@@ -32,7 +32,7 @@ pub fn create_pool_with_options(
     options: DbPoolOptions,
     use_tls: bool,
 ) -> Result<Pool, Box<dyn std::error::Error>> {
-    let pg_config = PgConfig::from_str(&postgres_url)?;
+    let pg_config = PgConfig::from_str(postgres_url)?;
 
     // Configure pool with explicit settings
     let mut pool_config = PoolConfig::new(options.max_size);

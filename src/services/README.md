@@ -19,9 +19,9 @@ HTTP API handlers grouped by feature domain. All REST endpoints exposed by Remin
 | [ai_settings.rs](file:///Users/ldr/work/reminisce/src/services/ai_settings.rs) | Manage AI processing configuration and model parameters |
 | [auth.rs](file:///Users/ldr/work/reminisce/src/services/auth.rs) | User authentication, login, token issue/refresh |
 | [duplicates.rs](file:///Users/ldr/work/reminisce/src/services/duplicates.rs) | Duplicate media listing, review, and resolution |
-| [embedding.rs](file:///Users/ldr/work/reminisce/src/services/embedding.rs) | Semantic vector search endpoints |
+| [embedding.rs](file:///Users/ldr/work/reminisce/src/services/embedding.rs) | Semantic vector search endpoints (per-branch KNN over images + videos; obtains query vectors via gRPC) |
 | [existence_check.rs](file:///Users/ldr/work/reminisce/src/services/existence_check.rs) | Check existing hashes before upload to skip duplicates |
-| [face_detection.rs](file:///Users/ldr/work/reminisce/src/services/face_detection.rs) | Face recognition and bounding box queries |
+| [face_detection.rs](file:///Users/ldr/work/reminisce/src/services/face_detection.rs) | Face detection client lib (gRPC `DetectFaces`) — bounding boxes + 512-dim embeddings |
 | [geocoding.rs](file:///Users/ldr/work/reminisce/src/services/geocoding.rs) | Reverse geocoding lookup and location data |
 | [geodb_stats.rs](file:///Users/ldr/work/reminisce/src/services/geodb_stats.rs) | Offline reverse-geocoding DB status and stats |
 | [health.rs](file:///Users/ldr/work/reminisce/src/services/health.rs) | Health check & readiness probes (`/health`, `/ready`) |

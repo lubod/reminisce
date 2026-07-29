@@ -96,7 +96,7 @@ pub async fn get_p2p_connection_info(
 
     // Local IP: extracted from the Host header — what the browser actually connected to.
     // This avoids returning Docker bridge IPs (172.17.x.x) that are invisible to clients.
-    let local_ip = req.connection_info().host().to_string()
+    let local_ip = req.connection_info().host()
         .split(':').next()
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string());

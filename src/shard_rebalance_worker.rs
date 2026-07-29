@@ -203,6 +203,7 @@ async fn rebalance_file(
 
 /// Migrate a shard to a new node. Prefers re-sharding from local file (when encryption key is stored).
 /// Falls back to retrieving the shard from the old node if no key is available.
+#[allow(clippy::too_many_arguments)]
 async fn migrate_shard(
     pool: &Pool,
     config: &Config,
@@ -228,8 +229,8 @@ async fn migrate_shard(
             let old_addr = lookup_node_addr(pool, p2p_service, old_node_id).await;
             match old_addr {
                 Some(addr) => retrieve_shard_from_node(p2p_service, addr, old_shard_hash).await
-                    .or_else(|_| -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
-                        Err("Cannot migrate: no encryption key and old node unreachable".into())
+                    .map_err(|_| -> Box<dyn std::error::Error + Send + Sync> {
+                        "Cannot migrate: no encryption key and old node unreachable".into()
                     })?,
                 None => return Err("Cannot migrate: no encryption key and old node addr unknown".into()),
             }

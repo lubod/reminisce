@@ -20,7 +20,6 @@ struct QualityResponse {
 
 /// Quality scoring client. This is a fully functional component that queries
 /// the AI service's `/quality` endpoint to compute aesthetic and sharpness scores.
-
 pub async fn get_quality_score(image_data: &[u8], config: &Config) -> Result<QualityScore, String> {
     let client = crate::utils::get_http_client();
 

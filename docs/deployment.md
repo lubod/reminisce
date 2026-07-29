@@ -45,16 +45,32 @@ Copy `config-fullstack.yaml.example` to `config-fullstack.yaml`. Required fields
 | `geotagging_database_url` | Yes | Separate PostGIS DB with offline geo data |
 | `images_dir` | Yes | Absolute path where uploaded images are stored |
 | `videos_dir` | Yes | Absolute path where uploaded videos are stored |
-| `embedding_service_url` | Yes | AI service base URL (default `http://localhost:8081`) |
+| `embedding_service_url` | Yes | AI service HTTP base URL for health/enhance/quality/orientation (default `http://localhost:8081`) |
 | `face_service_url` | Yes | AI face detection URL (often same as embedding service) |
+| `ai_grpc_url` | Yes | AI service gRPC URL for embed/describe/detect (default `http://localhost:50051`; use `http://ai-server:50051` when the backend runs inside the compose network) |
 | `p2p_data_dir` | Yes | Directory for P2P node identity and shard storage |
 | `p2p_namespace` | Yes | Namespace to isolate peer groups (e.g. `production`, `home`) |
 | `port` | No | HTTP listen port (default `8080`) |
 | `p2p_coordinator_addr` | No | `host:port` of coordinator for WAN peer discovery |
 | `p2p_discovery_port` | No | UDP port for LAN peer discovery broadcasts (default `5056`) |
+| `p2p_deterministic_identity` | No | Derive P2P node identity from `api_secret_key` (default `false`). Enables true full-disk-loss recovery but changes node_id — use for new setups |
 | `p2p_tunnel_local_port` | No | Local HTTP port the reverse tunnel should forward to |
 | `otlp_endpoint` | No | OpenTelemetry OTLP gRPC endpoint for distributed tracing |
 | `environment` | No | Label for tracing spans (`production`, `dev`) |
+
+### Database backup worker (`workers:` section)
+
+The periodic P2P database snapshot worker is configured under the `workers:` key:
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `workers.db_backup_enabled` | `true` | Enable/disable the periodic DB snapshot worker |
+| `workers.db_backup_interval_secs` | `86400` | Seconds between snapshots (default 24 h) |
+| `workers.db_backup_retention_count` | `7` | Number of snapshots to keep in the rolling P2P manifest; older ones are pruned |
+
+Requires `pg_dump` available on the server `PATH` (present in the Docker image).
+
+Each snapshot also writes a self-contained restore manifest to `<p2p_data_dir>/db_manifests/<backup_hash>.json` (mode `0600`) so the database can be rebuilt even after a full DB loss. Keep `p2p_data_dir` on persistent storage and back it up alongside your media — it holds `node.key` (P2P identity) and the snapshot manifests needed for disaster recovery. To restore, use the `disaster_recovery` binary (see `docs/p2p-backup.md`).
 
 ## TLS / HTTPS
 

@@ -1,5 +1,5 @@
-/// Full-text search functionality for image descriptions
-/// Separated from embedding search for clarity
+// Full-text search functionality for image descriptions
+// Separated from embedding search for clarity
 
 use actix_web::web;
 use log::info;
@@ -8,6 +8,7 @@ use crate::services::embedding::SearchResult;
 use crate::utils;
 
 /// Perform full-text search on image descriptions
+#[allow(clippy::too_many_arguments)]
 pub async fn search_by_text(
     query_text: &str,
     user_uuid: &uuid::Uuid,
@@ -35,7 +36,7 @@ pub async fn search_by_text(
     let mut owned_conditions: Vec<String> = vec![];
     let mut param_count = 4; // $1=user_id, $2=query, $3=limit, $4=offset
 
-    if let Some(_) = device_filter {
+    if device_filter.is_some() {
         param_count += 1;
         owned_conditions.push(format!("i.deviceid = ${}", param_count));
     }
@@ -73,7 +74,7 @@ pub async fn search_by_text(
     }
 
     // Combine both static and owned conditions
-    let all_conditions: Vec<&str> = conditions.iter().map(|s| *s)
+    let all_conditions: Vec<&str> = conditions.iter().copied()
         .chain(owned_conditions.iter().map(|s| s.as_str()))
         .collect();
 
@@ -180,6 +181,7 @@ pub async fn search_by_text(
 }
 
 /// Perform hybrid search combining semantic and text search
+#[allow(clippy::too_many_arguments)]
 pub async fn search_hybrid(
     query_text: &str,
     embedding: &pgvector::Vector,
@@ -207,7 +209,7 @@ pub async fn search_hybrid(
     let mut owned_conditions: Vec<String> = vec![similarity_threshold];
     let mut param_count = 5; // $1=user_id, $2=embedding, $3=query_text, $4=limit, $5=offset
 
-    if let Some(_) = device_filter {
+    if device_filter.is_some() {
         param_count += 1;
         owned_conditions.push(format!("i.deviceid = ${}", param_count));
     }
@@ -245,7 +247,7 @@ pub async fn search_hybrid(
     }
 
     // Combine both static and owned conditions
-    let all_conditions: Vec<&str> = conditions.iter().map(|s| *s)
+    let all_conditions: Vec<&str> = conditions.iter().copied()
         .chain(owned_conditions.iter().map(|s| s.as_str()))
         .collect();
 

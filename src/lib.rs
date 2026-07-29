@@ -17,7 +17,9 @@ pub mod verification_worker;
 pub mod p2p_audit_worker;
 pub mod media_replication_worker;
 pub mod shard_rebalance_worker;
+pub mod db_backup_worker;
 pub mod p2p_restore;
+pub mod db_restore;
 pub mod ai_worker;
 pub mod ai_client;
 pub mod telemetry;
@@ -49,7 +51,7 @@ pub mod services {
     pub mod ingest;
     pub mod import_dir;
     pub mod p2p_status;
-    pub mod p2p_restore;
+pub mod p2p_restore;
     pub mod proxy_manager;
     pub mod duplicates;
     pub mod quality;
@@ -99,6 +101,7 @@ pub use crate::services::upload::{upload_image, upload_video, upload_image_metad
 pub use crate::services::thumbnail::{list_image_thumbnails, list_video_thumbnails, list_all_media_thumbnails, get_thumbnail, get_face_thumbnail};
 pub use crate::services::media::{get_image, get_video, get_image_metadata, toggle_image_star, toggle_video_star, delete_image, delete_video, get_device_ids, get_random_image, restore_image, restore_video, get_trash, enhance_image, save_enhanced_image};
 pub use crate::services::embedding::search_images;
+pub use crate::services::embedding::search_video_keyframes;
 pub use crate::services::stats::get_stats;
 pub use crate::services::pool_stats::get_pool_stats;
 pub use crate::services::geodb_stats::get_geodb_stats;
@@ -142,6 +145,7 @@ pub use crate::services::import_dir::{import_directory, get_import_status};
         crate::services::media::get_random_image,
         crate::services::media::enhance_image,
         crate::services::embedding::search_images,
+        crate::services::embedding::search_video_keyframes,
         crate::services::stats::get_stats,
         crate::services::pool_stats::get_pool_stats,
         crate::services::geodb_stats::get_geodb_stats,
@@ -215,6 +219,7 @@ pub use crate::services::import_dir::{import_directory, get_import_status};
             crate::services::media::RandomImageResponse,
             crate::services::media::TrashItem,
             crate::services::embedding::SearchResult,
+            crate::services::embedding::VideoKeyframeResult,
             crate::services::auth::RegisterRequest,
             crate::services::auth::UserLoginRequest,
             crate::services::health::HealthCheckResponse,
@@ -363,23 +368,18 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
     let api_secret = config.api_secret_key.as_deref().unwrap_or("");
     if api_secret.is_empty() {
         error!("❌ api_secret_key is missing or empty in configuration!");
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "api_secret_key is required",
-        ));
+        return Err(std::io::Error::other("api_secret_key is required"));
     }
     if api_secret.len() < 32 {
         error!("❌ api_secret_key is too weak! Must be at least 32 characters.");
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
+        return Err(std::io::Error::other(
             "api_secret_key must be at least 32 characters long",
         ));
     }
 
     if config.database_url.is_none() {
         error!("❌ Headless P2P storage node mode has been removed!");
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
+        return Err(std::io::Error::other(
             "Headless mode removed - use standalone p2p daemon"
         ));
     }
@@ -435,7 +435,15 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
     }
 
     let identity_path = p2p_data_path.join("node.key");
-    let identity = if identity_path.exists() {
+    let identity = if config.p2p_deterministic_identity {
+        let id = np2p::crypto::NodeIdentity::from_secret(config.get_api_key().expect("api_secret_key required for deterministic P2P identity"));
+        // Persist the derived identity so tooling that reads node.key stays consistent.
+        if !identity_path.exists() {
+            std::fs::write(&identity_path, id.signing_key.to_bytes()).expect("Failed to save P2P identity file");
+        }
+        info!("P2P Identity derived from api_secret (deterministic, full-disk-loss recoverable)");
+        id
+    } else if identity_path.exists() {
         info!("Loading P2P identity from {:?}", identity_path);
         let bytes = std::fs::read(&identity_path).expect("Failed to read P2P identity file");
         np2p::crypto::NodeIdentity::from_secret_bytes(&bytes).expect("Invalid P2P identity file")
@@ -506,6 +514,19 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
                     replication_config,
                     replication_service,
                     replication_token,
+                ).await;
+            });
+
+            let db_backup_pool = worker_pool.0.clone();
+            let db_backup_config = config.clone();
+            let db_backup_service = p2p_service.clone();
+            let db_backup_token = shutdown_token.clone();
+            tokio::spawn(async move {
+                db_backup_worker::db_backup_loop(
+                    db_backup_pool,
+                    db_backup_config,
+                    db_backup_service,
+                    db_backup_token,
                 ).await;
             });
         }
@@ -684,6 +705,7 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
                     .service(restore_video)
                     .service(get_trash)
                     .service(search_images)
+                    .service(search_video_keyframes)
                     .service(get_stats)
                     .service(get_pool_stats)
                     .service(get_geodb_stats)

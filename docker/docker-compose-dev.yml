@@ -64,6 +64,7 @@ services:
     container_name: reminisce-dev-ai-server
     ports:
       - "8081:8081"
+      - "50051:50051"
     volumes:
       - ai_dev_model_cache:/root/.cache/huggingface
       - face_dev_model_cache:/root/.insightface

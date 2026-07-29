@@ -38,3 +38,6 @@ main.rs (config + telemetry) -> lib.rs::run_server ──┬──▶ Metrics & 
 - [query_builder.rs](file:///Users/ldr/work/reminisce/src/query_builder.rs): Dynamic SQL generator for media queries.
 - [media_utils.rs](file:///Users/ldr/work/reminisce/src/media_utils.rs): Thumbnail generation, EXIF metadata extraction.
 - [geo_utils.rs](file:///Users/ldr/work/reminisce/src/geo_utils.rs): Geocoding & reverse geocoding via PostGIS / geotagging DB.
+- [ai_client.rs](file:///Users/ldr/work/reminisce/src/ai_client.rs): Shared gRPC client (`tonic`) for the AI service; lazy re-usable `Channel`, API-key metadata, 64 MB message cap. Generated types come from `proto/ai_service.proto` via `build.rs`.
+- [db_backup_worker.rs](file:///Users/ldr/work/reminisce/src/db_backup_worker.rs): Periodic `pg_dump` → encrypt → 3/5 shard → P2P upload; rolling `db_backups` manifest with retention pruning (sends `DeleteShardRequest`).
+- [db_restore.rs](file:///Users/ldr/work/reminisce/src/db_restore.rs): Reconstruct + decrypt a DB snapshot from P2P shards; reads/writes the on-disk restore manifest (`db_manifests/`) used when the DB itself is lost. Consumed by the `disaster_recovery` CLI binary.

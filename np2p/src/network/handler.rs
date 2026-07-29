@@ -190,6 +190,39 @@ impl ConnectionHandler {
                 info!("[CONN] Heartbeat: {} bytes available", available_space_bytes);
             }
 
+            Message::DeleteShardRequest { shard_hash, token } => {
+                let success = if crate::crypto::verify_shard_token(&token, &shard_hash, allowed_owner_id.as_ref()) {
+                    storage.delete(shard_hash).await.is_ok()
+                } else {
+                    warn!("DeleteShardRequest: token verification failed for shard {}", hex::encode(shard_hash));
+                    false
+                };
+                let response = Message::DeleteShardResponse { shard_hash, success };
+                Protocol::send(&mut send, &response).await?;
+            }
+
+            Message::StorePinnedObject { name, data, token } => {
+                let name_hash: [u8; 32] = blake3::hash(name.as_bytes()).into();
+                let success = if crate::crypto::verify_shard_token(&token, &name_hash, allowed_owner_id.as_ref()) {
+                    storage.store_pinned(&name, &data).await.is_ok()
+                } else {
+                    warn!("StorePinnedObject: token verification failed for '{}'", name);
+                    false
+                };
+                Protocol::send(&mut send, &Message::StorePinnedResponse { success }).await?;
+            }
+
+            Message::GetPinnedObject { name, token } => {
+                let name_hash: [u8; 32] = blake3::hash(name.as_bytes()).into();
+                if crate::crypto::verify_shard_token(&token, &name_hash, allowed_owner_id.as_ref()) {
+                    let data = storage.get_pinned(&name).await?;
+                    Protocol::send(&mut send, &Message::PinnedObjectResponse { data }).await?;
+                } else {
+                    warn!("GetPinnedObject: token verification failed for '{}'", name);
+                    Protocol::send(&mut send, &Message::Error { code: 401, message: "Unauthorized pinned object access".to_string() }).await?;
+                }
+            }
+
             _ => {
                 warn!("[CONN] Received unexpected or unhandled message type");
                 let response = Message::Error {

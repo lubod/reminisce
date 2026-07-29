@@ -121,7 +121,6 @@ async fn verify_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) ->
             let created_at: chrono::DateTime<Utc> = row.get(7);
             let orientation: Option<i16> = row.get(8);
             let user_id = current_user_id;
-            let total_files = total_files;
 
             let file_dir = if file_type == "image" { config_clone.get_images_dir().to_string() } else { config_clone.get_videos_dir().to_string() };
             let sub_dir_path = super::utils::get_subdirectory_path(&file_dir, &hash);
@@ -170,7 +169,7 @@ async fn verify_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) ->
                                 Err(e) => {
                                     error!("Failed to read {} file chunk for verification {}: {}", file_type, hash, e);
                                     let table_name = if file_type == "image" { "images" } else { "videos" };
-                                    if let Ok(_) = crate::utils::validate_table_name(table_name) {
+                                    if crate::utils::validate_table_name(table_name).is_ok() {
                                         let query = format!("UPDATE {} SET last_verified_at = NOW(), verification_status = -1 WHERE hash = $1 AND user_id = $2", table_name);
                                         let _ = client.execute(&query, &[&hash, &user_id]).await;
                                     }
@@ -217,7 +216,7 @@ async fn verify_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) ->
                             }
 
                             let table_name = if file_type == "image" { "images" } else { "videos" };
-                            if let Ok(_) = crate::utils::validate_table_name(table_name) {
+                            if crate::utils::validate_table_name(table_name).is_ok() {
                                 let query = format!("UPDATE {} SET last_verified_at = NOW(), verification_status = 1, has_thumbnail = $3 WHERE hash = $1 AND user_id = $2", table_name);
                                 let _ = client.execute(&query, &[&hash, &user_id, &has_thumbnail]).await;
                             }
@@ -227,7 +226,7 @@ async fn verify_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) ->
                             VERIFICATION_FAILURES_TOTAL.inc();
                             warn!("{} verification failed for hash: {}. Expected {}, got {} (took {:.2}s)", file_type, hash, hash, calculated_hash, duration.as_secs_f64());
                             let table_name = if file_type == "image" { "images" } else { "videos" };
-                            if let Ok(_) = crate::utils::validate_table_name(table_name) {
+                            if crate::utils::validate_table_name(table_name).is_ok() {
                                 let query = format!("UPDATE {} SET last_verified_at = NOW(), verification_status = -1 WHERE hash = $1 AND user_id = $2", table_name);
                                 let _ = client.execute(&query, &[&hash, &user_id]).await;
                             }
@@ -237,7 +236,7 @@ async fn verify_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) ->
                         VERIFICATION_FAILURES_TOTAL.inc();
                         error!("Failed to open {} file for verification {}: {}", file_type, hash, e);
                         let table_name = if file_type == "image" { "images" } else { "videos" };
-                        if let Ok(_) = crate::utils::validate_table_name(table_name) {
+                        if crate::utils::validate_table_name(table_name).is_ok() {
                             let query = format!("UPDATE {} SET last_verified_at = NOW(), verification_status = -1 WHERE hash = $1 AND user_id = $2", table_name);
                             let _ = client.execute(&query, &[&hash, &user_id]).await;
                         }
@@ -247,7 +246,7 @@ async fn verify_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) ->
         });
 
         let mut buffered = verification_stream.buffer_unordered(limits.verification);
-        while let Some(_) = buffered.next().await {}
+        while buffered.next().await.is_some() {}
         info!("All verification tasks completed for user {}", current_user_id);
     }
 

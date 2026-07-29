@@ -46,6 +46,9 @@ struct ShardResult {
     shard_hash_hex: String,
 }
 
+// (shard_index, node_id, addr_str, shard_hash)
+type ShardUploadResults = std::sync::Arc<Mutex<Vec<(usize, String, String, String)>>>;
+
 /// Rendezvous hashing (HRW): rank nodes by hash(file_hash || node_id),
 /// return top `count`. Uses the stable hex node_id (public key) for consistent
 /// assignment across restarts — not the socket address which may change.
@@ -55,7 +58,7 @@ pub fn rendezvous_select_nodes(file_hash: &str, nodes: &[(String, SocketAddr)], 
         let score = u64::from_le_bytes(hash.as_bytes()[0..8].try_into().unwrap());
         (score, i)
     }).collect();
-    scored.sort_by(|a, b| b.0.cmp(&a.0));
+    scored.sort_by_key(|&x| std::cmp::Reverse(x.0));
     scored.into_iter().take(count).map(|(_, i)| nodes[i].clone()).collect()
 }
 
@@ -166,7 +169,7 @@ async fn replicate_batch(
 
     let api_secret = config.get_api_key().map_err(|e| {
         log::error!("Replication worker: failed to retrieve API key: {}", e);
-        std::io::Error::new(std::io::ErrorKind::Other, e)
+        std::io::Error::other(e)
     })?.to_string();
 
     let successes = std::sync::atomic::AtomicUsize::new(0);
@@ -215,6 +218,7 @@ async fn replicate_batch(
     Ok(successes.load(std::sync::atomic::Ordering::Relaxed) > 0)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn replicate_single_file(
     pool: &Pool,
     p2p_service: &Arc<P2PService>,
@@ -269,7 +273,7 @@ async fn replicate_single_file(
 
     // 3. Upload Shards in Parallel
     // Results: (shard_index, node_id, addr_str, shard_hash)
-    let shard_results: Arc<Mutex<Vec<(usize, String, String, String)>>> = Arc::new(Mutex::new(Vec::new()));
+    let shard_results: ShardUploadResults = Arc::new(Mutex::new(Vec::new()));
     let mut set = tokio::task::JoinSet::new();
 
     for (idx, shard_data) in shards.into_iter().enumerate() {

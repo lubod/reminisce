@@ -64,6 +64,12 @@ impl RateLimiter {
     }
 }
 
+impl Default for RateLimiter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<S, B> Transform<S, ServiceRequest> for RateLimiter
 where
     S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = Error> + 'static,

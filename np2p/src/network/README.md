@@ -7,6 +7,8 @@ Manages QUIC transport connections, peer discovery on local networks, coordinato
 - **Message Framing**: `[4-byte Big-Endian Length Header] + [Bincode-serialized Payload]`.
 - **Payload Cap**: Max message payload size is capped at 20 MB (`MAX_FRAME_SIZE`) to prevent memory exhaustion from malformed streams.
 - **Transport**: Quinn (QUIC over UDP). TLS certificates are dynamically derived from node Ed25519 identity keys.
+- **Shard lifecycle**: `StoreShard*` (upload), `RetrieveShard*` (download), and `DeleteShard*` (retention pruning). New `Message` variants MUST be appended at the end of the enum — bincode encodes the variant index, so inserting/reordering breaks wire compatibility with existing peers.
+- **Pinned objects**: `StorePinnedObject` / `GetPinnedObject` provide a name-addressed, overwritable store for small critical metadata (e.g. the DB-backup restore manifest), token-authed over `blake3(name)`. This lets the restore map live on the mesh and survive a home-server disk loss.
 
 ## Discovery & Routing Topology
 ```

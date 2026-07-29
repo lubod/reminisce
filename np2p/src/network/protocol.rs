@@ -73,6 +73,19 @@ pub enum Message {
     StoreShardChunk { data: Vec<u8> },
     StoreShardStreamFinal { shard_hash: [u8; 32] },
     StoreShardStreamResponse { success: bool },
+
+    /// Request to delete a shard (e.g. retention pruning of old DB snapshots).
+    /// Appended last to preserve bincode wire indices of all earlier variants.
+    DeleteShardRequest { shard_hash: [u8; 32], token: ShardToken },
+    DeleteShardResponse { shard_hash: [u8; 32], success: bool },
+
+    /// Name-addressed, overwritable object store for small critical metadata
+    /// (e.g. the DB-backup restore manifest) so it survives a home-server disk loss.
+    /// Token is created over blake3(name). Appended last for wire compatibility.
+    StorePinnedObject { name: String, data: Vec<u8>, token: ShardToken },
+    StorePinnedResponse { success: bool },
+    GetPinnedObject { name: String, token: ShardToken },
+    PinnedObjectResponse { data: Option<Vec<u8>> },
 }
 
 pub struct Protocol;

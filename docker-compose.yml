@@ -42,6 +42,7 @@ services:
     container_name: reminisce-ai-server
     expose:
       - "8081"
+      - "50051"
     volumes:
       - ai_model_cache:/root/.cache/huggingface
       - face_model_cache:/root/.insightface

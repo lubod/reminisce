@@ -31,7 +31,7 @@ async fn test_user_isolation_workflow() {
     // 1. Create User A via setup (first admin), then User B via admin create_user
     let req = test::TestRequest::post()
         .uri("/auth/setup")
-        .set_json(&serde_json::json!({"username": "user_a", "password": "password123"}))
+        .set_json(serde_json::json!({"username": "user_a", "password": "password123"}))
         .to_request();
     let resp = test::call_service(&app, req).await;
     assert_eq!(resp.status(), actix_web::http::StatusCode::CREATED);
@@ -49,7 +49,7 @@ async fn test_user_isolation_workflow() {
     let req = test::TestRequest::post()
         .uri("/users")
         .insert_header(("Authorization", format!("Bearer {}", token_a)))
-        .set_json(&serde_json::json!({"username": "user_b", "password": "password123", "role": "user"}))
+        .set_json(serde_json::json!({"username": "user_b", "password": "password123", "role": "user"}))
         .to_request();
     let resp = test::call_service(&app, req).await;
     assert_eq!(resp.status(), actix_web::http::StatusCode::CREATED);

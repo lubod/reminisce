@@ -189,6 +189,7 @@ type ChannelMap = Arc<RwLock<HashMap<String, quinn::Connection>>>;
 // ── Per-stream handler ────────────────────────────────────────────────────────
 
 /// Handle one QUIC stream. `msg` is already read by the caller.
+#[allow(clippy::too_many_arguments)]
 async fn handle_stream(
     msg: Message,
     mut send: quinn::SendStream,
@@ -649,19 +650,14 @@ async fn main() -> anyhow::Result<()> {
                         data_dir_owned.clone(),
                     ));
 
-                    loop {
-                        match conn.accept_bi().await {
-                            Ok((send, mut recv)) => {
-                                let Ok(msg) = Protocol::receive(&mut recv).await else { continue };
-                                let peers = peers.clone();
-                                let node = node_for_task.clone();
-                                let channels = channels.clone();
-                                let conn_clone = conn.clone();
-                                let data_dir = data_dir_owned.clone();
-                                tokio::spawn(handle_stream(msg, send, recv, conn_clone, remote_ip, peers, ttl, node, channels, data_dir));
-                            }
-                            Err(_) => break,
-                        }
+                    while let Ok((send, mut recv)) = conn.accept_bi().await {
+                        let Ok(msg) = Protocol::receive(&mut recv).await else { continue };
+                        let peers = peers.clone();
+                        let node = node_for_task.clone();
+                        let channels = channels.clone();
+                        let conn_clone = conn.clone();
+                        let data_dir = data_dir_owned.clone();
+                        tokio::spawn(handle_stream(msg, send, recv, conn_clone, remote_ip, peers, ttl, node, channels, data_dir));
                     }
                 }
             });

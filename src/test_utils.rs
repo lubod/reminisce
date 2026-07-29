@@ -40,14 +40,14 @@ impl TestDatabase {
             .map_err(|e| format!("Failed to parse database URL: {}", e))?;
 
         let mut cfg = Config::new();
-        cfg.host = admin_config.get_hosts().get(0).map(|h| {
+        cfg.host = admin_config.get_hosts().first().map(|h| {
             match h {
                 tokio_postgres::config::Host::Tcp(s) => s.clone(),
                 #[cfg(unix)]
                 tokio_postgres::config::Host::Unix(p) => p.to_string_lossy().to_string(),
             }
         });
-        cfg.port = admin_config.get_ports().get(0).copied().map(|p| p as u16);
+        cfg.port = admin_config.get_ports().first().copied();
         cfg.user = admin_config.get_user().map(|s| s.to_string());
         cfg.password = admin_config.get_password().map(|p| String::from_utf8_lossy(p).to_string());
         cfg.dbname = Some("postgres".to_string());
@@ -137,14 +137,14 @@ impl Drop for TestDatabase {
                 // Parse admin config
                 if let Ok(admin_config) = admin_url.parse::<tokio_postgres::Config>() {
                     let mut cfg = Config::new();
-                    cfg.host = admin_config.get_hosts().get(0).map(|h| {
+                    cfg.host = admin_config.get_hosts().first().map(|h| {
                         match h {
                             tokio_postgres::config::Host::Tcp(s) => s.clone(),
                             #[cfg(unix)]
                             tokio_postgres::config::Host::Unix(p) => p.to_string_lossy().to_string(),
                         }
                     });
-                    cfg.port = admin_config.get_ports().get(0).copied().map(|p| p as u16);
+                    cfg.port = admin_config.get_ports().first().copied();
                     cfg.user = admin_config.get_user().map(|s| s.to_string());
                     cfg.password = admin_config.get_password().map(|p| String::from_utf8_lossy(p).to_string());
                     cfg.dbname = Some("postgres".to_string());

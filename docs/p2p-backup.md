@@ -102,6 +102,56 @@ CLI: `cargo run --bin p2p_restore -- --hash <hex> --output /path/`
 
 The restore logic (`src/p2p_restore.rs`) fetches all 5 shards concurrently, tolerates up to 2 missing, then reconstructs via `StorageEngine::restore_from_backup`.
 
+## Database Snapshots (`db_backup_worker.rs`)
+
+In addition to media files, the server periodically backs up the PostgreSQL database itself through the same P2P pipeline.
+
+**Periodic trigger** — every 24 h (configurable via `workers.db_backup_interval_secs`) the worker runs `pg_dump -Fc` to a temp file. If the dump's BLAKE3 hash matches an existing snapshot, it's skipped (no-op when the DB hasn't changed).
+
+**Pipeline** — the dump is treated as a high-priority system object: a fresh random ChaCha20-Poly1305 key encrypts it, it's split into 3/5 Reed-Solomon shards (segmented streaming for dumps > 256 MB), and the shards are uploaded to rendezvous-selected nodes. The per-snapshot key is stored encrypted-with-master-key in `db_backups` and appended to the on-disk `p2p_keys.escrow` file (outside the DB, so it survives a database loss).
+
+**Retention** — the `db_backups` table is a rolling manifest. After each snapshot, snapshots older than the newest `workers.db_backup_retention_count` (default 7) are pruned: each of their shards is deleted from the remote node via a `DeleteShardRequest` protocol message, and the manifest rows are removed (cascading to `db_backup_shards`).
+
+Shard placement is tracked in `db_backup_shards` (separate from media `p2p_shards`) so the audit worker's orphan cleanup never touches DB-snapshot shards.
+
+**On-disk manifest** — because `db_backups`/`db_backup_shards` live inside the database being backed up, a full DB loss would also wipe the restore map. To survive that, every snapshot also writes a self-contained JSON manifest to `<p2p_data_dir>/db_manifests/<backup_hash>.json` holding shard placement, node addresses, segment layout, and the (master-key-encrypted) key. Retention pruning deletes the manifest file too.
+
+### True full-disk-loss protection
+
+The on-disk manifest and `node.key` still live on the home server, so losing the *entire disk* would remove them. Two mechanisms close that gap so recovery needs only the **master secret (`api_secret_key`) + the P2P nodes**:
+
+1. **Deterministic P2P identity** — set `p2p_deterministic_identity: true`. The node identity is then derived from `api_secret_key` (`NodeIdentity::from_secret`) instead of a random `node.key`, so the node_id — and the ability to authenticate to storage nodes — is recoverable from the master secret alone. **Note:** enabling changes the node_id, so storage nodes must (re)pin it as their authorized owner; use for new setups or after re-registering nodes.
+2. **Mesh-published manifest** — after each snapshot, the worker encrypts the restore manifest with an api_secret-derived key and stores it on *every* reachable node as a pinned, name-addressed object (`reminisce:db-manifest:latest` and `reminisce:db-manifest:<backup_hash>`). The restore map thus lives on the mesh, not just on disk.
+
+With both enabled, a brand-new machine with only `config.yaml` (api_secret + coordinator/LAN) can rebuild everything: derive the identity, fetch the manifest from any node, restore the DB (recovering media keys), then restore media.
+
+## Disaster Recovery (`src/bin/disaster_recovery.rs`)
+
+A CLI for restoring from the P2P mesh across data-loss scenarios. It authenticates to storage nodes with the home server's P2P identity (`<p2p_data_dir>/node.key`, or derived from `api_secret_key` when `p2p_deterministic_identity` is set and `node.key` is absent) — required for the nodes to accept `RetrieveShard` tokens.
+
+```bash
+# List available DB snapshots (from on-disk manifests)
+disaster_recovery list --config config.yaml
+
+# Full DB loss: reconstruct + decrypt the latest snapshot, then pg_restore
+disaster_recovery db --config config.yaml --pg-restore --target-db-url postgres://user:pass@host/reminisce_db --clean
+
+# TRUE full-disk loss (no node.key, no manifests): pull the manifest from the mesh first
+disaster_recovery db --config config.yaml --from-mesh --pg-restore --target-db-url <url> --clean
+
+# Only media lost (DB intact): restore every file missing on disk
+disaster_recovery media --config config.yaml --all-missing
+
+# Restore a single file, or the whole library
+disaster_recovery media --config config.yaml --hash <hex>
+disaster_recovery media --config config.yaml --all
+
+# Full recovery: DB snapshot first, then missing media
+disaster_recovery full --config config.yaml --pg-restore --target-db-url <url>
+```
+
+`--from-mesh` discovers storage nodes via LAN broadcast (and `--node node_id=host:port`, repeatable) and retrieves the manifest from the mesh when no local copy exists. For WAN recovery (nodes not on the LAN), pass `--node` to reach at least one node directly.
+
 ## Coordinator (WAN Connectivity)
 
 When Android is not on the home LAN, it connects to the home server via a reverse QUIC tunnel through the coordinator (a small VPS process). The coordinator also maintains a peer registry so storage nodes can find each other across NATs.

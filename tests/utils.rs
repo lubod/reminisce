@@ -5,6 +5,8 @@ use deadpool_postgres::Pool;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 
+// Used by some integration test crates but not all — appears dead in crates that don't call it.
+#[allow(dead_code)]
 pub fn create_test_config() -> config::Config {
     config::Config {
         database_url: Some("".to_string()),
@@ -40,6 +42,7 @@ pub fn create_test_config() -> config::Config {
         main_server_url: None,
         port: 8080,
         p2p_data_dir: "data/p2p".to_string(),
+        p2p_deterministic_identity: false,
         p2p_peers: vec![],
         p2p_discovery_port: 5066,
         p2p_coordinator_addr: None,

@@ -4,26 +4,50 @@ pub mod proto {
 
 use proto::ai_service_client::AiServiceClient;
 use proto::*;
+use std::sync::Arc;
+use tokio::sync::OnceCell;
 use tonic::transport::Channel;
 use tonic::Request;
+
+const MAX_MESSAGE_SIZE: usize = 64 * 1024 * 1024;
 
 #[derive(Clone)]
 pub struct AiClient {
     grpc_url: String,
     api_key: String,
+    channel: Arc<OnceCell<Channel>>,
 }
 
 impl AiClient {
     pub fn new(grpc_url: String, api_key: String) -> Self {
-        Self { grpc_url, api_key }
+        if api_key.is_empty() {
+            log::warn!("AiClient created with an empty API key — gRPC calls will be rejected if the AI service requires authentication");
+        }
+        Self {
+            grpc_url,
+            api_key,
+            channel: Arc::new(OnceCell::new()),
+        }
     }
 
-    async fn connect(&self) -> Result<AiServiceClient<Channel>, tonic::transport::Error> {
-        let channel = Channel::from_shared(self.grpc_url.clone())
-            .expect("Invalid gRPC URL")
-            .connect()
-            .await?;
-        Ok(AiServiceClient::new(channel))
+    async fn channel(&self) -> Result<Channel, String> {
+        let channel = self
+            .channel
+            .get_or_try_init(|| async {
+                let endpoint = Channel::from_shared(self.grpc_url.clone())
+                    .map_err(|e| format!("invalid gRPC URL '{}': {}", self.grpc_url, e))?;
+                endpoint.connect().await.map_err(|e| format!("gRPC connect failed: {}", e))
+            })
+            .await
+            .map_err(|e| e.clone())?;
+        Ok(channel.clone())
+    }
+
+    async fn client(&self) -> Result<AiServiceClient<Channel>, String> {
+        let channel = self.channel().await?;
+        Ok(AiServiceClient::new(channel)
+            .max_decoding_message_size(MAX_MESSAGE_SIZE)
+            .max_encoding_message_size(MAX_MESSAGE_SIZE))
     }
 
     fn make_request<T>(&self, message: T) -> Request<T> {
@@ -35,7 +59,7 @@ impl AiClient {
     }
 
     pub async fn embed_image(&self, image_data: Vec<u8>) -> Result<Vec<f32>, String> {
-        let mut client = self.connect().await.map_err(|e| format!("gRPC connection failed: {}", e))?;
+        let mut client = self.client().await?;
         let request = self.make_request(EmbedImageRequest { image_data });
 
         let response = client.embed_image(request).await.map_err(|e| format!("EmbedImage gRPC call failed: {}", e))?;
@@ -43,7 +67,7 @@ impl AiClient {
     }
 
     pub async fn embed_text(&self, text: String) -> Result<Vec<f32>, String> {
-        let mut client = self.connect().await.map_err(|e| format!("gRPC connection failed: {}", e))?;
+        let mut client = self.client().await?;
         let request = self.make_request(EmbedTextRequest { text });
 
         let response = client.embed_text(request).await.map_err(|e| format!("EmbedText gRPC call failed: {}", e))?;
@@ -51,7 +75,7 @@ impl AiClient {
     }
 
     pub async fn describe_image(&self, image_data: Vec<u8>, use_qwen: bool) -> Result<(String, String), String> {
-        let mut client = self.connect().await.map_err(|e| format!("gRPC connection failed: {}", e))?;
+        let mut client = self.client().await?;
         let request = self.make_request(DescribeImageRequest { image_data, use_qwen });
 
         let response = client.describe_image(request).await.map_err(|e| format!("DescribeImage gRPC call failed: {}", e))?;
@@ -60,7 +84,7 @@ impl AiClient {
     }
 
     pub async fn detect_faces(&self, image_data: Vec<u8>) -> Result<Vec<FaceBoundingBox>, String> {
-        let mut client = self.connect().await.map_err(|e| format!("gRPC connection failed: {}", e))?;
+        let mut client = self.client().await?;
         let request = self.make_request(DetectFacesRequest { image_data });
 
         let response = client.detect_faces(request).await.map_err(|e| format!("DetectFaces gRPC call failed: {}", e))?;
@@ -68,7 +92,7 @@ impl AiClient {
     }
 
     pub async fn health_check(&self) -> Result<HealthCheckResponse, String> {
-        let mut client = self.connect().await.map_err(|e| format!("gRPC connection failed: {}", e))?;
+        let mut client = self.client().await?;
         let request = self.make_request(HealthCheckRequest {});
 
         let response = client.health_check(request).await.map_err(|e| format!("HealthCheck gRPC call failed: {}", e))?;

@@ -1,7 +1,7 @@
 use actix_web::{post, get, web, HttpResponse, HttpRequest, Error};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::collections::HashMap;
 use tokio::fs;
@@ -14,6 +14,9 @@ use crate::utils;
 use crate::services::ingest;
 
 pub type ImportJobStore = Mutex<HashMap<String, ImportJob>>;
+
+// (path, blake3_hash, file_name, is_image, file_mtime)
+type PendingFile = (PathBuf, String, String, bool, Option<chrono::DateTime<Utc>>);
 
 #[derive(Clone, Serialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
@@ -166,6 +169,7 @@ pub async fn import_directory(
     Ok(HttpResponse::Accepted().json(StartImportResponse { job_id }))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_import(
     root_path: PathBuf,
     recursive: bool,
@@ -182,16 +186,14 @@ async fn run_import(
     let mut stack = vec![root_path.clone()];
 
     while let Some(path) = stack.pop() {
-        if path.is_dir() {
-            if recursive || path == root_path {
-                let mut entries = match fs::read_dir(&path).await {
-                    Ok(e) => e,
-                    Err(e) => { warn!("Failed to read dir {:?}: {}", path, e); continue; }
-                };
-                while let Ok(Some(entry)) = entries.next_entry().await {
-                    let p = entry.path();
-                    if p.is_dir() { stack.push(p); } else { files_to_process.push(p); }
-                }
+        if path.is_dir() && (recursive || path == root_path) {
+            let mut entries = match fs::read_dir(&path).await {
+                Ok(e) => e,
+                Err(e) => { warn!("Failed to read dir {:?}: {}", path, e); continue; }
+            };
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                let p = entry.path();
+                if p.is_dir() { stack.push(p); } else { files_to_process.push(p); }
             }
         }
     }
@@ -207,7 +209,7 @@ async fn run_import(
     let mut label_cache: std::collections::HashMap<String, i32> = std::collections::HashMap::new();
 
     for chunk in files_to_process.chunks(100) {
-        let mut chunk_hashes: Vec<(PathBuf, String, String, bool, Option<chrono::DateTime<Utc>>)> = Vec::new();
+        let mut chunk_hashes: Vec<PendingFile> = Vec::new();
 
         for path in chunk {
             let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
@@ -215,7 +217,7 @@ async fn run_import(
             let is_video = ["mp4", "mov", "avi", "mkv"].contains(&extension.as_str());
             if !is_image && !is_video { continue; }
 
-            let hash = match crate::media_utils::hash_file_blake3(&path).await {
+            let hash = match crate::media_utils::hash_file_blake3(path).await {
                 Ok(h) => h,
                 Err(e) => {
                     errors.push(format!("Failed to hash {:?}: {}", path, e));
@@ -224,7 +226,7 @@ async fn run_import(
                 }
             };
             let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
-            let file_mtime: Option<chrono::DateTime<Utc>> = std::fs::metadata(&path)
+            let file_mtime: Option<chrono::DateTime<Utc>> = std::fs::metadata(path)
                 .ok()
                 .and_then(|m| m.modified().ok())
                 .map(chrono::DateTime::from);
@@ -313,7 +315,7 @@ async fn run_import(
 /// - "subdir"     → [immediate parent dir name]               e.g. "beach"
 /// - "path"       → [relative path root→parent as one label]  e.g. "2023/vacation/beach"
 /// - "components" → [one label per path component]            e.g. ["2023","vacation","beach"]
-fn labels_for_file(path: &PathBuf, root_path: &PathBuf, label_mode: &str) -> Vec<String> {
+fn labels_for_file(path: &Path, root_path: &Path, label_mode: &str) -> Vec<String> {
     match label_mode {
         "root" => root_path
             .file_name()

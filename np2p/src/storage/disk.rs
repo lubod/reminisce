@@ -137,6 +137,34 @@ impl DiskStorage {
         }
         Ok(())
     }
+
+    /// Path for a name-addressed pinned object, keyed by blake3(name).
+    fn pinned_path(&self, name: &str) -> PathBuf {
+        let hash_hex = hex::encode(blake3::hash(name.as_bytes()).as_bytes());
+        self.base_path.join("pinned").join(hash_hex)
+    }
+
+    /// Stores a pinned object by name (overwrites any existing value).
+    /// Used for small critical metadata that must survive a home-server disk loss.
+    pub async fn store_pinned(&self, name: &str, data: &[u8]) -> Result<()> {
+        let path = self.pinned_path(name);
+        if let Some(parent) = path.parent() {
+            if !parent.exists() {
+                fs::create_dir_all(parent).await?;
+            }
+        }
+        fs::write(path, data).await?;
+        Ok(())
+    }
+
+    /// Retrieves a pinned object by name.
+    pub async fn get_pinned(&self, name: &str) -> Result<Option<Vec<u8>>> {
+        let path = self.pinned_path(name);
+        if !path.exists() {
+            return Ok(None);
+        }
+        Ok(Some(fs::read(path).await?))
+    }
 }
 
 #[cfg(test)]
@@ -173,5 +201,27 @@ mod tests {
 
         let result = storage.get(hash).await.unwrap();
         assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_pinned_object_roundtrip_and_overwrite() {
+        let tmp = tempdir().unwrap();
+        let storage = DiskStorage::new(tmp.path()).await.unwrap();
+
+        // Missing initially.
+        assert!(storage.get_pinned("manifest:latest").await.unwrap().is_none());
+
+        // Store + retrieve.
+        storage.store_pinned("manifest:latest", b"v1").await.unwrap();
+        assert_eq!(storage.get_pinned("manifest:latest").await.unwrap().unwrap(), b"v1");
+
+        // Overwrite (the 'latest' pointer moves forward).
+        storage.store_pinned("manifest:latest", b"v2").await.unwrap();
+        assert_eq!(storage.get_pinned("manifest:latest").await.unwrap().unwrap(), b"v2");
+
+        // Different names are independent.
+        storage.store_pinned("manifest:abc", b"other").await.unwrap();
+        assert_eq!(storage.get_pinned("manifest:abc").await.unwrap().unwrap(), b"other");
+        assert_eq!(storage.get_pinned("manifest:latest").await.unwrap().unwrap(), b"v2");
     }
 }

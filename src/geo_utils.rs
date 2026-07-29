@@ -38,9 +38,7 @@ fn parse_gps_coordinate(coord_str: &str, reference: &str) -> Option<f64> {
         .replace("deg", "")
         .replace("min", "")
         .replace("sec", "")
-        .replace('°', "")
-        .replace('\'', "")
-        .replace('"', "");
+        .replace(['°', '\'', '"'], "");
 
     let parts: Vec<f64> = cleaned
         .split_whitespace()
@@ -86,10 +84,8 @@ pub async fn reverse_geocode(
 ) -> Option<String> {
     if latitude.is_nan()
         || longitude.is_nan()
-        || latitude < -90.0
-        || latitude > 90.0
-        || longitude < -180.0
-        || longitude > 180.0
+        || !(-90.0..=90.0).contains(&latitude)
+        || !(-180.0..=180.0).contains(&longitude)
     {
         warn!(
             "Invalid coordinates for reverse geocoding: lat={}, lon={}",

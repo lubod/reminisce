@@ -87,6 +87,14 @@ pub struct Config {
     #[serde(default = "default_p2p_data_dir")]
     pub p2p_data_dir: String,
 
+    /// Derive the P2P node identity deterministically from `api_secret_key` instead
+    /// of a random `node.key` file. The node_id then becomes recoverable from the
+    /// master secret alone — a prerequisite for true full-disk-loss recovery.
+    /// NOTE: enabling changes the node_id; storage nodes must (re)pin this node_id
+    /// as their authorized owner. Intended for new setups or after re-registering nodes.
+    #[serde(default)]
+    pub p2p_deterministic_identity: bool,
+
     // P2P Storage — dynamic discovery
     /// UDP port to listen on for LAN broadcast announcements from storage nodes.
     #[serde(default = "default_p2p_discovery_port")]
@@ -152,6 +160,13 @@ pub struct WorkerConfig {
     pub verification_min_secs: u64,
     #[serde(default = "default_verification_max")]
     pub verification_max_secs: u64,
+
+    #[serde(default = "default_db_backup_interval")]
+    pub db_backup_interval_secs: u64,
+    #[serde(default = "default_db_backup_retention")]
+    pub db_backup_retention_count: i64,
+    #[serde(default = "default_db_backup_enabled")]
+    pub db_backup_enabled: bool,
 }
 
 impl Default for WorkerConfig {
@@ -169,6 +184,9 @@ impl Default for WorkerConfig {
             rebalance_max_secs: default_rebalance_max(),
             verification_min_secs: default_verification_min(),
             verification_max_secs: default_verification_max(),
+            db_backup_interval_secs: default_db_backup_interval(),
+            db_backup_retention_count: default_db_backup_retention(),
+            db_backup_enabled: default_db_backup_enabled(),
         }
     }
 }
@@ -190,6 +208,10 @@ fn default_rebalance_max() -> u64 { 3600 }
 
 fn default_verification_min() -> u64 { 1 }
 fn default_verification_max() -> u64 { 10 }
+
+fn default_db_backup_interval() -> u64 { 86400 } // 24 hours
+fn default_db_backup_retention() -> i64 { 7 } // keep last 7 snapshots
+fn default_db_backup_enabled() -> bool { true }
 
 fn default_p2p_data_shards() -> usize { 3 }
 fn default_p2p_parity_shards() -> usize { 2 }
@@ -256,7 +278,7 @@ impl Config {
         let mut config: Config = serde_yaml::from_str(&contents)?;
 
         // Validate API key at startup
-        config.get_api_key().map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        config.get_api_key().map_err(std::io::Error::other)?;
 
         // Initialize AI processing settings with defaults
         config.enable_ai_descriptions = Arc::new(AtomicBool::new(true));

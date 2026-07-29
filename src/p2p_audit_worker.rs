@@ -79,7 +79,7 @@ async fn perform_audit(
         let node_id: String = row.get(3);
         let expected_shard_hash: String = row.get(4);
 
-        let addr = match lookup_node_addr(&pool, p2p_service, &node_id).await {
+        let addr = match lookup_node_addr(pool, p2p_service, &node_id).await {
             Some(a) => a,
             None => {
                 warn!("Cannot audit shard: unknown addr for node {}", node_id);

@@ -89,10 +89,10 @@ pub fn calculate_worker_concurrency(load_average: f64, gpu_load: u32, cpu_count:
     let available = (base * load_multiplier).max(1.0);
 
     WorkerConcurrencyLimits {
-        verification: ((available * 1.5).ceil() as usize).min(16).max(2),
-        embedding: ((available * ai_multiplier).ceil() as usize).min(10).max(1),
-        face_detection: ((available * 0.75 * ai_multiplier).ceil() as usize).min(8).max(1),
-        description: ((available * 0.25 * ai_multiplier).ceil().max(1.0) as usize).min(4).max(1),
+        verification: ((available * 1.5).ceil() as usize).clamp(2, 16),
+        embedding: ((available * ai_multiplier).ceil() as usize).clamp(1, 10),
+        face_detection: ((available * 0.75 * ai_multiplier).ceil() as usize).clamp(1, 8),
+        description: ((available * 0.25 * ai_multiplier).ceil().max(1.0) as usize).clamp(1, 4),
         gpu_overloaded,
     }
 }
@@ -113,7 +113,7 @@ pub fn calculate_parallel_batch_size(concurrency: usize, load_average: f64, cpu_
         5
     };
 
-    ((concurrency * multiplier) as i64).max(3).min(50)
+    ((concurrency * multiplier) as i64).clamp(3, 50)
 }
 
 /// Generic helper for adaptive worker loops with exponential backoff.

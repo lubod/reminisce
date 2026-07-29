@@ -12,13 +12,13 @@
 ┌──────────────────────────────────────────────────────────────────────────────────┐
 │                         BACKEND CORE (`reminisce` - Rust)                        │
 │  Actix-web HTTP REST API   •   OpenAPI / Swagger   •   Multi-Tenancy Claims      │
-│  6 Background Tokio Workers (AI, Replication, Audit, Rebalance, Dupes, Verify)   │
+│  7 Background Tokio Workers (AI, Replication, Audit, Rebalance, Dupes, Verify, DB Backup)  │
 └──────────────┬─────────────────────────┬─────────────────────────┬───────────────┘
                │                         │                         │
                ▼                         ▼                         ▼
 ┌──────────────────────────┐ ┌──────────────────────┐ ┌──────────────────────────┐
 │  DATABASE & METADATA     │ │  AI INFERENCE ENGINE │ │   P2P STORAGE MESH       │
-│  PostgreSQL 16           │ │  Python / Flask      │ │   `np2p` Nodes (Raspberry│
+│  PostgreSQL 16           │ │  Python (Flask+gRPC) │ │   `np2p` Nodes (Raspberry│
 │  ├── pgvector (Embeddings│ │  ├── SigLIP2 (Vector)│ │    Pi / Dedicated Disks) │
 │  └── PostGIS (Geocoding) │ │  ├── SmolVLM (Desc)  │ │   ├── 3/5 Reed-Solomon   │
 │                          │ │  └── InsightFace     │ │   └── ChaCha20-Poly1305  │
@@ -38,7 +38,7 @@
 | `reminisce` | `/` | REST API, background worker orchestration, multi-tenancy, dynamic query building |
 | `np2p` | `np2p/` | P2P storage engine: QUIC transport, ChaCha20-Poly1305 encryption, 3/5 Reed-Solomon erasure coding, UDP LAN discovery |
 | `coordinator` | `coordinator/` | VPS-hosted peer signaling registry + QUIC/TCP reverse tunnel relay for WAN traversal |
-| `ai-service` | `ai/` | Python/Flask microservice for SigLIP2 multi-modal vector embeddings, SmolVLM/Qwen visual captions, and InsightFace detection |
+| `ai-service` | `ai/` | Python sidecar serving two interfaces on shared models: Flask HTTP `:8081` (health/enhance/quality/orientation) and gRPC `:50051` (SigLIP2 embeddings, SmolVLM/Qwen captions, InsightFace detection) |
 
 ---
 
@@ -79,12 +79,13 @@ Workers run an adaptive loop with exponential backoff (`run_worker_loop`):
 
 | Worker | File | Responsibility & Pipeline |
 |--------|------|---------------------------|
-| **AI Worker** | `ai_worker.rs` | Fetches unindexed media, resizes via CPU thread pool (`web::block`), calls AI service (`:8081`), and saves SigLIP2 embeddings, SmolVLM descriptions, and InsightFace clusters. |
+| **AI Worker** | `ai_worker.rs` | Fetches unindexed media (images + video keyframes), resizes via CPU thread pool (`web::block`), calls the AI service over gRPC (`:50051`), and saves SigLIP2 embeddings, SmolVLM descriptions, and InsightFace clusters. |
 | **Verification Worker** | `verification_worker.rs` | Computes BLAKE3 checksums of local files on disk; flags `verification_status` to trigger restoration if files are corrupted or missing. |
 | **Replication Worker** | `media_replication_worker.rs` | Uses Rendezvous Hashing to select top 5 storage nodes for unsynced files, encrypts payload (ChaCha20-Poly1305), encodes into 3/5 Reed-Solomon shards, and streams to nodes over QUIC. |
 | **Audit Worker** | `p2p_audit_worker.rs` | Verifies shard health across storage nodes; if available shards drop below 5 (but $\ge 3$), downloads surviving shards, reconstructs the missing shards, and pushes them to new storage nodes. |
 | **Shard Rebalance Worker** | `shard_rebalance_worker.rs` | Re-evaluates Rendezvous hash rankings when nodes join or leave the mesh and migrates shards to optimal nodes. |
 | **Duplicates Worker** | `duplicate_worker.rs` | Computes cosine distance matrices on image embeddings via `pgvector` (`1 - (embedding <=> target)`) to group near-duplicate photo candidate pairs. |
+| **DB Backup Worker** | `db_backup_worker.rs` | On a fixed interval (default 24h) runs `pg_dump -Fc`, encrypts + erasure-codes the dump into 3/5 shards, and pushes them to P2P nodes. Keeps the last N snapshots in a `db_backups` manifest and prunes older ones (deletes remote shards via `DeleteShardRequest`). |
 
 ---
 
@@ -116,10 +117,16 @@ Raw Media Stream ──▶ ChaCha20-Poly1305 Encrypt ──▶ Reed-Solomon (3 D
 
 ## 3. AI & Multi-Modal Vector Search Architecture
 
+### Transport: gRPC + HTTP
+The backend talks to the AI service over **gRPC (`:50051`)** for the hot inference path (image/text embeddings, descriptions, face detection) using binary protobuf — see `proto/ai_service.proto` and the Rust client `src/ai_client.rs` (a shared, lazily-connected `tonic` `Channel`). The **Flask HTTP server (`:8081`)** remains for `/health`, `/enhance`, `/quality`, and `/orientation`. Both interfaces are authenticated with the same API key (`x-api-key` gRPC metadata / `X-API-Key` or Bearer HTTP header).
+
 ### Model Inventory
 - **SigLIP 2** (`google/siglip2-so400m-patch14-384`): Generates 1152-dimensional multi-modal vector embeddings for image-to-text and image-to-image semantic search.
 - **SmolVLM-500M & Qwen2.5-VL-3B**: Generates visual scene descriptions (captions). Visual tokens are capped at 256 (`max_pixels=256*28*28`) for fast processing.
 - **InsightFace** (`buffalo_l`): Extracts bounding boxes `[x, y, w, h]` and 512-dimensional face recognition vectors on CPU.
+
+### Video Semantic Search
+The AI worker extracts keyframes from each video with ffmpeg (every ~5s, capped), embeds each keyframe via `EmbedImage`, stores per-keyframe vectors in `video_keyframes` (with `timestamp_secs`), and writes the normalized centroid into `videos.embedding`. Semantic search in `embedding.rs` then runs per-branch KNN over both `images` and `videos` and merges the results.
 
 ### `pgvector` Database Indexing (`db/init.sql`)
 - **Image Embeddings**: Stored in `images.embedding vector(1152)` indexed using HNSW:

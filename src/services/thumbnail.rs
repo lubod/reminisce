@@ -301,7 +301,7 @@ pub async fn generate_thumbnail_for_video(
     let start_time = Instant::now();
 
     let result = tokio::process::Command::new("ffmpeg")
-        .args(&[
+        .args([
             "-i", video_path.to_str().ok_or("Invalid video path")?,
             "-ss", "00:00:01",           // Seek to 1 second
             "-vframes", "1",              // Extract 1 frame
@@ -630,7 +630,7 @@ pub async fn get_thumbnail(
             "message": "Thumbnail not found"
         })));
     }
-    let thumb_filename = format!("{}.thumb.jpg", &media_hash);
+    let thumb_filename = format!("{}.thumb.jpg", media_hash);
 
     // First try to find thumbnail in images directory with subdirectory structure
     let image_sub_dir_path = utils::get_subdirectory_path(config.get_images_dir(), &media_hash);
@@ -648,8 +648,8 @@ pub async fn get_thumbnail(
         Err(e) => {
             error!(
                 "Failed to read image thumbnail file. Hash: '{}', Path: {:?}, Error: {}",
-                &media_hash,
-                &image_thumb_path,
+                media_hash,
+                image_thumb_path,
                 e
             );
             return Err(
@@ -669,9 +669,9 @@ pub async fn get_thumbnail(
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             warn!(
                 "Thumbnail not found for hash: '{}'. Checked paths: {:?}, {:?})",
-                &media_hash,
-                &image_thumb_path,
-                &video_thumb_path
+                media_hash,
+                image_thumb_path,
+                video_thumb_path
             );
             // Reset has_thumbnail so the verification worker regenerates it
             let pool_clone = pool.clone();
@@ -697,8 +697,8 @@ pub async fn get_thumbnail(
         Err(e) => {
             error!(
                 "Failed to read video thumbnail file. Hash: '{}', Path: {:?}, Error: {}",
-                &media_hash,
-                &video_thumb_path,
+                media_hash,
+                video_thumb_path,
                 e
             );
             Err(actix_web::error::ErrorInternalServerError("Could not read thumbnail file."))

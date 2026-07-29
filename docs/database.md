@@ -14,7 +14,8 @@ Connection pooling via `deadpool-postgres`. Two pools: one for the main DB, one 
 |-------|---------|
 | `users` | Authentication; `role` is `admin` or `user`; `is_active` for soft-disable |
 | `images` | One row per unique hash per user; primary key is `(user_id, hash)` |
-| `videos` | Same structure as `images`; no embedding column (videos aren't embedded) |
+| `videos` | Same structure as `images`; embedding is a centroid of per-keyframe vectors |
+| `video_keyframes` | Per-keyframe 1152-dim SigLIP2 embeddings + `timestamp_secs` for timestamp-accurate video search |
 | `media_sources` | History of which device uploaded a given hash; enables cross-device dedup without duplicating media rows |
 | `starred_images` / `starred_videos` | Per-user stars; separate table to avoid write contention on media rows |
 | `faces` | Bounding boxes + 512-dim embeddings from InsightFace; FK to `images` |
@@ -23,7 +24,9 @@ Connection pooling via `deadpool-postgres`. Two pools: one for the main DB, one 
 | `image_duplicate_pairs` | Pre-computed near-duplicate pairs (hash_a < hash_b invariant); populated by `duplicate_worker` |
 | `ai_settings` | Per-user toggles for AI features (descriptions, embeddings, face detection, backup) |
 | `p2p_nodes` | Known storage nodes — Ed25519 node ID + last known address |
-| `p2p_shards` | Shard placement map — which node holds which shard for which file |
+| `p2p_shards` | Shard placement map — which node holds which shard for which media file |
+| `db_backups` | Rolling manifest of P2P-backed `pg_dump` snapshots (`backup_hash` = BLAKE3 of the dump); stores the per-snapshot encryption key (encrypted with the master key) |
+| `db_backup_shards` | Shard placement map for DB snapshots. Kept separate from `p2p_shards` so the audit worker's orphan cleanup never touches them |
 
 ## Key Columns on `images` / `videos`
 
@@ -36,7 +39,8 @@ Connection pooling via `deadpool-postgres`. Two pools: one for the main DB, one 
 | `p2p_encrypted_size` | Ciphertext size before erasure coding; needed to reconstruct segment boundaries |
 | `p2p_segment_count` | `1` for files ≤ 256 MB; `> 1` for large files split across segments |
 | `p2p_segment_enc_sizes` | Array of per-segment encrypted sizes (parallel to segment index) |
-| `embedding` | 1152-dim vector; `NULL` until AI worker processes the image |
+| `embedding` | 1152-dim vector; `NULL` until AI worker processes the image. On `videos`, the normalized centroid of its keyframe embeddings |
+| `embedding_generated_at` | Set when embedding generation finished (including permanent failures); `NULL` = pending. Present on both `images` and `videos` |
 | `verification_status` | `0` = pending, `1` = OK, `-1` = failed (hash mismatch on disk) |
 
 ## Index Strategy
@@ -57,7 +61,13 @@ CREATE INDEX idx_images_embedding_status ON images(embedding_generated_at)
 -- Replication worker: unsynced images
 CREATE INDEX idx_images_need_sync ON images(created_at)
     WHERE p2p_synced_at IS NULL;
+
+-- Video embedding backfill: unprocessed videos
+CREATE INDEX idx_videos_embedding_status ON videos(embedding_generated_at)
+    WHERE embedding_generated_at IS NULL AND deleted_at IS NULL;
 ```
+
+The embedding columns use HNSW indexes (`vector_cosine_ops`) on `images.embedding`, `videos.embedding`, and `video_keyframes.embedding` for approximate nearest-neighbour search.
 
 ## Migrations
 

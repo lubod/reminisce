@@ -1,5 +1,5 @@
-/// Database query instrumentation for performance monitoring
-/// Logs slow queries and tracks query execution times
+// Database query instrumentation for performance monitoring
+// Logs slow queries and tracks query execution times
 
 use tracing::{info, warn, instrument};
 use std::time::Instant;

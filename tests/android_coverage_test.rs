@@ -1,7 +1,6 @@
 use actix_web::{http, test, web, App};
 use reminisce::*;
 use reminisce::test_utils::setup_test_database_with_instance;
-use chrono;
 use serial_test::serial;
 use std::fs;
 use std::path::Path;
