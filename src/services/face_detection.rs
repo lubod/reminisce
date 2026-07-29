@@ -1,65 +1,28 @@
-use log::{error, info};
-use serde::{Deserialize, Serialize};
+use log::info;
 use pgvector::Vector;
 use crate::config::Config;
-
-#[derive(Serialize)]
-struct FaceDetectRequest {
-    image: String,  // base64 encoded
-}
-
-#[derive(Deserialize, Debug)]
-struct FaceDetectResponse {
-    faces: Vec<DetectedFace>,
-    count: usize,
-}
-
-#[derive(Deserialize, Debug)]
-struct DetectedFace {
-    bbox: [i32; 4],  // [x, y, width, height]
-    embedding: Vec<f32>,
-    confidence: f32,
-}
 
 /// Detect faces in an image and return bounding boxes with embeddings
 pub async fn detect_faces(
     image_data: &[u8],
     config: &Config,
 ) -> Result<Vec<(Vec<i32>, Vector, f32)>, String> {
-    info!("Requesting face detection from face service at: {}", config.face_service_url);
+    info!("Requesting face detection via gRPC at: {}", config.ai_grpc_url);
 
-    let base64_image = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, image_data);
+    let api_key = config.get_api_key().unwrap_or("").to_string();
+    let client = crate::ai_client::AiClient::new(config.ai_grpc_url.clone(), api_key);
+    let faces = client.detect_faces(image_data.to_vec()).await?;
 
-    let client = crate::utils::get_http_client();
-
-    let url = format!("{}/detect", config.face_service_url);
-    let request = FaceDetectRequest { image: base64_image };
-
-    let response = client
-        .post(&url)
-        .bearer_auth(config.get_api_key().unwrap())
-        .json(&request)
-        .send()
-        .await
-        .map_err(|e| format!("Failed to send request to face service: {}", e))?;
-
-    if !response.status().is_success() {
-        return Err(format!("Face service returned error: {}", response.status()));
-    }
-
-    let data: FaceDetectResponse = response.json().await
-        .map_err(|e| format!("Failed to parse response: {}", e))?;
-
-    info!("Detected {} faces", data.count);
+    info!("Detected {} faces via gRPC", faces.len());
 
     // Convert to internal format: (bbox, embedding, confidence)
-    let results: Vec<(Vec<i32>, Vector, f32)> = data.faces
+    let results: Vec<(Vec<i32>, Vector, f32)> = faces
         .into_iter()
         .filter(|face| face.embedding.len() == 512)  // Validate dimension (InsightFace)
         .map(|face| {
-            let bbox = face.bbox.to_vec();
+            let bbox = vec![face.x, face.y, face.width, face.height];
             let embedding = Vector::from(face.embedding);
-            (bbox, embedding, face.confidence)
+            (bbox, embedding, face.det_score)
         })
         .collect();
 

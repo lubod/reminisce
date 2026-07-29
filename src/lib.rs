@@ -19,6 +19,7 @@ pub mod media_replication_worker;
 pub mod shard_rebalance_worker;
 pub mod p2p_restore;
 pub mod ai_worker;
+pub mod ai_client;
 pub mod telemetry;
 pub mod metrics;
 

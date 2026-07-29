@@ -95,9 +95,12 @@ tracing-opentelemetry = "0.22"
 actix-web-prom = "0.6" # Prometheus middleware
 opentelemetry-prometheus = "0.14"
 prometheus = { version = "0.13", features = ["process"] }
-anyhow = "1.0.100"
-rand_chacha = "0.9"
-thiserror = "1.0"
+# gRPC
+tonic = "0.9"
+prost = "0.11"
+
+[build-dependencies]
+tonic-build = "0.9"
 
 # Optimize deps in dev builds (faster runtime, same compile time for our code)
 [profile.dev.package."*"]

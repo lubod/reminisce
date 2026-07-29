@@ -44,8 +44,11 @@ RUN mkdir -p /app/.insightface/models && \
     app = FaceAnalysis(name='buffalo_l', root='/app/.insightface'); \
     app.prepare(ctx_id=-1)" || true
 
-# Copy service file
+# Copy service files and proto schema
+COPY proto/ /app/proto/
 COPY ai_service.py .
+COPY ai_service_grpc.py .
+RUN python -m grpc_tools.protoc -I/app/proto --python_out=/app --grpc_python_out=/app /app/proto/ai_service.proto
 
 # Create a non-privileged user and group, change ownership
 RUN groupadd -g 10002 ai_user && \
@@ -55,8 +58,8 @@ RUN groupadd -g 10002 ai_user && \
 # Switch to the non-privileged user
 USER ai_user:ai_user
 
-# Expose port (single port for all services)
-EXPOSE 8081
+# Expose ports (HTTP 8081, gRPC 50051)
+EXPOSE 8081 50051
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \

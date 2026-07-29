@@ -805,6 +805,16 @@ def index():
 # or when run directly
 load_models()
 
+# Start gRPC server in background thread
+try:
+    import ai_service_grpc
+    grpc_port = int(os.environ.get("GRPC_PORT", "50051"))
+    grpc_server = ai_service_grpc.serve_grpc(port=grpc_port)
+    logger.info(f"gRPC server started on port {grpc_port}")
+except Exception as e:
+    logger.warning(f"Could not start gRPC server: {e}")
+
 if __name__ == '__main__':
-    logger.info("Starting Unified AI Service on 0.0.0.0:8081")
+    logger.info("Starting Unified AI Service on 0.0.0.0:8081 (Flask HTTP) and 0.0.0.0:50051 (gRPC)")
     app.run(host='0.0.0.0', port=8081, threaded=True)
+

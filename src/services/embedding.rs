@@ -427,75 +427,27 @@ async fn perform_semantic_search(
     Ok(results)
 }
 
-/// Get text embedding from CLIP service
+/// Get text embedding from AI gRPC service
 async fn get_text_embedding(text: &str, config: &Config) -> Result<Vector, String> {
-    use log::info;
+    info!("Requesting text embedding via gRPC at: {}", config.ai_grpc_url);
 
-    info!("Requesting text embedding from CLIP service at: {}", config.embedding_service_url);
-
-    let client = crate::utils::get_http_client();
-
-    let url = format!("{}/embed/text", config.embedding_service_url);
-
-    let response = client
-        .post(&url)
-        .bearer_auth(config.get_api_key().unwrap())
-        .json(&serde_json::json!({"text": text}))
-        .send()
-        .await
-        .map_err(|e| format!("Failed to send request to CLIP service: {}", e))?;
-
-    if !response.status().is_success() {
-        return Err(format!("CLIP service returned error: {}", response.status()));
-    }
-
-    let data: serde_json::Value = response.json().await
-        .map_err(|e| format!("Failed to parse response: {}", e))?;
-
-    let embedding_vec: Vec<f32> = data["embedding"]
-        .as_array()
-        .ok_or("No embedding in response")?
-        .iter()
-        .map(|v| v.as_f64().unwrap_or(0.0) as f32)
-        .collect();
+    let api_key = config.get_api_key().unwrap_or("").to_string();
+    let client = crate::ai_client::AiClient::new(config.ai_grpc_url.clone(), api_key);
+    let embedding_vec = client.embed_text(text.to_string()).await?;
 
     if embedding_vec.len() != 1152 {
         return Err(format!("Invalid embedding dimension: expected 1152, got {}", embedding_vec.len()));
     }
 
-    info!("Successfully received embedding from CLIP service (dimension: {})", embedding_vec.len());
-
+    info!("Successfully received text embedding via gRPC (dimension: {})", embedding_vec.len());
     Ok(Vector::from(embedding_vec))
 }
 
-/// Get image embedding from CLIP service
+/// Get image embedding from AI gRPC service
 pub async fn get_image_embedding(image_data: &[u8], config: &Config) -> Result<Vector, String> {
-    let client = crate::utils::get_http_client();
-
-    let base64_image = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, image_data);
-    let url = format!("{}/embed/image", config.embedding_service_url);
-
-    let response = client
-        .post(&url)
-        .bearer_auth(config.get_api_key().unwrap())
-        .json(&serde_json::json!({"image": base64_image}))
-        .send()
-        .await
-        .map_err(|e| format!("Failed to send request to CLIP service: {}", e))?;
-
-    if !response.status().is_success() {
-        return Err(format!("CLIP service returned error: {}", response.status()));
-    }
-
-    let data: serde_json::Value = response.json().await
-        .map_err(|e| format!("Failed to parse response: {}", e))?;
-
-    let embedding_vec: Vec<f32> = data["embedding"]
-        .as_array()
-        .ok_or("No embedding in response")?
-        .iter()
-        .map(|v| v.as_f64().unwrap_or(0.0) as f32)
-        .collect();
+    let api_key = config.get_api_key().unwrap_or("").to_string();
+    let client = crate::ai_client::AiClient::new(config.ai_grpc_url.clone(), api_key);
+    let embedding_vec = client.embed_image(image_data.to_vec()).await?;
 
     if embedding_vec.len() != 1152 {
         return Err(format!("Invalid embedding dimension: expected 1152, got {}", embedding_vec.len()));

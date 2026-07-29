@@ -23,3 +23,8 @@ insightface>=0.7.3
 
 # HTTP client (for healthcheck)
 requests>=2.31.0
+
+# gRPC framework
+grpcio>=1.60.0
+grpcio-tools>=1.60.0
+

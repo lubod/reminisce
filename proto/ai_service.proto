@@ -1,0 +1,65 @@
+syntax = "proto3";
+
+package ai_service;
+
+service AIService {
+  rpc EmbedImage (EmbedImageRequest) returns (EmbedImageResponse);
+  rpc EmbedText (EmbedTextRequest) returns (EmbedTextResponse);
+  rpc DescribeImage (DescribeImageRequest) returns (DescribeImageResponse);
+  rpc DetectFaces (DetectFacesRequest) returns (DetectFacesResponse);
+  rpc HealthCheck (HealthCheckRequest) returns (HealthCheckResponse);
+}
+
+message EmbedImageRequest {
+  bytes image_data = 1;
+}
+
+message EmbedImageResponse {
+  repeated float embedding = 1;
+}
+
+message EmbedTextRequest {
+  string text = 1;
+}
+
+message EmbedTextResponse {
+  repeated float embedding = 1;
+}
+
+message DescribeImageRequest {
+  bytes image_data = 1;
+  bool use_qwen = 2;
+}
+
+message DescribeImageResponse {
+  string description = 1;
+  string model_used = 2;
+}
+
+message FaceBoundingBox {
+  int32 x = 1;
+  int32 y = 2;
+  int32 width = 3;
+  int32 height = 4;
+  repeated float embedding = 5;
+  float det_score = 6;
+}
+
+message DetectFacesRequest {
+  bytes image_data = 1;
+}
+
+message DetectFacesResponse {
+  repeated FaceBoundingBox faces = 1;
+}
+
+message HealthCheckRequest {}
+
+message HealthCheckResponse {
+  string status = 1;
+  string device = 2;
+  bool siglip_loaded = 3;
+  bool vlm_loaded = 4;
+  bool smolvlm_loaded = 5;
+  bool face_loaded = 6;
+}

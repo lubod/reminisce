@@ -20,19 +20,8 @@ use tokio::fs::File;
 use tokio::io::AsyncReadExt;
 use tokio::sync::Semaphore;
 use tokio::time::Duration;
-use base64::{Engine as _, engine::general_purpose};
 use futures::stream::{self, StreamExt};
 use chrono::{DateTime, Utc};
-
-#[derive(Serialize)]
-struct VlmRequest {
-    image: String,
-}
-
-#[derive(Deserialize)]
-struct VlmResponse {
-    description: String,
-}
 
 #[allow(dead_code)]
 struct AiTask {
@@ -587,40 +576,13 @@ async fn get_image_description(
 
     // Pre-resize to 768px max for VLM input — saves ~98% bandwidth for full-res images
     let buffer = resize_image_for_ai(buffer, 768).await?;
-    let base64_image = general_purpose::STANDARD.encode(&buffer);
 
-    let request = VlmRequest {
-        image: base64_image,
-    };
+    let api_key = config.get_api_key().map_err(|e| format!("Failed to retrieve API key: {}", e))?.to_string();
+    let ai_client = crate::ai_client::AiClient::new(config.ai_grpc_url.clone(), api_key);
 
-    let client = crate::utils::get_http_client();
-
-    let ai_url = format!("{}/describe", config.embedding_service_url); 
-    
-    info!("Sending request to AI service at: {}", ai_url);
-    let api_key = config.get_api_key().map_err(|e| format!("Failed to retrieve API key: {}", e))?;
-
-    let response = client
-        .post(&ai_url)
-        .bearer_auth(api_key)
-        .json(&request)
-        .send()
-        .await
-        .map_err(|e| format!("Failed to send request to AI service: {}", e))?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let error_text = response.text().await.unwrap_or_default();
-        return Err(format!("AI API returned error: {} - {}", status, error_text));
-    }
-
-    let response_text = response.text().await.map_err(|e| format!("Failed to get response text: {}", e))?;
-    
-    let vlm_response: VlmResponse =
-        serde_json::from_str(&response_text).map_err(|e| format!("Failed to parse AI response: {}", e))?;
-
-    let description = vlm_response.description;
-    info!("Successfully got AI description for {} (length: {} chars)", hash, description.len());
+    info!("Sending gRPC describe_image request for {}", hash);
+    let (description, model_used) = ai_client.describe_image(buffer, false).await?;
+    info!("Successfully got AI description via gRPC model {} for {} (length: {} chars)", model_used, hash, description.len());
 
     Ok(description)
 }

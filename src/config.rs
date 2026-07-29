@@ -26,6 +26,8 @@ pub struct Config {
     pub embedding_service_url: String,
     #[serde(default = "default_face_service_url")]
     pub face_service_url: String,
+    #[serde(default = "default_ai_grpc_url")]
+    pub ai_grpc_url: String,
     // P2P daemon connection
     #[serde(default)]
     pub p2p_daemon_host: Option<String>,
@@ -214,6 +216,10 @@ fn default_embedding_service_url() -> String {
 
 fn default_face_service_url() -> String {
     "http://localhost:8081".to_string()  // Consolidated with embedding service
+}
+
+fn default_ai_grpc_url() -> String {
+    "http://localhost:50051".to_string()
 }
 
 fn default_db_tls() -> bool {
