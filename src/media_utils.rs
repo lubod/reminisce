@@ -840,3 +840,74 @@ pub fn cleanup_temp_files_spawn(
         cleanup_temp_files(image_temp_path, thumbnail_temp_path).await;
     });
 }
+
+/// Extract video keyframe JPEG images at regular intervals using ffmpeg.
+/// Returns a list of (timestamp_secs, jpeg_bytes) tuples.
+pub async fn extract_video_keyframes(
+    video_path: &std::path::Path,
+    interval_secs: f32,
+    max_keyframes: usize,
+) -> Result<Vec<(f32, Vec<u8>)>, String> {
+    let video_str = video_path.to_str().ok_or("Invalid video path")?;
+    let temp_dir = std::env::temp_dir().join(format!("keyframes_{}", uuid::Uuid::new_v4()));
+    tokio::fs::create_dir_all(&temp_dir)
+        .await
+        .map_err(|e| format!("Failed to create temp keyframes dir: {}", e))?;
+
+    let output_pattern = temp_dir.join("frame_%03d.jpg");
+    let output_pattern_str = output_pattern.to_str().ok_or("Invalid output pattern path")?;
+
+    let fps_filter = format!("fps=1/{}", interval_secs);
+    let result = tokio::process::Command::new("ffmpeg")
+        .args(&[
+            "-i", video_str,
+            "-vf", &fps_filter,
+            "-vframes", &max_keyframes.to_string(),
+            "-q:v", "3",
+            "-y",
+            output_pattern_str,
+        ])
+        .output()
+        .await;
+
+    match result {
+        Ok(output) if output.status.success() => {},
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let _ = tokio::fs::remove_dir_all(&temp_dir).await;
+            return Err(format!("ffmpeg keyframe extraction failed: {}", stderr));
+        }
+        Err(e) => {
+            let _ = tokio::fs::remove_dir_all(&temp_dir).await;
+            return Err(format!("Failed to run ffmpeg: {}", e));
+        }
+    }
+
+    let mut keyframes = Vec::new();
+    let mut entries = tokio::fs::read_dir(&temp_dir)
+        .await
+        .map_err(|e| format!("Failed to read temp keyframes dir: {}", e))?;
+
+    let mut frame_files = Vec::new();
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) == Some("jpg") {
+            frame_files.push(path);
+        }
+    }
+    frame_files.sort();
+
+    for (idx, path) in frame_files.into_iter().enumerate() {
+        if idx >= max_keyframes {
+            break;
+        }
+        let timestamp = (idx as f32) * interval_secs;
+        if let Ok(bytes) = tokio::fs::read(&path).await {
+            keyframes.push((timestamp, bytes));
+        }
+    }
+
+    let _ = tokio::fs::remove_dir_all(&temp_dir).await;
+    info!("Extracted {} keyframes from video {:?}", keyframes.len(), video_path);
+    Ok(keyframes)
+}

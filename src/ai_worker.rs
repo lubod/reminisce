@@ -11,7 +11,6 @@ use crate::metrics::{
 };
 use actix_web::web;
 use log::{error, info, warn};
-use serde::{Deserialize, Serialize};
 use std::sync::LazyLock as Lazy;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -177,6 +176,41 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
                 created_at,
                 orientation: None,
             });
+        }
+
+        if all_tasks_to_process.len() < total_batch_limit {
+            let room_left = total_batch_limit - all_tasks_to_process.len();
+            let video_embedding_rows = client
+                .query(
+                    "SELECT hash, ext, name, user_id, 'video' as file_type, created_at FROM videos
+                     WHERE verification_status = 1 AND deleted_at IS NULL AND embedding IS NULL AND embedding_generated_at IS NULL
+                     LIMIT $1",
+                    &[&(room_left as i64)],
+                )
+                .await
+                .map_err(|e| format!("Failed to query for video AI embedding tasks: {}", e))?;
+
+            for row in video_embedding_rows {
+                let hash: String = row.get(0);
+                let ext: String = row.get(1);
+                let name: String = row.get(2);
+                let user_id: uuid::Uuid = row.get(3);
+                let file_type: String = row.get(4);
+                let created_at: DateTime<Utc> = row.get(5);
+                all_tasks_to_process.entry(hash.clone()).or_insert(AiTask {
+                    hash: hash.clone(),
+                    ext,
+                    name,
+                    user_id,
+                    file_type,
+                    process_description: false,
+                    process_embedding: true,
+                    process_faces: false,
+                    process_quality: false,
+                    created_at,
+                    orientation: None,
+                });
+            }
         }
     }
 
@@ -410,30 +444,35 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
                     // _ai_permit automatically dropped here
                 }
 
-                if file_type == "image" && process_embedding {
+                if process_embedding {
                     // Acquire permit in scope to auto-release when done
                     let _emb_permit = emb_sem_clone.acquire().await.unwrap();
-                    info!("Starting embedding generation for image: {}", hash);
+                    info!("Starting embedding generation for {}: {}", file_type, hash);
                     let start_time = Instant::now();
-                    match generate_and_store_embedding(&hash, &file_path, &user_id, &config_clone, &client).await {
+                    let res = if file_type == "video" {
+                        generate_and_store_video_embedding(&hash, &file_path, &user_id, &config_clone, &client).await
+                    } else {
+                        generate_and_store_embedding(&hash, &file_path, &user_id, &config_clone, &client).await
+                    };
+                    match res {
                         Ok(_) => {
                             let duration = start_time.elapsed();
                             EMBEDDING_DURATION.observe(duration.as_secs_f64());
                             EMBEDDING_SUCCESS_TOTAL.inc();
                             EMBEDDING_PROCESSING_DELAY.observe(delay_secs);
-                            info!("Generated embedding for image {} (took {:.2}s)", hash, duration.as_secs_f64());
+                            info!("Generated embedding for {} {} (took {:.2}s)", file_type, hash, duration.as_secs_f64());
                         }
                         Err(e) => {
                             let duration = start_time.elapsed();
                             EMBEDDING_DURATION.observe(duration.as_secs_f64());
                             EMBEDDING_FAILURES_TOTAL.inc();
-                            error!("Failed to generate embedding for image {} (took {:.2}s): {}", hash, duration.as_secs_f64(), e);
-                            // Mark permanent failures (400 Bad Request) so they aren't retried
+                            error!("Failed to generate embedding for {} {} (took {:.2}s): {}", file_type, hash, duration.as_secs_f64(), e);
+                            // Mark permanent failures so they aren't retried
                             if e.contains("400 Bad Request") {
-                                let _ = client.execute(
-                                    "UPDATE images SET embedding_generated_at = NOW() WHERE hash = $1 AND user_id = $2",
-                                    &[&hash, &user_id],
-                                ).await;
+                                let table_name = if file_type == "video" { "videos" } else { "images" };
+                                crate::utils::validate_table_name(table_name).unwrap();
+                                let query = format!("UPDATE {} SET embedding_generated_at = NOW() WHERE hash = $1 AND user_id = $2", table_name);
+                                let _ = client.execute(&query, &[&hash, &user_id]).await;
                             }
                         }
                     }
@@ -739,6 +778,87 @@ mod tests {
         assert_eq!(result[0].0, vec![200, 200, 400, 400]);
         assert_eq!(result[1].0, vec![1000, 800, 600, 600]);
     }
+}
+async fn generate_and_store_video_embedding(
+    hash: &str,
+    file_path: &PathBuf,
+    user_id: &uuid::Uuid,
+    config: &Config,
+    client: &tokio_postgres::Client,
+) -> Result<(), String> {
+    info!("Generating video keyframe embeddings for video: {}", hash);
+
+    let keyframes = crate::media_utils::extract_video_keyframes(file_path, 5.0, 10).await?;
+    if keyframes.is_empty() {
+        warn!("No keyframes extracted from video: {}", hash);
+        client
+            .execute(
+                "UPDATE videos SET embedding_generated_at = NOW() WHERE hash = $1 AND user_id = $2",
+                &[&hash, user_id],
+            )
+            .await
+            .map_err(|e| format!("Failed to mark video embedding complete: {}", e))?;
+        return Ok(());
+    }
+
+    let api_key = config.get_api_key().map_err(|e| format!("Failed to retrieve API key: {}", e))?.to_string();
+    let ai_client = crate::ai_client::AiClient::new(config.ai_grpc_url.clone(), api_key);
+
+    let mut keyframe_embeddings = Vec::new();
+    for (timestamp, raw_bytes) in keyframes {
+        let resized = resize_image_for_ai(raw_bytes, 384).await?;
+        match ai_client.embed_image(resized).await {
+            Ok(vec) if vec.len() == 1152 => {
+                let vector = pgvector::Vector::from(vec.clone());
+                let _ = client
+                    .execute(
+                        "INSERT INTO video_keyframes (video_hash, user_id, timestamp_secs, embedding)
+                         VALUES ($1, $2, $3, $4)
+                         ON CONFLICT (user_id, video_hash, timestamp_secs) DO UPDATE SET embedding = EXCLUDED.embedding",
+                        &[&hash, user_id, &timestamp, &vector],
+                    )
+                    .await;
+                keyframe_embeddings.push(vec);
+            }
+            Ok(vec) => warn!("Invalid video keyframe embedding dim: {}", vec.len()),
+            Err(e) => warn!("Keyframe embedding error for video {} at {:.1}s: {}", hash, timestamp, e),
+        }
+    }
+
+    if keyframe_embeddings.is_empty() {
+        return Err(format!("Failed to generate keyframe embeddings for video {}", hash));
+    }
+
+    // Compute mean (centroid) vector across keyframes
+    let dim = 1152;
+    let mut centroid = vec![0.0f32; dim];
+    let count = keyframe_embeddings.len() as f32;
+
+    for emb in &keyframe_embeddings {
+        for i in 0..dim {
+            centroid[i] += emb[i] / count;
+        }
+    }
+
+    // Normalize centroid
+    let norm = centroid.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if norm > 0.0 {
+        for x in &mut centroid {
+            *x /= norm;
+        }
+    }
+
+    let centroid_vector = pgvector::Vector::from(centroid);
+    client
+        .execute(
+            "UPDATE videos SET embedding = $1, embedding_generated_at = NOW() WHERE hash = $2 AND user_id = $3",
+            &[&centroid_vector, &hash, user_id],
+        )
+        .await
+        .map_err(|e| format!("Failed to store video embedding: {}", e))?;
+
+    info!("Successfully stored {} keyframes and centroid embedding for video {}", keyframe_embeddings.len(), hash);
+    Ok(())
 }
 
 async fn update_status_metrics(client: &tokio_postgres::Client) -> Result<(), tokio_postgres::Error> {

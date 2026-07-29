@@ -319,19 +319,41 @@ async fn perform_semantic_search(
         "NULL::double precision".to_string()
     };
 
+    let video_where_clause = where_clause.replace("i.", "v.");
+    let video_distance_calc = distance_calc.replace("i.", "v.");
+
     let sql = format!(
-        "SELECT i.hash, i.name, i.description, i.place, i.created_at,
-                1 - (i.embedding <=> $2) as similarity,
-                CASE WHEN s.hash IS NOT NULL THEN true ELSE false END as starred,
-                i.deviceid,
-                {} as distance_km
-         FROM images i
-         LEFT JOIN starred_images s ON i.hash = s.hash AND s.user_id = $1
-         WHERE {}
-         ORDER BY i.embedding <=> $2
-         LIMIT $3 OFFSET $4",
+        "SELECT hash, name, description, place, created_at, similarity, starred, deviceid, distance_km, media_type FROM (
+            SELECT i.hash, i.name, i.description, i.place, i.created_at,
+                   1 - (i.embedding <=> $2) as similarity,
+                   CASE WHEN s.hash IS NOT NULL THEN true ELSE false END as starred,
+                   i.deviceid,
+                   {} as distance_km,
+                   'image' as media_type,
+                   i.embedding <=> $2 as dist
+            FROM images i
+            LEFT JOIN starred_images s ON i.hash = s.hash AND s.user_id = $1
+            WHERE {}
+
+            UNION ALL
+
+            SELECT v.hash, v.name, v.description, v.place, v.created_at,
+                   1 - (v.embedding <=> $2) as similarity,
+                   CASE WHEN s.hash IS NOT NULL THEN true ELSE false END as starred,
+                   v.deviceid,
+                   {} as distance_km,
+                   'video' as media_type,
+                   v.embedding <=> $2 as dist
+            FROM videos v
+            LEFT JOIN starred_images s ON v.hash = s.hash AND s.user_id = $1
+            WHERE {}
+        ) combined
+        ORDER BY dist ASC
+        LIMIT $3 OFFSET $4",
         distance_calc,
-        where_clause
+        where_clause,
+        video_distance_calc,
+        video_where_clause
     );
 
     // hnsw.ef_search controls how many candidates HNSW considers at query time.
@@ -341,7 +363,7 @@ async fn perform_semantic_search(
     client.execute(&format!("SET hnsw.ef_search = {}", ef_search), &[]).await
         .unwrap_or(0);
 
-    info!("Executing semantic search query (ef_search={})", ef_search);
+    info!("Executing semantic search query across images & videos (ef_search={})", ef_search);
     info!("Query params: user_id={}, limit={}, offset={}, device_filter={:?}",
           user_uuid, limit, offset, device_filter);
 
@@ -396,6 +418,7 @@ async fn perform_semantic_search(
             let hash: String = row.get(0);
             let similarity = row.get::<_, f64>(5) as f32;
             let distance_km: Option<f64> = row.get(8);
+            let media_type: String = row.try_get(9).unwrap_or_else(|_| "image".to_string());
             SearchResult {
                 hash: hash.clone(),
                 name: row.get(1),
@@ -407,7 +430,7 @@ async fn perform_semantic_search(
                 device_id: row.get(7),
                 distance_km: distance_km.map(|d| d as f32),
                 thumbnail_url: Some(format!("/api/thumbnail/{}", hash)),
-                media_type: "image".to_string(),
+                media_type,
             }
         })
         .collect();

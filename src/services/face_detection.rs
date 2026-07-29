@@ -1,4 +1,4 @@
-use log::info;
+use log::{error, info};
 use pgvector::Vector;
 use crate::config::Config;
 

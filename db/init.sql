@@ -185,6 +185,8 @@ CREATE TABLE IF NOT EXISTS videos (
     p2p_encrypted_size INTEGER, -- Size of the encrypted blob before erasure coding (needed for reconstruction)
     p2p_data_shards INTEGER DEFAULT 3,
     p2p_parity_shards INTEGER DEFAULT 2,
+    embedding vector(1152), -- SigLIP keyframe centroid embedding vector for semantic video search
+    embedding_generated_at TIMESTAMPTZ, -- Timestamp when video embedding was generated
     PRIMARY KEY (user_id, hash)
 );
 
@@ -197,6 +199,13 @@ CREATE INDEX IF NOT EXISTS idx_videos_verification_status ON videos(verification
 CREATE INDEX IF NOT EXISTS idx_videos_verification_pending ON videos(verification_status, last_verified_at) WHERE deleted_at IS NULL;
 -- Index for user_id queries
 CREATE INDEX IF NOT EXISTS idx_videos_user_id ON videos(user_id);
+-- HNSW index for fast approximate nearest neighbor search (semantic video search)
+CREATE INDEX IF NOT EXISTS idx_videos_embedding_hnsw ON videos
+USING hnsw (embedding vector_cosine_ops)
+WITH (m = 16, ef_construction = 64);
+-- Index to track videos without embeddings for backfill worker (excludes soft-deleted)
+CREATE INDEX IF NOT EXISTS idx_videos_embedding_status ON videos(embedding_generated_at)
+WHERE embedding_generated_at IS NULL AND deleted_at IS NULL;
 -- Index for fast hash lookups (used in get_video, existence checks)
 CREATE INDEX IF NOT EXISTS idx_videos_hash ON videos(hash);
 -- Partial index for thumbnail queries (only index rows with thumbnails)
@@ -207,6 +216,26 @@ CREATE INDEX IF NOT EXISTS idx_videos_need_sync ON videos(created_at) WHERE p2p_
 CREATE INDEX IF NOT EXISTS idx_videos_p2p_synced ON videos(p2p_synced_at);
 -- Composite index for main gallery query: WHERE user_id = $N AND deleted_at IS NULL ORDER BY created_at DESC
 CREATE INDEX IF NOT EXISTS idx_videos_user_created ON videos(user_id, created_at DESC) WHERE deleted_at IS NULL;
+
+-- Per-keyframe vector embeddings for timestamp-accurate video search
+CREATE TABLE IF NOT EXISTS video_keyframes (
+    id BIGSERIAL PRIMARY KEY,
+    video_hash VARCHAR(255) NOT NULL,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    timestamp_secs REAL NOT NULL,
+    embedding vector(1152) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (user_id, video_hash, timestamp_secs)
+);
+
+CREATE INDEX IF NOT EXISTS idx_video_keyframes_user_video ON video_keyframes(user_id, video_hash);
+CREATE INDEX IF NOT EXISTS idx_video_keyframes_embedding_hnsw ON video_keyframes
+USING hnsw (embedding vector_cosine_ops)
+WITH (m = 16, ef_construction = 64);
+
+-- Idempotent migrations for existing databases
+ALTER TABLE videos ADD COLUMN IF NOT EXISTS embedding vector(1152);
+ALTER TABLE videos ADD COLUMN IF NOT EXISTS embedding_generated_at TIMESTAMPTZ;
 
 -- Persons table (face clusters representing individuals)
 -- MOVED BEFORE FACES TO RESOLVE CIRCULAR DEPENDENCY
