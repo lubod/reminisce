@@ -11,7 +11,7 @@ WORKDIR /app
 RUN cargo install cargo-chef
 COPY --from=planner /app/recipe.json recipe.json
 # Install build dependencies including mold linker
-RUN apt-get update && apt-get install -y libssl-dev pkg-config mold clang && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y libssl-dev pkg-config mold clang protobuf-compiler && rm -rf /var/lib/apt/lists/*
 
 # Build dependencies with cache mounts for cargo registry and target
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
@@ -22,7 +22,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 FROM rust:slim-bookworm AS builder
 WORKDIR /app
 # Install build dependencies including mold linker
-RUN apt-get update && apt-get install -y libssl-dev pkg-config mold clang && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y libssl-dev pkg-config mold clang protobuf-compiler && rm -rf /var/lib/apt/lists/*
 
 # Copy source
 COPY . .

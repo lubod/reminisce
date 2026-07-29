@@ -126,9 +126,14 @@ def get_onnx_providers():
     return available_providers
 
 
+models_loaded = False
+
 def load_models():
     """Load all AI models on startup"""
-    global siglip_model, siglip_processor, vlm_model, vlm_processor, smolvlm_model, smolvlm_processor, face_app, device
+    global models_loaded, siglip_model
+    if models_loaded:
+        return
+    models_loaded = True, siglip_processor, vlm_model, vlm_processor, smolvlm_model, smolvlm_processor, face_app, device
 
     # Compatibility patch for models with missing config attributes (SigLIP, Moondream2, etc.)
     try:
@@ -147,8 +152,11 @@ def load_models():
 
     # Only set CPU threading when not using GPU (avoids unnecessary overhead)
     if detect_device() == "cpu":
-        torch.set_num_threads(4)
-        torch.set_num_interop_threads(2)
+        try:
+            torch.set_num_threads(4)
+            torch.set_num_interop_threads(2)
+        except Exception:
+            pass
 
     device = detect_device()
 

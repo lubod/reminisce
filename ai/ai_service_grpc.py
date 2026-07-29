@@ -2,7 +2,7 @@
 """
 gRPC AI Inference Server for Reminisce
 
-Serves gRPC endpoints defined in proto/ai_service.proto:
+Serves gRPC endpoints defined in proto/get_ai_service().proto:
 - EmbedImage
 - EmbedText
 - DescribeImage
@@ -27,7 +27,10 @@ import ai_service_pb2
 import ai_service_pb2_grpc
 
 # Import model loader and state from ai_service
-import ai_service
+# Lazy import ai_service
+def get_ai_service():
+    import ai_service
+    return ai_service
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +54,7 @@ class AIServiceServicer(ai_service_pb2_grpc.AIServiceServicer):
     
     def EmbedImage(self, request, context):
         check_api_key(context)
-        if ai_service.siglip_model is None:
+        if get_ai_service().siglip_model is None:
             context.abort(grpc.StatusCode.UNAVAILABLE, "SigLIP model not loaded")
 
         if not request.image_data:
@@ -65,12 +68,12 @@ class AIServiceServicer(ai_service_pb2_grpc.AIServiceServicer):
             if image.width < 3 or image.height < 3:
                 context.abort(grpc.StatusCode.INVALID_ARGUMENT, f"Image too small ({image.width}x{image.height})")
 
-            inputs = ai_service.siglip_processor(images=image, return_tensors="pt").to(ai_service.device)
-            model_dtype = next(ai_service.siglip_model.parameters()).dtype
+            inputs = get_ai_service().siglip_processor(images=image, return_tensors="pt").to(get_ai_service().device)
+            model_dtype = next(get_ai_service().siglip_model.parameters()).dtype
             inputs = {k: v.to(model_dtype) if v.is_floating_point() else v for k, v in inputs.items()}
 
             with torch.no_grad():
-                image_features = ai_service.siglip_model.get_image_features(**inputs)
+                image_features = get_ai_service().siglip_model.get_image_features(**inputs)
                 if hasattr(image_features, "pooler_output"):
                     image_features = image_features.pooler_output
                 elif not torch.is_tensor(image_features) and hasattr(image_features, "last_hidden_state"):
@@ -85,19 +88,19 @@ class AIServiceServicer(ai_service_pb2_grpc.AIServiceServicer):
 
     def EmbedText(self, request, context):
         check_api_key(context)
-        if ai_service.siglip_model is None:
+        if get_ai_service().siglip_model is None:
             context.abort(grpc.StatusCode.UNAVAILABLE, "SigLIP model not loaded")
 
         if not request.text:
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, "Missing text")
 
         try:
-            inputs = ai_service.siglip_processor(text=[request.text], return_tensors="pt", padding="max_length").to(ai_service.device)
-            model_dtype = next(ai_service.siglip_model.parameters()).dtype
+            inputs = get_ai_service().siglip_processor(text=[request.text], return_tensors="pt", padding="max_length").to(get_ai_service().device)
+            model_dtype = next(get_ai_service().siglip_model.parameters()).dtype
             inputs = {k: v.to(model_dtype) if v.is_floating_point() else v for k, v in inputs.items()}
 
             with torch.no_grad():
-                text_features = ai_service.siglip_model.get_text_features(**inputs)
+                text_features = get_ai_service().siglip_model.get_text_features(**inputs)
                 if hasattr(text_features, "pooler_output"):
                     text_features = text_features.pooler_output
                 elif not torch.is_tensor(text_features) and hasattr(text_features, "last_hidden_state"):
@@ -121,7 +124,7 @@ class AIServiceServicer(ai_service_pb2_grpc.AIServiceServicer):
                 image = image.convert('RGB')
 
             if request.use_qwen:
-                if ai_service.vlm_model is None:
+                if get_ai_service().vlm_model is None:
                     context.abort(grpc.StatusCode.UNAVAILABLE, "Qwen VLM model not loaded")
                 
                 from qwen_vl_utils import process_vision_info
@@ -134,27 +137,27 @@ class AIServiceServicer(ai_service_pb2_grpc.AIServiceServicer):
                         ],
                     }
                 ]
-                text = ai_service.vlm_processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+                text = get_ai_service().vlm_processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
                 image_inputs, video_inputs = process_vision_info(messages)
-                inputs = ai_service.vlm_processor(
+                inputs = get_ai_service().vlm_processor(
                     text=[text],
                     images=image_inputs,
                     videos=video_inputs,
                     padding=True,
                     return_tensors="pt"
-                ).to(ai_service.device)
+                ).to(get_ai_service().device)
 
                 with torch.no_grad():
-                    generated_ids = ai_service.vlm_model.generate(**inputs, max_new_tokens=128)
+                    generated_ids = get_ai_service().vlm_model.generate(**inputs, max_new_tokens=128)
                     generated_ids_trimmed = [
                         out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
                     ]
-                    output_text = ai_service.vlm_processor.batch_decode(
+                    output_text = get_ai_service().vlm_processor.batch_decode(
                         generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
                     )[0]
                 model_used = "Qwen2.5-VL-3B"
             else:
-                if ai_service.smolvlm_model is None:
+                if get_ai_service().smolvlm_model is None:
                     context.abort(grpc.StatusCode.UNAVAILABLE, "SmolVLM model not loaded")
 
                 messages = [
@@ -166,12 +169,12 @@ class AIServiceServicer(ai_service_pb2_grpc.AIServiceServicer):
                         ]
                     }
                 ]
-                prompt = ai_service.smolvlm_processor.apply_chat_template(messages, add_generation_prompt=True)
-                inputs = ai_service.smolvlm_processor(text=prompt, images=image, return_tensors="pt").to(ai_service.device)
+                prompt = get_ai_service().smolvlm_processor.apply_chat_template(messages, add_generation_prompt=True)
+                inputs = get_ai_service().smolvlm_processor(text=prompt, images=image, return_tensors="pt").to(get_ai_service().device)
 
                 with torch.no_grad():
-                    generated_ids = ai_service.smolvlm_model.generate(**inputs, max_new_tokens=128)
-                    output_text = ai_service.smolvlm_processor.batch_decode(
+                    generated_ids = get_ai_service().smolvlm_model.generate(**inputs, max_new_tokens=128)
+                    output_text = get_ai_service().smolvlm_processor.batch_decode(
                         generated_ids, skip_special_tokens=True
                     )[0]
                     if "Assistant:" in output_text:
@@ -185,7 +188,7 @@ class AIServiceServicer(ai_service_pb2_grpc.AIServiceServicer):
 
     def DetectFaces(self, request, context):
         check_api_key(context)
-        if ai_service.face_app is None:
+        if get_ai_service().face_app is None:
             context.abort(grpc.StatusCode.UNAVAILABLE, "InsightFace model not loaded")
 
         if not request.image_data:
@@ -198,7 +201,7 @@ class AIServiceServicer(ai_service_pb2_grpc.AIServiceServicer):
             image_np = np.array(image_pil)
             image_bgr = cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR)
 
-            faces = ai_service.face_app.get(image_bgr)
+            faces = get_ai_service().face_app.get(image_bgr)
             pb_faces = []
             for face in faces:
                 bbox = face.bbox.astype(int).tolist()
@@ -220,14 +223,14 @@ class AIServiceServicer(ai_service_pb2_grpc.AIServiceServicer):
             context.abort(grpc.StatusCode.INTERNAL, str(e))
 
     def HealthCheck(self, request, context):
-        device_str = str(ai_service.device) if ai_service.device else "unknown"
+        device_str = str(get_ai_service().device) if get_ai_service().device else "unknown"
         return ai_service_pb2.HealthCheckResponse(
             status="healthy",
             device=device_str,
-            siglip_loaded=ai_service.siglip_model is not None,
-            vlm_loaded=ai_service.vlm_model is not None,
-            smolvlm_loaded=ai_service.smolvlm_model is not None,
-            face_loaded=ai_service.face_app is not None,
+            siglip_loaded=get_ai_service().siglip_model is not None,
+            vlm_loaded=get_ai_service().vlm_model is not None,
+            smolvlm_loaded=get_ai_service().smolvlm_model is not None,
+            face_loaded=get_ai_service().face_app is not None,
         )
 
 
@@ -247,7 +250,7 @@ def serve_grpc(port=50051, max_workers=4):
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     logger.info("Starting AI Service models initialization...")
-    ai_service.load_models()
+    get_ai_service().load_models()
 
     port = int(os.environ.get("GRPC_PORT", "50051"))
     server = serve_grpc(port=port)

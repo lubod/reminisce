@@ -25,7 +25,7 @@ RUN ROCM_LIB=$(readlink -f /opt/rocm/lib) && \
     ldconfig
 
 # Copy requirements file
-COPY requirements.txt .
+COPY ai/requirements.txt .
 
 # Install Python dependencies
 # onnxruntime-rocm for AMD GPU support in InsightFace
@@ -33,7 +33,7 @@ RUN pip install --no-cache-dir -r requirements.txt onnxruntime-rocm
 
 # Create _v2 symbol bridges for hipblas functions
 # ROCm 7.1.1 removed the _v2 suffix but onnxruntime-rocm 1.22.2 still expects them
-COPY hipblas_v2_shim.c /app/hipblas_v2_shim.c
+COPY ai/hipblas_v2_shim.c /app/hipblas_v2_shim.c
 RUN gcc -shared -fPIC -o /app/libhipblas_fix.so /app/hipblas_v2_shim.c -ldl
 
 # Create InsightFace model directory and pre-download models
@@ -46,8 +46,8 @@ RUN mkdir -p /app/.insightface/models && \
 
 # Copy service files and proto schema
 COPY proto/ /app/proto/
-COPY ai_service.py .
-COPY ai_service_grpc.py .
+COPY ai/ai_service.py .
+COPY ai/ai_service_grpc.py .
 RUN python -m grpc_tools.protoc -I/app/proto --python_out=/app --grpc_python_out=/app /app/proto/ai_service.proto
 
 # Create a non-privileged user and group, change ownership
