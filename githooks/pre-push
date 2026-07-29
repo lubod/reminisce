@@ -31,6 +31,14 @@ step "cargo test --workspace --lib -- --skip test_utils (unit tests, no Docker n
 cargo test --workspace --lib -- --skip test_utils || fail "unit tests failed"
 pass "unit tests"
 
+step "npm --prefix client test (vitest)"
+if [ -d client ]; then
+    npm --prefix client test || fail "client unit tests failed"
+    pass "client unit tests"
+else
+    echo "  (client/ not found — skipping)"
+fi
+
 step "npm --prefix client run build (tsc + vite)"
 if [ -d client ]; then
     npm --prefix client run build || fail "client build failed"

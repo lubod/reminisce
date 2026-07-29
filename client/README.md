@@ -20,7 +20,10 @@ All frontend commands must be executed inside the `client/` directory:
 npm install     # Install dependencies
 npm run dev     # Start Vite dev server with proxy
 npm run build   # TypeScript check & production build (dist/)
+npm test        # Unit tests (vitest + jsdom)
 ```
+
+Unit tests use **vitest** with the `jsdom` environment (config: `vitest.config.ts`, separate from `vite.config.ts` so the OpenTelemetry node stubs don't interfere). Store logic tests live next to stores as `*.test.ts` (e.g. `src/stores/MediaStore.test.ts`). **Note:** stores import `RootStore` via `import type` to avoid a runtime circular dependency (`RootStore` instantiates the stores) — keep it type-only.
 
 ## Directory Structure
 - [src/](file:///Users/ldr/work/reminisce/client/src): React component hierarchy, MobX stores, API client, and application entry point.

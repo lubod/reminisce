@@ -397,9 +397,11 @@ async fn perform_keyframe_search(
     Ok(results)
 }
 
-/// Perform semantic search using embeddings
+/// Perform semantic search using embeddings.
+/// Public so integration tests (tests/semantic_search_test.rs) can drive the SQL
+/// directly with a supplied embedding, bypassing the gRPC text-embedding step.
 #[allow(clippy::too_many_arguments)]
-async fn perform_semantic_search(
+pub async fn perform_semantic_search(
     embedding: &Vector,
     user_uuid: &uuid::Uuid,
     device_filter: Option<&String>,
@@ -534,7 +536,7 @@ async fn perform_semantic_search(
             )
             UNION ALL
             (
-                SELECT v.hash, v.name, v.description, v.place, v.created_at,
+                SELECT v.hash, v.name, v.description, NULL::text as place, v.created_at,
                        1 - (v.embedding <=> $2) as similarity,
                        CASE WHEN s.hash IS NOT NULL THEN true ELSE false END as starred,
                        v.deviceid,
