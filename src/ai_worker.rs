@@ -85,7 +85,9 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
     static LAST_STATUS_UPDATE: Lazy<std::sync::Mutex<Option<Instant>>> = Lazy::new(|| std::sync::Mutex::new(None));
     
     let should_update = {
-        let mut last_update = LAST_STATUS_UPDATE.lock().unwrap();
+        // Recover from a poisoned mutex rather than panicking — this is only a
+        // 30s metrics-throttle timestamp, so a prior panic shouldn't kill the worker.
+        let mut last_update = LAST_STATUS_UPDATE.lock().unwrap_or_else(|e| e.into_inner());
         match *last_update {
             Some(last) if last.elapsed() < Duration::from_secs(30) => false,
             _ => {
@@ -409,7 +411,13 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
 
                 if process_description {
                     // Description is lowest priority - acquire permit
-                    let _desc_permit = desc_sem_clone.acquire().await.unwrap();
+                    let _desc_permit = match desc_sem_clone.acquire().await {
+                        Ok(p) => p,
+                        Err(e) => {
+                            warn!("Description semaphore closed for {}: {}", hash, e);
+                            return;
+                        }
+                    };
                     info!("Starting AI description for {} : {}", file_type, hash);
                     let start_time = Instant::now();
                     match get_image_description(&file_path, &hash, &file_type, &config_clone).await {
@@ -420,7 +428,10 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
                             AI_DESCRIPTION_PROCESSING_DELAY.observe(delay_secs);
                             info!("Got AI description for {} {} (took {:.2}s): {}", file_type, hash, duration.as_secs_f64(), desc);
                             let table_name = if file_type == "image" { "images" } else { "videos" };
-                            crate::utils::validate_table_name(table_name).unwrap();
+                            if let Err(e) = crate::utils::validate_table_name(table_name) {
+                                error!("Table name validation failed for {}: {}", table_name, e);
+                                return;
+                            }
                             let query = format!("UPDATE {} SET description = $1 WHERE hash = $2 AND user_id = $3", table_name);
                             if let Err(e) = client.execute(&query, &[&desc, &hash, &user_id]).await {
                                 error!("Failed to update description for {} {}: {}", file_type, hash, e);
@@ -435,7 +446,10 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
                             // Mark permanent failures (400 Bad Request) so they aren't retried
                             if e.contains("400 Bad Request") {
                                 let table_name = if file_type == "image" { "images" } else { "videos" };
-                                crate::utils::validate_table_name(table_name).unwrap();
+                                if let Err(e) = crate::utils::validate_table_name(table_name) {
+                                    error!("Table name validation failed for {}: {}", table_name, e);
+                                    return;
+                                }
                                 let query = format!("UPDATE {} SET description = $1 WHERE hash = $2 AND user_id = $3", table_name);
                                 let _ = client.execute(&query, &[&"[skipped]", &hash, &user_id]).await;
                             }
@@ -446,7 +460,13 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
 
                 if process_embedding {
                     // Acquire permit in scope to auto-release when done
-                    let _emb_permit = emb_sem_clone.acquire().await.unwrap();
+                    let _emb_permit = match emb_sem_clone.acquire().await {
+                        Ok(p) => p,
+                        Err(e) => {
+                            warn!("Embedding semaphore closed for {}: {}", hash, e);
+                            return;
+                        }
+                    };
                     info!("Starting embedding generation for {}: {}", file_type, hash);
                     let start_time = Instant::now();
                     let res = if file_type == "video" {
@@ -470,7 +490,10 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
                             // Mark permanent failures so they aren't retried
                             if e.contains("400 Bad Request") {
                                 let table_name = if file_type == "video" { "videos" } else { "images" };
-                                crate::utils::validate_table_name(table_name).unwrap();
+                                if let Err(e) = crate::utils::validate_table_name(table_name) {
+                                    error!("Table name validation failed for {}: {}", table_name, e);
+                                    return;
+                                }
                                 let query = format!("UPDATE {} SET embedding_generated_at = NOW() WHERE hash = $1 AND user_id = $2", table_name);
                                 let _ = client.execute(&query, &[&hash, &user_id]).await;
                             }
@@ -481,7 +504,13 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
 
                 if file_type == "image" && process_faces {
                     // Acquire permit in scope to auto-release when done
-                    let _face_permit = face_sem_clone.acquire().await.unwrap();
+                    let _face_permit = match face_sem_clone.acquire().await {
+                        Ok(p) => p,
+                        Err(e) => {
+                            warn!("Face detection semaphore closed for {}: {}", hash, e);
+                            return;
+                        }
+                    };
                     info!("Starting face detection for image: {}", hash);
                     let start_time = Instant::now();
                     match process_face_detection(&file_path, &hash, &user_id, db_orientation, &config_clone, &client).await {
@@ -522,7 +551,13 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
                 }
 
                 if file_type == "image" && process_quality {
-                    let _quality_permit = quality_sem_clone.acquire().await.unwrap();
+                    let _quality_permit = match quality_sem_clone.acquire().await {
+                        Ok(p) => p,
+                        Err(e) => {
+                            warn!("Quality semaphore closed for {}: {}", hash, e);
+                            return;
+                        }
+                    };
                     info!("Starting quality scoring for image: {}", hash);
                     let file_size = std::fs::metadata(&file_path)
                         .map(|m| m.len().min(i32::MAX as u64) as i32)

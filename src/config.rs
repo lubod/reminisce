@@ -98,9 +98,6 @@ pub struct Config {
     /// Coordinator QUIC address for cross-network peer discovery (e.g. 1.2.3.4:5055).
     #[serde(default)]
     pub p2p_coordinator_addr: Option<String>,
-    /// Legacy static peer list — kept for backward compatibility, prefer discovery.
-    #[serde(default)]
-    pub p2p_peers: Vec<String>,
 
     // Reverse tunnel — lets Android reach the home server through the VPS coordinator
     /// Local port to expose through the coordinator tunnel (e.g. 28444 for nginx HTTPS).

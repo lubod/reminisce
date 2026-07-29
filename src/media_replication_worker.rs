@@ -275,7 +275,7 @@ async fn replicate_single_file(
     for s in final_results.iter() { manifest_hasher.update(s.shard_hash_hex.as_bytes()); }
     let manifest_hash = manifest_hasher.finalize().to_hex().to_string();
 
-    crate::utils::validate_table_name(table).unwrap();
+    crate::utils::validate_table_name(table)?;
     let update_query = format!(
         "UPDATE {} SET p2p_synced_at = NOW(), p2p_shard_hash = $1, p2p_encryption_key = $2, p2p_encrypted_size = $3, p2p_data_shards = $4, p2p_parity_shards = $5 WHERE hash = $6",
         table

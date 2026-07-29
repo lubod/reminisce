@@ -1,6 +1,8 @@
 # Fullstack Docker configuration — copy to config-fullstack.yaml and fill in your values
-# All services run in Docker containers. Backend uses host network.
-# Databases and AI services are port-mapped to localhost.
+# For the `./dev fullstack` flow (docker/docker-compose-dev.yml): all services run in
+# Docker and the backend uses host network, so localhost works for port-mapped services.
+# NOTE: the production docker-compose.yml does NOT use host network — there the backend
+# reaches the AI service over the compose network (use http://ai-server:50051 for ai_grpc_url).
 
 # Main database (Docker, port-mapped to host on 25432)
 database_url: "postgres://postgres:postgres@localhost:25432/reminisce_db"
