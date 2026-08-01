@@ -70,7 +70,12 @@ def check_api_key(context):
 
 
 def _validate_image_input(request_image_data, context):
-    """Reject missing / oversized inputs before decode. Aborts with INVALID_ARGUMENT."""
+    """Reject missing / oversized / undecodable inputs. Aborts with INVALID_ARGUMENT.
+
+    NOTE: `context.abort()` raises a bare Exception in grpcio 1.x (NOT a grpc.RpcError),
+    so callers must invoke this OUTSIDE any broad try/except so the intended status code
+    is preserved and propagated to the framework.
+    """
     if not request_image_data:
         context.abort(grpc.StatusCode.INVALID_ARGUMENT, "Missing image_data")
     if len(request_image_data) > MAX_IMAGE_INPUT_BYTES:
@@ -78,7 +83,10 @@ def _validate_image_input(request_image_data, context):
             grpc.StatusCode.INVALID_ARGUMENT,
             f"image_data too large ({len(request_image_data)} bytes > {MAX_IMAGE_INPUT_BYTES})",
         )
-    image = Image.open(io.BytesIO(request_image_data))
+    try:
+        image = Image.open(io.BytesIO(request_image_data))
+    except Exception:
+        context.abort(grpc.StatusCode.INVALID_ARGUMENT, "Invalid or undecodable image data")
     if image.width * image.height > MAX_IMAGE_PIXELS:
         context.abort(
             grpc.StatusCode.INVALID_ARGUMENT,
@@ -94,14 +102,15 @@ class AIServiceServicer(ai_service_pb2_grpc.AIServiceServicer):
         if get_ai_service().siglip_model is None:
             context.abort(grpc.StatusCode.UNAVAILABLE, "SigLIP model not loaded")
 
+        # Validation aborts before the inference try so their INVALID_ARGUMENT status
+        # propagates directly instead of being downgraded to INTERNAL.
+        image = _validate_image_input(request.image_data, context)
+        if image.mode != 'RGB':
+            image = image.convert('RGB')
+        if image.width < 3 or image.height < 3:
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, f"Image too small ({image.width}x{image.height})")
+
         try:
-            image = _validate_image_input(request.image_data, context)
-            if image.mode != 'RGB':
-                image = image.convert('RGB')
-
-            if image.width < 3 or image.height < 3:
-                context.abort(grpc.StatusCode.INVALID_ARGUMENT, f"Image too small ({image.width}x{image.height})")
-
             with _MODEL_LOCK:
                 inputs = get_ai_service().siglip_processor(images=image, return_tensors="pt").to(get_ai_service().device)
                 model_dtype = next(get_ai_service().siglip_model.parameters()).dtype
@@ -117,8 +126,6 @@ class AIServiceServicer(ai_service_pb2_grpc.AIServiceServicer):
 
                 embedding = image_features.cpu().numpy().flatten().tolist()
             return ai_service_pb2.EmbedImageResponse(embedding=embedding)
-        except grpc.RpcError:
-            raise  # propagate context.abort() status instead of downgrading to INTERNAL
         except Exception as e:
             logger.error(f"Error in gRPC EmbedImage: {e}", exc_info=True)
             context.abort(grpc.StatusCode.INTERNAL, str(e))
@@ -147,8 +154,6 @@ class AIServiceServicer(ai_service_pb2_grpc.AIServiceServicer):
 
                 embedding = text_features.cpu().numpy().flatten().tolist()
             return ai_service_pb2.EmbedTextResponse(embedding=embedding)
-        except grpc.RpcError:
-            raise
         except Exception as e:
             logger.error(f"Error in gRPC EmbedText: {e}", exc_info=True)
             context.abort(grpc.StatusCode.INTERNAL, str(e))
@@ -156,15 +161,20 @@ class AIServiceServicer(ai_service_pb2_grpc.AIServiceServicer):
     def DescribeImage(self, request, context):
         check_api_key(context)
 
+        image = _validate_image_input(request.image_data, context)
+        if image.mode != 'RGB':
+            image = image.convert('RGB')
+
+        use_qwen = request.use_qwen
+        if use_qwen:
+            if get_ai_service().vlm_model is None:
+                context.abort(grpc.StatusCode.UNAVAILABLE, "Qwen VLM model not loaded")
+        else:
+            if get_ai_service().smolvlm_model is None:
+                context.abort(grpc.StatusCode.UNAVAILABLE, "SmolVLM model not loaded")
+
         try:
-            image = _validate_image_input(request.image_data, context)
-            if image.mode != 'RGB':
-                image = image.convert('RGB')
-
-            if request.use_qwen:
-                if get_ai_service().vlm_model is None:
-                    context.abort(grpc.StatusCode.UNAVAILABLE, "Qwen VLM model not loaded")
-
+            if use_qwen:
                 from qwen_vl_utils import process_vision_info
                 messages = [
                     {
@@ -196,9 +206,6 @@ class AIServiceServicer(ai_service_pb2_grpc.AIServiceServicer):
                         )[0]
                 model_used = "Qwen2.5-VL-3B"
             else:
-                if get_ai_service().smolvlm_model is None:
-                    context.abort(grpc.StatusCode.UNAVAILABLE, "SmolVLM model not loaded")
-
                 messages = [
                     {
                         "role": "user",
@@ -222,8 +229,6 @@ class AIServiceServicer(ai_service_pb2_grpc.AIServiceServicer):
                 model_used = "SmolVLM-500M"
 
             return ai_service_pb2.DescribeImageResponse(description=output_text.strip(), model_used=model_used)
-        except grpc.RpcError:
-            raise
         except Exception as e:
             logger.error(f"Error in gRPC DescribeImage: {e}", exc_info=True)
             context.abort(grpc.StatusCode.INTERNAL, str(e))
@@ -233,10 +238,11 @@ class AIServiceServicer(ai_service_pb2_grpc.AIServiceServicer):
         if get_ai_service().face_app is None:
             context.abort(grpc.StatusCode.UNAVAILABLE, "InsightFace model not loaded")
 
+        image_pil = _validate_image_input(request.image_data, context)
+        if image_pil.mode != 'RGB':
+            image_pil = image_pil.convert('RGB')
+
         try:
-            image_pil = _validate_image_input(request.image_data, context)
-            if image_pil.mode != 'RGB':
-                image_pil = image_pil.convert('RGB')
             image_np = np.array(image_pil)
             image_bgr = cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR)
 
@@ -259,8 +265,6 @@ class AIServiceServicer(ai_service_pb2_grpc.AIServiceServicer):
                 ))
 
             return ai_service_pb2.DetectFacesResponse(faces=pb_faces)
-        except grpc.RpcError:
-            raise
         except Exception as e:
             logger.error(f"Error in gRPC DetectFaces: {e}", exc_info=True)
             context.abort(grpc.StatusCode.INTERNAL, str(e))
@@ -271,14 +275,14 @@ class AIServiceServicer(ai_service_pb2_grpc.AIServiceServicer):
         if svc.siglip_model is None:
             context.abort(grpc.StatusCode.UNAVAILABLE, "SigLIP model not loaded")
 
-        try:
-            image = _validate_image_input(request.image_data, context)
-            if image.mode != 'RGB':
-                image = image.convert('RGB')
-            w, h = image.size
-            if w < 3 or h < 3:
-                context.abort(grpc.StatusCode.INVALID_ARGUMENT, f"Image too small ({w}x{h})")
+        image = _validate_image_input(request.image_data, context)
+        if image.mode != 'RGB':
+            image = image.convert('RGB')
+        w, h = image.size
+        if w < 3 or h < 3:
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, f"Image too small ({w}x{h})")
 
+        try:
             # Sharpness: Laplacian variance on grayscale
             gray = np.array(image.convert('L'))
             sharpness = float(cv2.Laplacian(gray, cv2.CV_64F).var())
@@ -301,8 +305,6 @@ class AIServiceServicer(ai_service_pb2_grpc.AIServiceServicer):
                 width=w,
                 height=h,
             )
-        except grpc.RpcError:
-            raise
         except Exception as e:
             logger.error(f"Error in gRPC QualityScore: {e}", exc_info=True)
             context.abort(grpc.StatusCode.INTERNAL, str(e))
@@ -314,13 +316,13 @@ class AIServiceServicer(ai_service_pb2_grpc.AIServiceServicer):
         if mode not in ('auto', 'exposure', 'restore', 'all'):
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, f"Invalid mode '{mode}'. Use auto, exposure, restore, or all")
 
-        try:
-            img = _validate_image_input(request.image_data, context)
-            if img.mode != 'RGB':
-                img = img.convert('RGB')
-            if img.width < 3 or img.height < 3:
-                context.abort(grpc.StatusCode.INVALID_ARGUMENT, f"Image too small ({img.width}x{img.height})")
+        img = _validate_image_input(request.image_data, context)
+        if img.mode != 'RGB':
+            img = img.convert('RGB')
+        if img.width < 3 or img.height < 3:
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, f"Image too small ({img.width}x{img.height})")
 
+        try:
             result = np.array(img)
             operations = []
 
@@ -372,8 +374,6 @@ class AIServiceServicer(ai_service_pb2_grpc.AIServiceServicer):
             buf = io.BytesIO()
             Image.fromarray(result).save(buf, format='JPEG', quality=92)
             return ai_service_pb2.EnhanceImageResponse(image_data=buf.getvalue(), operations=operations)
-        except grpc.RpcError:
-            raise
         except Exception as e:
             logger.error(f"Error in gRPC EnhanceImage: {e}", exc_info=True)
             context.abort(grpc.StatusCode.INTERNAL, str(e))
