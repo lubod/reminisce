@@ -97,6 +97,21 @@ impl ConnectionHandler {
         match msg {
             Message::Handshake { node_id, version } => {
                 info!("[CONN] Handshake from {}, version {}", hex::encode(node_id), version);
+                // Enforce protocol version compatibility (wire format stability).
+                if version != crate::PROTOCOL_VERSION {
+                    warn!(
+                        "[CONN] Protocol version mismatch: peer {}, peer version {}, local {} — rejecting",
+                        hex::encode(node_id), version, crate::PROTOCOL_VERSION
+                    );
+                    let _ = Protocol::send(&mut send, &Message::Error {
+                        code: 426,
+                        message: format!(
+                            "Protocol version mismatch: peer {}, local {}",
+                            version, crate::PROTOCOL_VERSION
+                        ),
+                    }).await;
+                    return Ok(());
+                }
                 let response = Message::HandshakeAck {
                     node_id: identity.node_id(),
                 };
@@ -122,21 +137,50 @@ impl ConnectionHandler {
                 Protocol::send(&mut send, &response).await?;
             }
 
-            Message::StoreShardStreamInit { file_hash, shard_index, .. } => {
-                // Stable temp-file ID derived from (file_hash, shard_index) avoids collisions
-                // between concurrent uploads of different files or shards.
+            Message::StoreShardStreamInit { file_hash, shard_index, token, .. } => {
+                // Temp-file ID derived from (file_hash, shard_index) PLUS a per-connection
+                // random salt: deterministic addressing avoids collisions between different
+                // streams, while the salt prevents two concurrent duplicate uploads of the
+                // same (file_hash, shard_index) from interleaving appends into one file.
+                let mut salt = [0u8; 16];
+                rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut salt);
                 let temp_id: [u8; 32] = blake3::hash(
-                    &[file_hash.as_slice(), &[shard_index]].concat()
+                    &[file_hash.as_slice(), &[shard_index], &salt].concat()
                 ).into();
                 let temp_path = storage.temp_path(&temp_id);
+
+                // Authenticate the stream BEFORE accepting any data: the token is bound
+                // to blake3(file_hash || shard_index). Without a valid token an
+                // unauthenticated peer could stream unbounded data to fill the disk.
+                let binding: [u8; 32] = blake3::hash(
+                    &[file_hash.as_slice(), &[shard_index]].concat()
+                ).into();
+                if !crate::crypto::verify_shard_token(&token, &binding, allowed_owner_id.as_ref()) {
+                    warn!("[CONN] StoreShardStreamInit token verification failed (shard {}) — rejecting", shard_index);
+                    let _ = Protocol::send(&mut send, &Message::Error {
+                        code: 401,
+                        message: "Unauthorized shard stream".to_string(),
+                    }).await;
+                    return Ok(());
+                }
 
                 Protocol::send(&mut send, &Message::StoreShardStreamAck { ready: true }).await?;
 
                 // Accumulate BLAKE3 as chunks arrive — avoids re-reading the full shard at finalize.
                 let mut hasher = blake3::Hasher::new();
+                let mut received_bytes: u64 = 0;
                 loop {
                     match Protocol::receive(&mut recv).await {
                         Ok(Message::StoreShardChunk { data }) => {
+                            received_bytes = received_bytes.saturating_add(data.len() as u64);
+                            // Bound total disk used per shard stream regardless of what the
+                            // init declared (defense against disk-exhaustion DoS).
+                            if received_bytes > crate::storage::MAX_SHARD_BYTES {
+                                warn!("[CONN] Shard {} exceeded max size ({} bytes) — aborting stream", shard_index, received_bytes);
+                                let _ = tokio::fs::remove_file(&temp_path).await;
+                                let _ = Protocol::send(&mut send, &Message::StoreShardStreamResponse { success: false }).await;
+                                break;
+                            }
                             hasher.update(&data);
                             if let Err(e) = storage.store_stream_chunk(&temp_path, &data).await {
                                 error!("[CONN] Chunk write failed for shard {}: {}", shard_index, e);

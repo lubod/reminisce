@@ -540,7 +540,12 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
         );
 
         // Coordinator client — cross-network peer discovery + reverse tunnel
-        if let Some(coord_str) = &config.p2p_coordinator_addr {
+        if config.p2p_coordinator_addr.is_some() && config.p2p_coordinator_node_id.is_none() {
+            error!("p2p_coordinator_addr is set but p2p_coordinator_node_id is missing — cannot verify coordinator identity; coordinator/tunnel disabled (add p2p_coordinator_node_id to config)");
+        }
+        if let (Some(coord_str), Some(coord_node_id)) =
+            (&config.p2p_coordinator_addr, &config.p2p_coordinator_node_id)
+        {
             match tokio::net::lookup_host(coord_str.as_str()).await {
                 Ok(mut addrs) => match addrs.next() {
                     Some(coord_addr) => {
@@ -549,6 +554,7 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
                         // Register with coordinator and sync peer list
                         np2p::network::coordinator::start_coordinator_client(
                             coord_addr,
+                            coord_node_id,
                             p2p_service.node().clone(),
                             node_id.clone(),
                             None, // home server doesn't expose a storage port
@@ -560,6 +566,7 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
                         if let Some(local_port) = config.p2p_tunnel_local_port {
                             np2p::network::tunnel::start_tunnel_client(
                                 coord_addr,
+                                coord_node_id,
                                 p2p_service.node().clone(),
                                 (*p2p_service.identity()).clone(),
                                 local_port,

@@ -57,9 +57,12 @@ fn mesh_key(api_secret: &str) -> [u8; 32] {
 }
 
 /// Encrypt a manifest's JSON bytes for storage on the P2P mesh.
-pub fn encrypt_for_mesh(json: &[u8], api_secret: &str) -> Result<Vec<u8>, String> {
+///
+/// `nonce_ctx` must be unique per manifest (e.g. `backup_hash`) so that no two
+/// manifests share a (key, nonce) pair — the mesh key is constant per deployment.
+pub fn encrypt_for_mesh(json: &[u8], api_secret: &str, nonce_ctx: &[u8]) -> Result<Vec<u8>, String> {
     let key = mesh_key(api_secret);
-    np2p::storage::encryption::encrypt(json, &key, &key).map_err(|e| e.to_string())
+    np2p::storage::encryption::encrypt(json, &key, nonce_ctx).map_err(|e| e.to_string())
 }
 
 /// Decrypt a manifest retrieved from the P2P mesh.
@@ -319,15 +322,20 @@ mod tests {
     }
 
     #[test]
-    fn test_mesh_encryption_roundtrip() {
+    fn test_mesh_encryption_roundtrip_and_unique_nonce() {
         let json = br#"{"backup_hash":"abc","shards":[]}"#;
-        let encrypted = encrypt_for_mesh(json, API_SECRET).unwrap();
+        let encrypted = encrypt_for_mesh(json, API_SECRET, b"backup-a").unwrap();
         assert_ne!(encrypted, json);
         let decrypted = decrypt_from_mesh(&encrypted, API_SECRET).unwrap();
         assert_eq!(decrypted, json);
 
         // A different secret cannot decrypt it.
         assert!(decrypt_from_mesh(&encrypted, "wrong_secret").is_err());
+
+        // Two manifests with the same key but different nonce contexts must not
+        // produce identical ciphertexts (no nonce reuse).
+        let encrypted2 = encrypt_for_mesh(json, API_SECRET, b"backup-b").unwrap();
+        assert_ne!(encrypted, encrypted2);
     }
 
     #[test]

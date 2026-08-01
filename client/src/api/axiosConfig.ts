@@ -2,23 +2,18 @@ import axios from "axios";
 
 const instance = axios.create({
   baseURL: "/api", // All requests will be prefixed with /api
-  withCredentials: true,
+  withCredentials: true, // send the httpOnly session cookie
 });
 
-// Add a request interceptor to include the token in headers
+// Authentication is delegated to the backend's httpOnly, SameSite session cookie
+// (set on login). No token is read from or written to localStorage, so JWTs are not
+// exposed to XSS/the DOM.
 instance.interceptors.request.use(
-  (config) => {
-    const token = localStorage.getItem("token");
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`;
-    }
-    return config;
-  },
+  (config) => config,
   (error) => {
     return Promise.reject(error);
   }
 );
-
 
 // Add a response interceptor to handle 401 errors
 instance.interceptors.response.use(
@@ -35,9 +30,7 @@ instance.interceptors.response.use(
       !error.config?.url?.includes("/auth/me") &&
       window.location.pathname !== "/login"
     ) {
-      // Clear token from localStorage
-      localStorage.removeItem("token");
-      // Redirect to the login page
+      // Session cookie expired/invalid — redirect to the login page
       window.location.href = "/login";
     }
     return Promise.reject(error);

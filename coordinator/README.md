@@ -30,3 +30,6 @@ Node A (behind NAT) ──▶ Coordinator (:5055 QUIC / :8443 TCP) ──▶ Nod
 
 ## Invariants & Gotchas
 - **Identity Enforcement**: `RegisterNode` requests MUST verify signature against the claimed Ed25519 node public key to prevent impersonation attacks in the peer registry.
+- **Tunnel backend gating**: Tunnel registration is refused unless `--allowed-tunnel-node-id` is set OR `--allow-any-tunnel` is explicitly given (a rogue peer could otherwise register as the tunnel backend and hijack Android→home traffic). When set, TCP tunnel connections route to exactly that node's entry.
+- **Rate limiting & concurrency**: Registrations/discovery/relay are rate-limited per source IP (fixed 1 s window), and concurrent connections are capped at 512 — this bounds the memory-DoS surface from unbounded `tokio::spawn`.
+- **Symptoms**: remember `--allowed-tunnel-node-id` must be the home server's 64-hex Node ID (printed in the home server startup log).

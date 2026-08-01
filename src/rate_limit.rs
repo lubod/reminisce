@@ -49,17 +49,42 @@ struct LimiterState {
 
 #[derive(Clone)]
 pub struct RateLimiter {
-    // Shared state across workers
-    state: Arc<Mutex<LimiterState>>,
+    // Sharded state: each IP is pinned to one shard so concurrent requests from
+    // different IPs do not contend on a single global mutex.
+    shards: Arc<Vec<Mutex<LimiterState>>>,
+}
+
+const SHARD_COUNT: usize = 16;
+
+fn shard_index(ip: IpAddr) -> usize {
+    // FNV-1a over the IP octets, folded into the shard space.
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    let octets: [u8; 16] = match ip {
+        IpAddr::V4(v4) => {
+            let mut o = [0u8; 16];
+            o[12..16].copy_from_slice(&v4.octets());
+            o
+        }
+        IpAddr::V6(v6) => v6.octets(),
+    };
+    for b in octets {
+        hash ^= b as u64;
+        hash = hash.wrapping_mul(0x100_0000_01b3);
+    }
+    (hash as usize) % SHARD_COUNT
 }
 
 impl RateLimiter {
     pub fn new() -> Self {
         Self {
-            state: Arc::new(Mutex::new(LimiterState {
-                buckets: HashMap::new(),
-                last_cleanup: Instant::now(),
-            })),
+            shards: Arc::new(
+                (0..SHARD_COUNT)
+                    .map(|_| Mutex::new(LimiterState {
+                        buckets: HashMap::new(),
+                        last_cleanup: Instant::now(),
+                    }))
+                    .collect(),
+            ),
         }
     }
 }
@@ -85,14 +110,14 @@ where
     fn new_transform(&self, service: S) -> Self::Future {
         ready(Ok(RateLimitMiddleware {
             service,
-            state: self.state.clone(),
+            limiter: self.clone(),
         }))
     }
 }
 
 pub struct RateLimitMiddleware<S> {
     service: S,
-    state: Arc<Mutex<LimiterState>>,
+    limiter: RateLimiter,
 }
 
 impl<S, B> Service<ServiceRequest> for RateLimitMiddleware<S>
@@ -165,7 +190,11 @@ where
             (2000.0, 100.0)
         };
 
-        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut state = self
+            .limiter
+            .shards[shard_index(ip)]
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
 
         const MAX_BUCKETS: usize = 10000;
         let now = Instant::now();

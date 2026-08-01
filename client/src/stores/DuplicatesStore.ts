@@ -65,10 +65,8 @@ export class DuplicatesStore {
     }
 
     private authUrl(url: string): string {
-        const token = this.rootStore.authStore.imageToken;
-        if (!token) return url;
-        const sep = url.includes("?") ? "&" : "?";
-        return `${url}${sep}token=${token}`;
+        // Authenticated by the httpOnly session cookie — no token in the URL.
+        return url;
     }
 
     private withAuthUrls(groups: DuplicateGroup[]): DuplicateGroup[] {

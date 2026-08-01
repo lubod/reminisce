@@ -43,6 +43,7 @@ pub fn create_test_config() -> config::Config {
         p2p_deterministic_identity: false,
         p2p_discovery_port: 5066,
         p2p_coordinator_addr: None,
+        p2p_coordinator_node_id: None,
         p2p_tunnel_local_port: None,
         p2p_tunnel_public_url: None,
         p2p_namespace: "test".to_string(),

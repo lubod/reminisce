@@ -10,10 +10,12 @@ Serves gRPC endpoints defined in proto/get_ai_service().proto:
 - HealthCheck
 """
 
+import hmac
 import io
 import logging
 import os
 import sys
+import threading
 from concurrent import futures
 import cv2
 import grpc
@@ -34,54 +36,89 @@ def get_ai_service():
 
 logger = logging.getLogger(__name__)
 
+# gRPC dispatches RPCs on a ThreadPoolExecutor (default 4 workers) and the torch models
+# are shared across those threads without internal serialization. A global lock around
+# every model forward prevents concurrent threads from racing on the same weights.
+_MODEL_LOCK = threading.Lock()
+
+# Server-side image dimension cap. Without this a single dense image can exhaust the
+# process RAM during decode + inference (OOM). 4 MP is far beyond real photo needs.
+MAX_IMAGE_PIXELS = 4_000_000
+
+# Input byte cap for image payloads — far below the 64 MB gRPC limit. A real photo is a
+# few MB; anything near 64 MB is an abuse vector.
+MAX_IMAGE_INPUT_BYTES = 25 * 1024 * 1024
+
+
 def check_api_key(context):
-    metadata = dict(context.invocation_metadata())
     expected_key = os.environ.get('API_SECRET_KEY') or os.environ.get('REMINISCE_API_SECRET_KEY')
     if not expected_key:
-        return True # If not configured, allow (development fallback)
-    
+        # Fail closed: without a configured key we cannot authenticate — refuse the call.
+        context.abort(grpc.StatusCode.UNAVAILABLE, "Server not configured with an API secret key")
+        return False
+
+    metadata = dict(context.invocation_metadata())
     auth_val = metadata.get('x-api-key') or metadata.get('authorization')
     if auth_val and auth_val.startswith('Bearer '):
         auth_val = auth_val.split(' ')[1]
-    
-    if auth_val != expected_key:
+
+    # Constant-time comparison prevents timing side-channels on the API key.
+    if not auth_val or not hmac.compare_digest(auth_val, expected_key):
         context.abort(grpc.StatusCode.UNAUTHENTICATED, "Invalid or missing API key")
         return False
     return True
 
 
+def _validate_image_input(request_image_data, context):
+    """Reject missing / oversized inputs before decode. Aborts with INVALID_ARGUMENT."""
+    if not request_image_data:
+        context.abort(grpc.StatusCode.INVALID_ARGUMENT, "Missing image_data")
+    if len(request_image_data) > MAX_IMAGE_INPUT_BYTES:
+        context.abort(
+            grpc.StatusCode.INVALID_ARGUMENT,
+            f"image_data too large ({len(request_image_data)} bytes > {MAX_IMAGE_INPUT_BYTES})",
+        )
+    image = Image.open(io.BytesIO(request_image_data))
+    if image.width * image.height > MAX_IMAGE_PIXELS:
+        context.abort(
+            grpc.StatusCode.INVALID_ARGUMENT,
+            f"Image too large ({image.width}x{image.height} pixels > {MAX_IMAGE_PIXELS})",
+        )
+    return image
+
+
 class AIServiceServicer(ai_service_pb2_grpc.AIServiceServicer):
-    
+
     def EmbedImage(self, request, context):
         check_api_key(context)
         if get_ai_service().siglip_model is None:
             context.abort(grpc.StatusCode.UNAVAILABLE, "SigLIP model not loaded")
 
-        if not request.image_data:
-            context.abort(grpc.StatusCode.INVALID_ARGUMENT, "Missing image_data")
-
         try:
-            image = Image.open(io.BytesIO(request.image_data))
+            image = _validate_image_input(request.image_data, context)
             if image.mode != 'RGB':
                 image = image.convert('RGB')
-            
+
             if image.width < 3 or image.height < 3:
                 context.abort(grpc.StatusCode.INVALID_ARGUMENT, f"Image too small ({image.width}x{image.height})")
 
-            inputs = get_ai_service().siglip_processor(images=image, return_tensors="pt").to(get_ai_service().device)
-            model_dtype = next(get_ai_service().siglip_model.parameters()).dtype
-            inputs = {k: v.to(model_dtype) if v.is_floating_point() else v for k, v in inputs.items()}
+            with _MODEL_LOCK:
+                inputs = get_ai_service().siglip_processor(images=image, return_tensors="pt").to(get_ai_service().device)
+                model_dtype = next(get_ai_service().siglip_model.parameters()).dtype
+                inputs = {k: v.to(model_dtype) if v.is_floating_point() else v for k, v in inputs.items()}
 
-            with torch.no_grad():
-                image_features = get_ai_service().siglip_model.get_image_features(**inputs)
-                if hasattr(image_features, "pooler_output"):
-                    image_features = image_features.pooler_output
-                elif not torch.is_tensor(image_features) and hasattr(image_features, "last_hidden_state"):
-                    image_features = image_features.last_hidden_state[:, 0, :]
-                image_features = image_features / image_features.norm(dim=-1, keepdim=True)
+                with torch.no_grad():
+                    image_features = get_ai_service().siglip_model.get_image_features(**inputs)
+                    if hasattr(image_features, "pooler_output"):
+                        image_features = image_features.pooler_output
+                    elif not torch.is_tensor(image_features) and hasattr(image_features, "last_hidden_state"):
+                        image_features = image_features.last_hidden_state[:, 0, :]
+                    image_features = image_features / image_features.norm(dim=-1, keepdim=True)
 
-            embedding = image_features.cpu().numpy().flatten().tolist()
+                embedding = image_features.cpu().numpy().flatten().tolist()
             return ai_service_pb2.EmbedImageResponse(embedding=embedding)
+        except grpc.RpcError:
+            raise  # propagate context.abort() status instead of downgrading to INTERNAL
         except Exception as e:
             logger.error(f"Error in gRPC EmbedImage: {e}", exc_info=True)
             context.abort(grpc.StatusCode.INTERNAL, str(e))
@@ -95,38 +132,39 @@ class AIServiceServicer(ai_service_pb2_grpc.AIServiceServicer):
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, "Missing text")
 
         try:
-            inputs = get_ai_service().siglip_processor(text=[request.text], return_tensors="pt", padding="max_length").to(get_ai_service().device)
-            model_dtype = next(get_ai_service().siglip_model.parameters()).dtype
-            inputs = {k: v.to(model_dtype) if v.is_floating_point() else v for k, v in inputs.items()}
+            with _MODEL_LOCK:
+                inputs = get_ai_service().siglip_processor(text=[request.text], return_tensors="pt", padding="max_length").to(get_ai_service().device)
+                model_dtype = next(get_ai_service().siglip_model.parameters()).dtype
+                inputs = {k: v.to(model_dtype) if v.is_floating_point() else v for k, v in inputs.items()}
 
-            with torch.no_grad():
-                text_features = get_ai_service().siglip_model.get_text_features(**inputs)
-                if hasattr(text_features, "pooler_output"):
-                    text_features = text_features.pooler_output
-                elif not torch.is_tensor(text_features) and hasattr(text_features, "last_hidden_state"):
-                    text_features = text_features.last_hidden_state[:, 0, :]
-                text_features = text_features / text_features.norm(dim=-1, keepdim=True)
+                with torch.no_grad():
+                    text_features = get_ai_service().siglip_model.get_text_features(**inputs)
+                    if hasattr(text_features, "pooler_output"):
+                        text_features = text_features.pooler_output
+                    elif not torch.is_tensor(text_features) and hasattr(text_features, "last_hidden_state"):
+                        text_features = text_features.last_hidden_state[:, 0, :]
+                    text_features = text_features / text_features.norm(dim=-1, keepdim=True)
 
-            embedding = text_features.cpu().numpy().flatten().tolist()
+                embedding = text_features.cpu().numpy().flatten().tolist()
             return ai_service_pb2.EmbedTextResponse(embedding=embedding)
+        except grpc.RpcError:
+            raise
         except Exception as e:
             logger.error(f"Error in gRPC EmbedText: {e}", exc_info=True)
             context.abort(grpc.StatusCode.INTERNAL, str(e))
 
     def DescribeImage(self, request, context):
         check_api_key(context)
-        if not request.image_data:
-            context.abort(grpc.StatusCode.INVALID_ARGUMENT, "Missing image_data")
 
         try:
-            image = Image.open(io.BytesIO(request.image_data))
+            image = _validate_image_input(request.image_data, context)
             if image.mode != 'RGB':
                 image = image.convert('RGB')
 
             if request.use_qwen:
                 if get_ai_service().vlm_model is None:
                     context.abort(grpc.StatusCode.UNAVAILABLE, "Qwen VLM model not loaded")
-                
+
                 from qwen_vl_utils import process_vision_info
                 messages = [
                     {
@@ -137,24 +175,25 @@ class AIServiceServicer(ai_service_pb2_grpc.AIServiceServicer):
                         ],
                     }
                 ]
-                text = get_ai_service().vlm_processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-                image_inputs, video_inputs = process_vision_info(messages)
-                inputs = get_ai_service().vlm_processor(
-                    text=[text],
-                    images=image_inputs,
-                    videos=video_inputs,
-                    padding=True,
-                    return_tensors="pt"
-                ).to(get_ai_service().device)
+                with _MODEL_LOCK:
+                    text = get_ai_service().vlm_processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+                    image_inputs, video_inputs = process_vision_info(messages)
+                    inputs = get_ai_service().vlm_processor(
+                        text=[text],
+                        images=image_inputs,
+                        videos=video_inputs,
+                        padding=True,
+                        return_tensors="pt"
+                    ).to(get_ai_service().device)
 
-                with torch.no_grad():
-                    generated_ids = get_ai_service().vlm_model.generate(**inputs, max_new_tokens=128)
-                    generated_ids_trimmed = [
-                        out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
-                    ]
-                    output_text = get_ai_service().vlm_processor.batch_decode(
-                        generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
-                    )[0]
+                    with torch.no_grad():
+                        generated_ids = get_ai_service().vlm_model.generate(**inputs, max_new_tokens=128)
+                        generated_ids_trimmed = [
+                            out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
+                        ]
+                        output_text = get_ai_service().vlm_processor.batch_decode(
+                            generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
+                        )[0]
                 model_used = "Qwen2.5-VL-3B"
             else:
                 if get_ai_service().smolvlm_model is None:
@@ -169,19 +208,22 @@ class AIServiceServicer(ai_service_pb2_grpc.AIServiceServicer):
                         ]
                     }
                 ]
-                prompt = get_ai_service().smolvlm_processor.apply_chat_template(messages, add_generation_prompt=True)
-                inputs = get_ai_service().smolvlm_processor(text=prompt, images=image, return_tensors="pt").to(get_ai_service().device)
+                with _MODEL_LOCK:
+                    prompt = get_ai_service().smolvlm_processor.apply_chat_template(messages, add_generation_prompt=True)
+                    inputs = get_ai_service().smolvlm_processor(text=prompt, images=image, return_tensors="pt").to(get_ai_service().device)
 
-                with torch.no_grad():
-                    generated_ids = get_ai_service().smolvlm_model.generate(**inputs, max_new_tokens=128)
-                    output_text = get_ai_service().smolvlm_processor.batch_decode(
-                        generated_ids, skip_special_tokens=True
-                    )[0]
-                    if "Assistant:" in output_text:
-                        output_text = output_text.split("Assistant:")[-1].strip()
+                    with torch.no_grad():
+                        generated_ids = get_ai_service().smolvlm_model.generate(**inputs, max_new_tokens=128)
+                        output_text = get_ai_service().smolvlm_processor.batch_decode(
+                            generated_ids, skip_special_tokens=True
+                        )[0]
+                        if "Assistant:" in output_text:
+                            output_text = output_text.split("Assistant:")[-1].strip()
                 model_used = "SmolVLM-500M"
 
             return ai_service_pb2.DescribeImageResponse(description=output_text.strip(), model_used=model_used)
+        except grpc.RpcError:
+            raise
         except Exception as e:
             logger.error(f"Error in gRPC DescribeImage: {e}", exc_info=True)
             context.abort(grpc.StatusCode.INTERNAL, str(e))
@@ -191,17 +233,16 @@ class AIServiceServicer(ai_service_pb2_grpc.AIServiceServicer):
         if get_ai_service().face_app is None:
             context.abort(grpc.StatusCode.UNAVAILABLE, "InsightFace model not loaded")
 
-        if not request.image_data:
-            context.abort(grpc.StatusCode.INVALID_ARGUMENT, "Missing image_data")
-
         try:
-            image_pil = Image.open(io.BytesIO(request.image_data))
+            image_pil = _validate_image_input(request.image_data, context)
             if image_pil.mode != 'RGB':
                 image_pil = image_pil.convert('RGB')
             image_np = np.array(image_pil)
             image_bgr = cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR)
 
-            faces = get_ai_service().face_app.get(image_bgr)
+            with _MODEL_LOCK:
+                faces = get_ai_service().face_app.get(image_bgr)
+
             pb_faces = []
             for face in faces:
                 bbox = face.bbox.astype(int).tolist()
@@ -218,6 +259,8 @@ class AIServiceServicer(ai_service_pb2_grpc.AIServiceServicer):
                 ))
 
             return ai_service_pb2.DetectFacesResponse(faces=pb_faces)
+        except grpc.RpcError:
+            raise
         except Exception as e:
             logger.error(f"Error in gRPC DetectFaces: {e}", exc_info=True)
             context.abort(grpc.StatusCode.INTERNAL, str(e))
@@ -227,11 +270,9 @@ class AIServiceServicer(ai_service_pb2_grpc.AIServiceServicer):
         svc = get_ai_service()
         if svc.siglip_model is None:
             context.abort(grpc.StatusCode.UNAVAILABLE, "SigLIP model not loaded")
-        if not request.image_data:
-            context.abort(grpc.StatusCode.INVALID_ARGUMENT, "Missing image_data")
 
         try:
-            image = Image.open(io.BytesIO(request.image_data))
+            image = _validate_image_input(request.image_data, context)
             if image.mode != 'RGB':
                 image = image.convert('RGB')
             w, h = image.size
@@ -243,15 +284,16 @@ class AIServiceServicer(ai_service_pb2_grpc.AIServiceServicer):
             sharpness = float(cv2.Laplacian(gray, cv2.CV_64F).var())
 
             # Aesthetic: zero-shot SigLIP text comparison
-            inputs = svc.siglip_processor(text=svc.QUALITY_TEXTS, images=image, return_tensors="pt", padding="max_length")
-            inputs = {k: v.to(svc.device) for k, v in inputs.items()}
-            model_dtype = next(svc.siglip_model.parameters()).dtype
-            inputs = {k: v.to(model_dtype) if v.is_floating_point() else v for k, v in inputs.items()}
+            with _MODEL_LOCK:
+                inputs = svc.siglip_processor(text=svc.QUALITY_TEXTS, images=image, return_tensors="pt", padding="max_length")
+                inputs = {k: v.to(svc.device) for k, v in inputs.items()}
+                model_dtype = next(svc.siglip_model.parameters()).dtype
+                inputs = {k: v.to(model_dtype) if v.is_floating_point() else v for k, v in inputs.items()}
 
-            with torch.no_grad():
-                outputs = svc.siglip_model(**inputs)
-            probs = outputs.logits_per_image.softmax(dim=-1)[0]
-            aesthetic_score = float(probs[0].item()) * 10.0  # 0-10
+                with torch.no_grad():
+                    outputs = svc.siglip_model(**inputs)
+                probs = outputs.logits_per_image.softmax(dim=-1)[0]
+                aesthetic_score = float(probs[0].item()) * 10.0  # 0-10
 
             return ai_service_pb2.QualityScoreResponse(
                 aesthetic_score=aesthetic_score,
@@ -259,21 +301,21 @@ class AIServiceServicer(ai_service_pb2_grpc.AIServiceServicer):
                 width=w,
                 height=h,
             )
+        except grpc.RpcError:
+            raise
         except Exception as e:
             logger.error(f"Error in gRPC QualityScore: {e}", exc_info=True)
             context.abort(grpc.StatusCode.INTERNAL, str(e))
 
     def EnhanceImage(self, request, context):
         check_api_key(context)
-        if not request.image_data:
-            context.abort(grpc.StatusCode.INVALID_ARGUMENT, "Missing image_data")
 
         mode = request.mode or 'auto'
         if mode not in ('auto', 'exposure', 'restore', 'all'):
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, f"Invalid mode '{mode}'. Use auto, exposure, restore, or all")
 
         try:
-            img = Image.open(io.BytesIO(request.image_data))
+            img = _validate_image_input(request.image_data, context)
             if img.mode != 'RGB':
                 img = img.convert('RGB')
             if img.width < 3 or img.height < 3:
@@ -330,6 +372,8 @@ class AIServiceServicer(ai_service_pb2_grpc.AIServiceServicer):
             buf = io.BytesIO()
             Image.fromarray(result).save(buf, format='JPEG', quality=92)
             return ai_service_pb2.EnhanceImageResponse(image_data=buf.getvalue(), operations=operations)
+        except grpc.RpcError:
+            raise
         except Exception as e:
             logger.error(f"Error in gRPC EnhanceImage: {e}", exc_info=True)
             context.abort(grpc.StatusCode.INTERNAL, str(e))
@@ -360,6 +404,11 @@ def serve_grpc(port=50051, max_workers=4):
 
 
 if __name__ == '__main__':
+    if not os.environ.get('API_SECRET_KEY') and not os.environ.get('REMINISCE_API_SECRET_KEY'):
+        logger.warning("API_SECRET_KEY/REMINISCE_API_SECRET_KEY not set — the gRPC server will refuse all requests (fail closed).")
+        # Do not exit: the warning is surfaced so operators notice the missing config,
+        # but the server still starts so health checks can run.
+
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     logger.info("Starting AI Service models initialization...")
     get_ai_service().load_models()

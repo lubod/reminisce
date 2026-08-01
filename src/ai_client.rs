@@ -11,6 +11,25 @@ use tonic::Request;
 
 const MAX_MESSAGE_SIZE: usize = 64 * 1024 * 1024;
 
+/// True if a gRPC error string (from `tonic::Status`) represents a permanent, non-retryable
+/// failure. The AI server returns `INVALID_ARGUMENT` for malformed/oversized inputs and
+/// `UNAUTHENTICATED`/`PERMISSION_DENIED` for auth problems — these will never succeed on
+/// retry. Transport-level codes (Unavailable, DeadlineExceeded, …) are transient and are
+/// deliberately NOT treated as permanent so workers retry them.
+pub fn is_permanent_failure(err: &str) -> bool {
+    const PERMANENT_CODES: [&str; 6] = [
+        "InvalidArgument",
+        "PermissionDenied",
+        "Unauthenticated",
+        "Unimplemented",
+        "FailedPrecondition",
+        "OutOfRange",
+    ];
+    PERMANENT_CODES.iter().any(|code| err.contains(code))
+}
+
+static SHARED: std::sync::OnceLock<std::sync::Arc<AiClient>> = std::sync::OnceLock::new();
+
 #[derive(Clone)]
 pub struct AiClient {
     grpc_url: String,
@@ -28,6 +47,18 @@ impl AiClient {
             api_key,
             channel: Arc::new(OnceCell::new()),
         }
+    }
+
+    /// Process-wide shared `AiClient`, so the underlying tonic channel (the `OnceCell`
+    /// inside) is actually reused across RPCs instead of opening a fresh connection per
+    /// request. Constructed once from the first seen `Config`.
+    pub fn shared(config: &crate::config::Config) -> std::sync::Arc<AiClient> {
+        SHARED
+            .get_or_init(|| {
+                let api_key = config.get_api_key().unwrap_or("").to_string();
+                std::sync::Arc::new(AiClient::new(config.ai_grpc_url.clone(), api_key))
+            })
+            .clone()
     }
 
     async fn channel(&self) -> Result<Channel, String> {

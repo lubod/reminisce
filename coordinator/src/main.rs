@@ -9,15 +9,53 @@ use std::collections::HashMap;
 use std::io::BufReader;
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
-use std::time::Instant;
+use std::sync::{Arc, Mutex, RwLock};
+use std::time::{Duration, Instant};
 use clap::Parser;
 use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::sync::Semaphore;
 use tokio_rustls::TlsAcceptor;
 use tracing::{info, warn};
 use np2p::crypto::{NodeIdentity, verify_signature};
 use np2p::network::transport::Node;
 use np2p::network::protocol::{Message, Protocol};
+
+/// Maximum concurrent QUIC connections the coordinator will serve. Bounds the
+/// unbounded `tokio::spawn` per connection (memory-DoS protection).
+const MAX_CONNECTIONS: usize = 512;
+
+/// Fixed-window per-IP rate limiter for registration / discovery / relay requests.
+/// Prevents an attacker from flooding the coordinator with unauthenticated messages.
+struct RateLimiter {
+    state: Arc<Mutex<HashMap<IpAddr, (u32, Instant)>>>,
+}
+
+impl RateLimiter {
+    const WINDOW: Duration = Duration::from_secs(1);
+    const MAX_PER_WINDOW: u32 = 20;
+
+    fn new() -> Self {
+        Self {
+            state: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    /// Returns true if `ip` is within its per-window request budget.
+    fn allow(&self, ip: IpAddr) -> bool {
+        let now = Instant::now();
+        let mut map = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        // Opportunistic prune so the map cannot grow without bound.
+        if map.len() > 100_000 {
+            map.retain(|_, (_, last)| now.duration_since(*last) < Duration::from_secs(60));
+        }
+        let entry = map.entry(ip).or_insert((0, now));
+        if now.duration_since(entry.1) >= Self::WINDOW {
+            *entry = (0, now);
+        }
+        entry.0 += 1;
+        entry.0 <= Self::MAX_PER_WINDOW
+    }
+}
 
 #[derive(Parser)]
 #[command(about = "Reminisce P2P coordinator — runs on VPS")]
@@ -46,9 +84,15 @@ struct Args {
     peer_ttl_secs: u64,
 
     /// Hex-encoded Ed25519 public key (node_id) of the home server allowed to register the tunnel.
-    /// If not set, any node can register (insecure). Get this from the home server startup log.
+    /// If not set, tunnel registration is REFUSED unless --allow-any-tunnel is given.
+    /// Get this from the home server startup log.
     #[arg(long)]
     allowed_tunnel_node_id: Option<String>,
+
+    /// Explicitly allow ANY node to register as the tunnel backend (insecure — a rogue
+    /// peer could hijack Android→home traffic). Only set this on trusted/private setups.
+    #[arg(long)]
+    allow_any_tunnel: bool,
 }
 
 // ── Peer registry ────────────────────────────────────────────────────────────
@@ -201,7 +245,17 @@ async fn handle_stream(
     node: Node,
     channels: ChannelMap,
     data_dir: PathBuf,
+    rate_limiter: Arc<RateLimiter>,
 ) {
+    // Guard every registration / discovery / relay message with a per-IP rate limit.
+    if !rate_limiter.allow(remote_ip) {
+        let _ = Protocol::send(&mut send, &Message::Error {
+            code: 429,
+            message: "Rate limit exceeded".into(),
+        }).await;
+        return;
+    }
+
     let response = match msg {
         Message::RegisterNode { node_id, quic_port, namespace } => {
             // Verify that the node_id matches the peer certificate's public key (C2)
@@ -406,7 +460,14 @@ async fn pipe<R, W>(
 
 /// Listen on a TCP port; pipe each connection to the home server via QUIC tunnel.
 /// If `tls_acceptor` is provided, terminates TLS — use with a Let's Encrypt cert.
-fn start_tcp_tunnel_listener(tunnel_port: u16, tunnels: TunnelMap, tls_acceptor: Option<TlsAcceptor>) {
+/// When `allowed_tunnel_node_id` is set, connections are routed to exactly that node's
+/// tunnel entry; otherwise (only possible with `--allow-any-tunnel`) the first entry is used.
+fn start_tcp_tunnel_listener(
+    tunnel_port: u16,
+    tunnels: TunnelMap,
+    tls_acceptor: Option<TlsAcceptor>,
+    allowed_tunnel_node_id: Option<String>,
+) {
     let tls_acceptor = tls_acceptor.map(Arc::new);
 
     tokio::spawn(async move {
@@ -423,11 +484,15 @@ fn start_tcp_tunnel_listener(tunnel_port: u16, tunnels: TunnelMap, tls_acceptor:
             let Ok((tcp_stream, client_addr)) = listener.accept().await else { continue };
             let tunnels = tunnels.clone();
             let tls = tls_acceptor.clone();
+            let allowed = allowed_tunnel_node_id.clone();
 
             tokio::spawn(async move {
                 let tunnel_conn = {
                     let map = tunnels.read().unwrap_or_else(|e| e.into_inner());
-                    map.values().next().cloned()
+                    match &allowed {
+                        Some(node_id) => map.get(node_id).cloned(),
+                        None => map.values().next().cloned(),
+                    }
                 };
                 let tunnel_conn = match tunnel_conn {
                     Some(c) => c,
@@ -516,12 +581,16 @@ async fn main() -> anyhow::Result<()> {
         },
         _ => { info!("[TUNNEL] No TLS cert provided — tunnel will use plain TCP"); None }
     };
-    start_tcp_tunnel_listener(args.tunnel_port, tunnels.clone(), tls_acceptor);
+    start_tcp_tunnel_listener(args.tunnel_port, tunnels.clone(), tls_acceptor, args.allowed_tunnel_node_id.clone());
 
     let allowed_tunnel_node_id = args.allowed_tunnel_node_id.clone();
-    if allowed_tunnel_node_id.is_none() {
-        warn!("[TUNNEL] --allowed-tunnel-node-id not set — any node can register as tunnel backend!");
+    let allow_any_tunnel = args.allow_any_tunnel;
+    if allowed_tunnel_node_id.is_none() && !allow_any_tunnel {
+        warn!("[TUNNEL] --allowed-tunnel-node-id not set and --allow-any-tunnel not given — tunnel registration will be REFUSED");
     }
+
+    let rate_limiter = Arc::new(RateLimiter::new());
+    let conn_permits = Arc::new(Semaphore::new(MAX_CONNECTIONS));
 
     // QUIC accept loop
     loop {
@@ -532,9 +601,20 @@ async fn main() -> anyhow::Result<()> {
             let ttl = args.peer_ttl_secs;
             let node_for_task = node.clone();
             let allowed_node_id = allowed_tunnel_node_id.clone();
+            let allow_any = allow_any_tunnel;
             let data_dir_owned = args.data_dir.clone();
+            let limiter = rate_limiter.clone();
+            let permits = conn_permits.clone();
+            let permit = match permits.try_acquire_owned() {
+                Ok(p) => p,
+                Err(_) => {
+                    warn!("[COORD] At max concurrent connections ({}) — dropping incoming connection", MAX_CONNECTIONS);
+                    continue;
+                }
+            };
 
             tokio::spawn(async move {
+                let _permit = permit; // held for the connection's lifetime
                 let conn = match incoming.await {
                     Ok(c) => c,
                     Err(e) => { warn!("[COORD] Incoming connection failed: {}", e); return; }
@@ -559,6 +639,16 @@ async fn main() -> anyhow::Result<()> {
                             }).await;
                             return;
                         }
+                    } else if !allow_any {
+                        // No allowlist and no explicit --allow-any-tunnel: refuse. Without
+                        // this, a rogue peer could register as the tunnel backend and
+                        // hijack Android→home traffic.
+                        warn!("[TUNNEL] Rejected {} from {} — tunnel backend not configured (set --allowed-tunnel-node-id or --allow-any-tunnel)", node_id, remote_ip);
+                        let _ = Protocol::send(&mut first_send, &Message::Error {
+                            code: 403,
+                            message: "Tunnel registration disabled — set --allowed-tunnel-node-id".into(),
+                        }).await;
+                        return;
                     }
 
                     // Issue a cryptographically random 32-byte nonce challenge
@@ -644,10 +734,11 @@ async fn main() -> anyhow::Result<()> {
                 } else {
                     // ── Normal P2P connection ─────────────────────────────────
                     // Handle first message, then loop for more streams
+                    let limiter_first = limiter.clone();
                     tokio::spawn(handle_stream(
                         first_msg, first_send, first_recv, conn.clone(),
                         remote_ip, peers.clone(), ttl, node_for_task.clone(), channels.clone(),
-                        data_dir_owned.clone(),
+                        data_dir_owned.clone(), limiter_first,
                     ));
 
                     while let Ok((send, mut recv)) = conn.accept_bi().await {
@@ -657,7 +748,8 @@ async fn main() -> anyhow::Result<()> {
                         let channels = channels.clone();
                         let conn_clone = conn.clone();
                         let data_dir = data_dir_owned.clone();
-                        tokio::spawn(handle_stream(msg, send, recv, conn_clone, remote_ip, peers, ttl, node, channels, data_dir));
+                        let limiter = limiter.clone();
+                        tokio::spawn(handle_stream(msg, send, recv, conn_clone, remote_ip, peers, ttl, node, channels, data_dir, limiter));
                     }
                 }
             });

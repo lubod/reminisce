@@ -307,7 +307,7 @@ async fn publish_manifest_to_mesh(
         Ok(j) => j,
         Err(e) => { warn!("Mesh manifest serialize failed: {}", e); return; }
     };
-    let encrypted = match crate::db_restore::encrypt_for_mesh(&json, api_secret) {
+    let encrypted = match crate::db_restore::encrypt_for_mesh(&json, api_secret, manifest.backup_hash.as_bytes()) {
         Ok(d) => d,
         Err(e) => { warn!("Mesh manifest encrypt failed: {}", e); return; }
     };

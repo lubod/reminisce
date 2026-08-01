@@ -45,3 +45,5 @@ HTTP API handlers grouped by feature domain. All REST endpoints exposed by Remin
 ## Invariants & Gotchas
 - **Multi-Tenancy Enforced**: Every query filtering media or user assets MUST restrict results by `user_id` from `Claims` unless explicitly executing an admin cross-tenant inspection endpoint.
 - **OpenAPI Schema Updates**: Any changes to request/response DTO structures or route signatures MUST be updated in the `#[utoipa::path(...)]` attribute to keep Swagger UI in sync.
+- **Media path safety**: `upload.rs` metadata handlers (`/upload/image/metadata`, `/upload/video/metadata`) reject hashes that aren't 64 lowercase hex and unsafe file extensions. Serving handlers must resolve files through `media_utils::safe_resolve_content_path` (canonicalize + prefix check) — never interpolate raw user input into filesystem paths.
+- **Auth-Note**: `user-login`/`setup`/`/auth/me` set an `HttpOnly` session cookie (`access_token`); `Claims` accepts header, cookie, or `?token=` so native clients keep working. The web client now relies on the cookie only (no localStorage/query-param tokens).

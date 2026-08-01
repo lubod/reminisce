@@ -56,9 +56,20 @@ pub async fn get_image(
         let orientation: Option<i16> = row.get(3);
         let no_exif: bool = row.get(4);
 
-        let filename = format!("{}.{}", hash_to_find, extension);
-        let sub_dir_path = utils::get_subdirectory_path(config.get_images_dir(), &hash_to_find);
-        let image_path = sub_dir_path.join(&filename);
+        let image_path = match crate::media_utils::safe_resolve_content_path(
+            config.get_images_dir(),
+            &hash_to_find,
+            &extension,
+        ) {
+            Ok(p) => p,
+            Err(e) => {
+                error!(
+                    "Unsafe or missing image path for hash '{}': {}",
+                    hash_to_find, e
+                );
+                return Ok(HttpResponse::NotFound().body("Image not found"));
+            }
+        };
 
         // Guess the MIME type from the file extension for the Content-Type header.
         let mime_type = mime_guess::from_path(&image_path).first_or_octet_stream();
@@ -154,9 +165,20 @@ pub async fn get_video(
         let original_name: String = row.get(0);
         let extension: String = row.get(1);
 
-        let filename = format!("{}.{}", hash_to_find, extension);
-        let sub_dir_path = utils::get_subdirectory_path(config.get_videos_dir(), &hash_to_find);
-        let video_path = sub_dir_path.join(&filename);
+        let video_path = match crate::media_utils::safe_resolve_content_path(
+            config.get_videos_dir(),
+            &hash_to_find,
+            &extension,
+        ) {
+            Ok(p) => p,
+            Err(e) => {
+                error!(
+                    "Unsafe or missing video path for hash '{}': {}",
+                    hash_to_find, e
+                );
+                return Ok(HttpResponse::NotFound().body("Video not found"));
+            }
+        };
 
         // Guess the MIME type from the file extension for the Content-Type header.
         let mime_type = mime_guess::from_path(&video_path).first_or_octet_stream();
@@ -933,8 +955,19 @@ pub async fn enhance_image(
         )),
     };
 
-    let image_path = utils::get_subdirectory_path(config.get_images_dir(), &hash)
-        .join(format!("{}.{}", hash, ext));
+    let image_path = match crate::media_utils::safe_resolve_content_path(
+        config.get_images_dir(),
+        &hash,
+        &ext,
+    ) {
+        Ok(p) => p,
+        Err(e) => {
+            error!("Unsafe or missing image path for enhance hash '{}': {}", hash, e);
+            return Ok(HttpResponse::NotFound().json(
+                serde_json::json!({"error": "Image not found"})
+            ));
+        }
+    };
 
     let image_data = tokio::fs::read(&image_path).await.map_err(|e| {
         error!("Failed to read image {:?}: {}", image_path, e);
@@ -943,8 +976,7 @@ pub async fn enhance_image(
 
     let mode = query.mode.clone().unwrap_or_else(|| "auto".to_string());
 
-    let api_key = config.get_api_key().unwrap_or("").to_string();
-    let ai_client = crate::ai_client::AiClient::new(config.ai_grpc_url.clone(), api_key);
+    let ai_client = crate::ai_client::AiClient::shared(&config);
     let enhance_resp = ai_client.enhance_image(image_data.to_vec(), mode).await.map_err(|e| {
         error!("AI service enhance failed: {}", e);
         actix_web::error::ErrorServiceUnavailable("AI service unavailable")

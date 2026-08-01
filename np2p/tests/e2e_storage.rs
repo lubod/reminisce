@@ -8,6 +8,7 @@ use tempfile::tempdir;
 async fn test_e2e_backup_and_restore() {
     // 1. Setup Server (Storage Node)
     let server_id = NodeIdentity::generate();
+    let server_id_hex = hex::encode(server_id.node_id());
     let server_node = Node::new("127.0.0.1:0".parse().unwrap(), server_id).unwrap();
     let server_addr = server_node.local_addr().unwrap();
     
@@ -41,7 +42,7 @@ async fn test_e2e_backup_and_restore() {
     assert_eq!(shards.len(), 5);
 
     // 4. Client: Connect and Store Shards
-    let conn = client_node.connect(server_addr, "reminisce").await.expect("Failed to connect");
+    let conn = client_node.connect(server_addr, &server_id_hex).await.expect("Failed to connect");
     
     // Store each shard in a separate stream (simulating parallel storage)
     for (i, shard_data) in shards.iter().enumerate() {

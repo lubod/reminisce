@@ -392,11 +392,18 @@ pub async fn upload_shard_to_node(
 
     if shard_data.len() > UPLOAD_STREAM_THRESHOLD {
         let (mut send, mut recv) = conn.open_bi().await?;
+        // Token binds the stream to (file_hash, shard_index) — the storage node verifies
+        // it before accepting any chunk (matches the non-streamed StoreShardRequest auth).
+        let binding: [u8; 32] = blake3::hash(
+            &[shard_hash_bytes.as_slice(), &[0u8]].concat()
+        ).into();
+        let token = p2p_service.identity().create_shard_token(&binding);
         Protocol::send(&mut send, &Message::StoreShardStreamInit {
             file_hash: shard_hash_bytes,
             shard_index: 0,
             total_shard_bytes: shard_data.len() as u64,
             segment_count: 1,
+            token,
         }).await.map_err(|e| e.to_string())?;
 
         match Protocol::receive(&mut recv).await.map_err(|e| e.to_string())? {

@@ -81,8 +81,7 @@ pub async fn health_check(
     let ai_service = match tokio::time::timeout(
         std::time::Duration::from_secs(10),
         async {
-            let api_key = config.get_api_key().unwrap_or("").to_string();
-            let client = crate::ai_client::AiClient::new(config.ai_grpc_url.clone(), api_key);
+            let client = crate::ai_client::AiClient::shared(&config);
             client.health_check().await
         },
     ).await {

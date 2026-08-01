@@ -5,6 +5,7 @@ pub mod disk;
 pub use encryption::{encrypt, decrypt, KEY_SIZE};
 pub use erasure::{shard, reconstruct, TOTAL_SHARDS, DATA_SHARDS, PARITY_SHARDS};
 pub use disk::DiskStorage;
+pub use disk::MAX_SHARD_BYTES;
 
 use crate::error::Result;
 

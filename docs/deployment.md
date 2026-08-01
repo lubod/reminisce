@@ -58,6 +58,7 @@ Copy `config-fullstack.yaml.example` to `config-fullstack.yaml`. Required fields
 | `p2p_namespace` | Yes | Namespace to isolate peer groups (e.g. `production`, `home`) |
 | `port` | No | HTTP listen port (default `8080`) |
 | `p2p_coordinator_addr` | No | `host:port` of coordinator for WAN peer discovery |
+| `p2p_coordinator_node_id` | Required with `p2p_coordinator_addr` | The coordinator's 64-hex Node ID (printed in the coordinator startup log). Bound to the QUIC connection so a spoofed coordinator cannot impersonate the real one. If set without `p2p_coordinator_addr` it is ignored; if `p2p_coordinator_addr` is set without it, coordinator/tunnel use is disabled with a clear error. |
 | `p2p_discovery_port` | No | UDP port for LAN peer discovery broadcasts (default `5056`) |
 | `p2p_deterministic_identity` | No | Derive P2P node identity from `api_secret_key` (default `false`). Enables true full-disk-loss recovery but changes node_id — use for new setups |
 | `p2p_tunnel_local_port` | No | Local HTTP port the reverse tunnel should forward to |
@@ -94,10 +95,13 @@ cargo build --release --bin np2p_daemon
 scp target/release/np2p_daemon pi@192.168.1.x:/usr/local/bin/
 
 # On the Pi:
-np2p_daemon --data-dir /mnt/disk/p2p --coordinator yourcoordinator.example.com:5055
+np2p_daemon --data-dir /mnt/disk/p2p --coordinator yourcoordinator.example.com:5055 \
+  --coordinator-node-id <64-hex-coordinator-node-id>
 ```
 
-The home server will auto-discover Pi nodes via LAN UDP broadcast (`p2p_discovery_port`) or via the coordinator for WAN.
+The home server will auto-discover Pi nodes via LAN UDP broadcast (`p2p_discovery_port`) or via the coordinator for WAN. `--coordinator-node-id` is mandatory whenever `--coordinator` is used (identity binding); the value is printed in the coordinator's startup log. On the home server, set `p2p_coordinator_node_id` in the config (see the table above).
+
+> **Coordinator tunnel**: on the VPS, register the home server as the tunnel backend with `--allowed-tunnel-node-id <home-server-node-id>` (refused by default). Never rely on the old "any node may register" default; if you must, pass `--allow-any-tunnel` explicitly.
 
 ## Observability
 

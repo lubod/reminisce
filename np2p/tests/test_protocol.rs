@@ -226,18 +226,25 @@ fn rt_error_message() {
 #[test]
 fn rt_store_shard_stream_init() {
     let hash = [0xBBu8; 32];
+    let token = ShardToken {
+        owner_node_id: [0xCCu8; 32],
+        timestamp: 1_700_000_000,
+        signature: vec![1, 2, 3],
+    };
     let msg = Message::StoreShardStreamInit {
         file_hash: hash,
         shard_index: 3,
         total_shard_bytes: 1_000_000,
         segment_count: 2,
+        token,
     };
     let rt = roundtrip(&msg);
-    if let Message::StoreShardStreamInit { file_hash, shard_index, total_shard_bytes, segment_count } = rt {
+    if let Message::StoreShardStreamInit { file_hash, shard_index, total_shard_bytes, segment_count, token } = rt {
         assert_eq!(file_hash, hash);
         assert_eq!(shard_index, 3);
         assert_eq!(total_shard_bytes, 1_000_000);
         assert_eq!(segment_count, 2);
+        assert_eq!(token.owner_node_id, [0xCCu8; 32]);
     } else { panic!("wrong variant"); }
 }
 

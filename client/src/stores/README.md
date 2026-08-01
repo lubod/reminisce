@@ -15,7 +15,7 @@ State management layer implementing reactive state stores powered by MobX and Mo
 | Store | Role |
 |-------|------|
 | [RootStore.ts](file:///Users/ldr/work/reminisce/client/src/stores/RootStore.ts) | Central container instantiating and wiring all sub-stores |
-| [AuthStore.ts](file:///Users/ldr/work/reminisce/client/src/stores/AuthStore.ts) | JWT tokens, login session, current user identity, authentication status |
+| [AuthStore.ts](file:///Users/ldr/work/reminisce/client/src/stores/AuthStore.ts) | Session state (HttpOnly cookie), current user identity, authentication status. JWT/imageToken are kept in memory only — never localStorage |
 | [MediaStore.ts](file:///Users/ldr/work/reminisce/client/src/stores/MediaStore.ts) | Media gallery grid state, pagination, filtering, search criteria, selection |
 | [PersonStore.ts](file:///Users/ldr/work/reminisce/client/src/stores/PersonStore.ts) | Face recognition clusters, person naming, and face assignment |
 | [LabelStore.ts](file:///Users/ldr/work/reminisce/client/src/stores/LabelStore.ts) | Tagging system, custom labels, and label assignment |

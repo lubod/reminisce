@@ -21,8 +21,11 @@ export interface ManagedUser {
 }
 
 export class AuthStore {
-    token: string | null = null; // Persisted to localStorage so session survives page reload
-    imageToken: string | null = null; // Scoped image/media token, persisted to localStorage
+    // Token / imageToken are kept in memory ONLY. The httpOnly session cookie set by the
+    // backend is what survives reloads, so keeping JWTs out of localStorage removes the
+    // XSS-exfiltration surface (and keeps them out of nginx/Referer logs as query params).
+    token: string | null = null;
+    imageToken: string | null = null;
     user: User | null = null;
     isAuthenticated: boolean = false;
     needsSetup: boolean = false;
@@ -34,7 +37,7 @@ export class AuthStore {
         this.rootStore = rootStore;
     }
 
-    /** Called once on app startup. Checks setup status and validates any cached token. */
+    /** Called once on app startup. Checks setup status and validates the session cookie. */
     initialize = async () => {
         try {
             const res = await api.get("/auth/setup-status");
@@ -44,16 +47,21 @@ export class AuthStore {
                 this.setToken(null);
                 this.setImageToken(null);
             } else {
-                // Fetch currently authenticated user session and token
+                // Fetch currently authenticated user session (authenticated by the cookie).
                 try {
                     const meRes = await api.get("/auth/me");
                     this.setUser(meRes.data);
                     this.setToken(meRes.data.access_token);
                     this.setImageToken(meRes.data.image_token);
                 } catch (err) {
-                    this.setUser(null);
-                    this.setToken(null);
-                    this.setImageToken(null);
+                    // Only a definitive 401 means the session is gone. Transient failures
+                    // (network blips / 5xx) must NOT log the user out.
+                    const status = axios.isAxiosError(err) ? err.response?.status : undefined;
+                    if (status === 401) {
+                        this.setUser(null);
+                        this.setToken(null);
+                        this.setImageToken(null);
+                    }
                 }
             }
         } catch {
@@ -114,21 +122,13 @@ export class AuthStore {
     };
 
     setToken = (token: string | null) => {
+        // In-memory only — the session lives in the backend httpOnly cookie.
         this.token = token;
-        if (token) {
-            localStorage.setItem("token", token);
-        } else {
-            localStorage.removeItem("token");
-        }
     };
 
     setImageToken = (token: string | null) => {
+        // In-memory only — media URLs are authenticated by the session cookie.
         this.imageToken = token;
-        if (token) {
-            localStorage.setItem("imageToken", token);
-        } else {
-            localStorage.removeItem("imageToken");
-        }
     };
 
     setUser = (user: User | null) => {

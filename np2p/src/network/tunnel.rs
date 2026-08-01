@@ -16,11 +16,13 @@ const RECONNECT_DELAY_SECS: u64 = 5;
 /// Automatically reconnects if the QUIC connection drops.
 pub fn start_tunnel_client(
     coordinator_addr: SocketAddr,
+    coordinator_node_id: &str,
     node: Node,
     identity: NodeIdentity,
     local_port: u16,
 ) {
     let node_id = hex::encode(identity.node_id());
+    let coordinator_node_id = coordinator_node_id.to_string();
     tokio::spawn(async move {
         info!(
             "[TUNNEL] Client starting — coordinator={} local_port={}",
@@ -31,7 +33,7 @@ pub fn start_tunnel_client(
         // a race where our insert() is wiped by the old task's cleanup.
         tokio::time::sleep(std::time::Duration::from_secs(3)).await;
         loop {
-            let delay = match run_tunnel(&node, coordinator_addr, &node_id, &identity, local_port).await {
+            let delay = match run_tunnel(&node, coordinator_addr, &coordinator_node_id, &node_id, &identity, local_port).await {
                 Ok(_) => { info!("[TUNNEL] Connection ended cleanly"); RECONNECT_DELAY_SECS }
                 Err(crate::error::Np2pError::UnknownMessage(msg)) => {
                     debug!("[TUNNEL] Protocol version mismatch with coordinator ({}), retrying in 60s", msg);
@@ -47,13 +49,14 @@ pub fn start_tunnel_client(
 async fn run_tunnel(
     node: &Node,
     coordinator_addr: SocketAddr,
+    coordinator_node_id: &str,
     node_id: &str,
     identity: &NodeIdentity,
     local_port: u16,
 ) -> crate::error::Result<()> {
     let conn = tokio::time::timeout(
         std::time::Duration::from_secs(10),
-        node.connect(coordinator_addr, "reminisce"),
+        node.connect(coordinator_addr, coordinator_node_id),
     )
     .await
     .map_err(|_| crate::error::Np2pError::Network("Tunnel connect timed out".into()))??;

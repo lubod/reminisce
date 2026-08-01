@@ -63,11 +63,14 @@ pub enum Message {
 
     /// Streaming shard upload for large files: one stream per shard, followed by
     /// StoreShardChunk messages (≤ 32 MB each), terminated by StoreShardStreamFinal.
+    /// The token is created over blake3(file_hash || shard_index) and is verified by
+    /// the storage node before any chunk is accepted (mirrors StoreShardRequest auth).
     StoreShardStreamInit {
         file_hash: [u8; 32],
         shard_index: u8,
         total_shard_bytes: u64,
         segment_count: u32,
+        token: ShardToken,
     },
     StoreShardStreamAck { ready: bool },
     StoreShardChunk { data: Vec<u8> },

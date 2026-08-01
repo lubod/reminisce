@@ -229,6 +229,48 @@ pub fn get_subdirectory_path(base_dir: &str, hash: &str) -> PathBuf {
     PathBuf::from(base_dir).join(&hash[..2])
 }
 
+/// True if `s` is a 64-character lowercase hex string (the BLAKE3 content-hash format).
+/// Content hashes are interpolated into filesystem paths, so anything else is rejected
+/// to prevent path traversal.
+pub fn is_valid_content_hash(s: &str) -> bool {
+    s.len() == 64 && s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+/// True if `s` is a safe media-file extension: 1–10 alphanumeric characters.
+/// `ext` is interpolated into the served filename, so any path separator, dot, or
+/// control character is rejected to prevent path traversal.
+pub fn is_valid_media_ext(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 10
+        && s.bytes().all(|b| b.is_ascii_alphanumeric())
+}
+
+/// Resolve the on-disk path for a content-addressed media file, canonicalizing the
+/// base directory and verifying the resolved file stays inside it. Prevents LFI /
+/// path traversal via user-supplied hash or ext.
+pub fn safe_resolve_content_path(
+    base_dir: &str,
+    hash: &str,
+    ext: &str,
+) -> Result<PathBuf, String> {
+    if !is_valid_content_hash(hash) {
+        return Err(format!("Invalid content hash: {}", hash));
+    }
+    if !is_valid_media_ext(ext) {
+        return Err(format!("Invalid media extension: {}", ext));
+    }
+
+    let base = std::fs::canonicalize(base_dir)
+        .map_err(|e| format!("Cannot canonicalize base dir {}: {}", base_dir, e))?;
+    let resolved = base.join(&hash[..2]).join(format!("{}.{}", hash, ext));
+    let canonical = std::fs::canonicalize(&resolved)
+        .map_err(|e| format!("Cannot canonicalize {}: {}", resolved.display(), e))?;
+    if !canonical.starts_with(&base) {
+        return Err(format!("Resolved path escapes media directory: {}", canonical.display()));
+    }
+    Ok(canonical)
+}
+
 pub fn determine_image_type(image_name: &str) -> String {
     let lower_name = image_name.to_lowercase();
     if lower_name.contains("dcim/camera") {

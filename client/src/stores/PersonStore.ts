@@ -248,12 +248,8 @@ export class PersonStore {
         this.imagesHasMore = false;
     };
 
-    getAuthenticatedUrl = (baseUrl: string) => {
-        const token = this.rootStore.authStore.imageToken;
-        if (!token) return baseUrl;
-        const separator = baseUrl.includes('?') ? '&' : '?';
-        return `${baseUrl}${separator}token=${token}`;
-    };
+    // Media URLs are authenticated by the httpOnly session cookie — no token in the URL.
+    getAuthenticatedUrl = (baseUrl: string) => baseUrl;
 
     cleanup = () => {
         // No-op (no blob URLs are produced for person thumbnails)

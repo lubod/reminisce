@@ -11,17 +11,22 @@ const RECONNECT_DELAY_SECS: u64 = 5;
 
 /// Start a persistent reverse channel to the coordinator.
 /// Storage nodes call this so the coordinator can relay messages to them even when behind NAT.
+/// `authorized_owner_id` is the storage node's `--authorized-node-id` pin; relayed requests
+/// are checked against it exactly like direct ones (prevents the relay path bypassing the pin).
 pub fn start_channel_client(
     coordinator_addr: SocketAddr,
+    coordinator_node_id: &str,
     node: Node,
     identity: NodeIdentity,
     storage: DiskStorage,
+    authorized_owner_id: Option<[u8; 32]>,
 ) {
     let node_id = hex::encode(identity.node_id());
+    let coordinator_node_id = coordinator_node_id.to_string();
     tokio::spawn(async move {
         info!("[CHANNEL] Client starting — coordinator={}", coordinator_addr);
         loop {
-            let delay = match run_channel(&node, coordinator_addr, &node_id, &identity, &storage).await {
+            let delay = match run_channel(&node, coordinator_addr, &coordinator_node_id, &node_id, &identity, &storage, authorized_owner_id).await {
                 Ok(_) => { info!("[CHANNEL] Connection ended cleanly"); RECONNECT_DELAY_SECS }
                 Err(crate::error::Np2pError::UnknownMessage(msg)) => {
                     debug!("[CHANNEL] Protocol version mismatch with coordinator ({}), retrying in 60s", msg);
@@ -37,13 +42,15 @@ pub fn start_channel_client(
 async fn run_channel(
     node: &Node,
     coordinator_addr: SocketAddr,
+    coordinator_node_id: &str,
     node_id: &str,
     identity: &NodeIdentity,
     storage: &DiskStorage,
+    authorized_owner_id: Option<[u8; 32]>,
 ) -> crate::error::Result<()> {
     let conn = tokio::time::timeout(
         std::time::Duration::from_secs(10),
-        node.connect(coordinator_addr, "reminisce"),
+        node.connect(coordinator_addr, coordinator_node_id),
     )
     .await
     .map_err(|_| crate::error::Np2pError::Network("Channel connect timed out".into()))??;
@@ -87,7 +94,7 @@ async fn run_channel(
                 let storage = storage.clone();
                 let identity = identity_arc.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = ConnectionHandler::handle_stream(send, recv, storage, identity, None, None).await {
+                    if let Err(e) = ConnectionHandler::handle_stream(send, recv, storage, identity, None, authorized_owner_id).await {
                         warn!("[CHANNEL] Stream error: {}", e);
                     }
                 });

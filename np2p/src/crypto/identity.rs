@@ -157,6 +157,22 @@ pub fn extract_public_key(cert_der: &[u8]) -> Option<[u8; 32]> {
     None
 }
 
+/// Build the QUIC server-name (SNI) for dialing a peer by its 64-hex Node ID.
+///
+/// QUIC/rustls enforces a 63-character-per-label DNS limit, so a raw 64-hex ID is an
+/// invalid server name. We split it into two DNS labels (`first32.second32`) and the
+/// client-side cert verifier reassembles them before comparing to the peer's Ed25519 key.
+/// Rejects anything that isn't a 64-hex Node ID, making identity binding mandatory.
+pub fn sni_for_node_id(node_id: &str) -> crate::error::Result<String> {
+    if node_id.len() != 64 || !node_id.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(crate::error::Np2pError::Crypto(format!(
+            "Connection server name must be a 64-hex Node ID, got '{}'",
+            node_id
+        )));
+    }
+    Ok(format!("{}.{}", &node_id[..32], &node_id[32..]))
+}
+
 /// A verifier that verifies Node self-signed certificates against the expected Node ID.
 #[derive(Debug)]
 struct VerifyNodeCertificate;
@@ -174,18 +190,28 @@ impl ServerCertVerifier for VerifyNodeCertificate {
         let pubkey = extract_public_key(cert_bytes)
             .ok_or_else(|| rustls::Error::General("Invalid or missing Ed25519 public key in certificate".into()))?;
 
-        // If the server_name is a hex-encoded Node ID (64 chars), verify it matches the public key
-        if let ServerName::DnsName(dns_name) = server_name {
-            let name_str = dns_name.as_ref();
-            if name_str.len() == 64 && name_str.chars().all(|c| c.is_ascii_hexdigit()) {
-                let expected_key_bytes = hex::decode(name_str)
-                    .map_err(|_| rustls::Error::General("Failed to decode server name as hex".into()))?;
-                if pubkey != expected_key_bytes.as_slice() {
-                    return Err(rustls::Error::General("Certificate public key does not match expected Node ID".into()));
-                }
-            }
+        // Server identity binding is MANDATORY: the dialed server name must be a
+        // 64-hex Node ID (encoded across two DNS labels, see sni_for_node_id) whose
+        // public key equals the certificate's key. Without this, a spoofed peer can
+        // present any self-signed certificate and all upload/restore/audit/rebalance
+        // paths become MITM-able.
+        let name_str_encoded = match server_name {
+            ServerName::DnsName(dns_name) => dns_name.as_ref().to_string(),
+            _ => return Err(rustls::Error::General("Unsupported server name (expected hex Node ID)".into())),
+        };
+        let name_str = name_str_encoded.replace('.', "");
+        if name_str.len() != 64 || !name_str.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(rustls::Error::General(format!(
+                "Server name '{}' does not encode a 64-hex Node ID — refusing unverified connection",
+                name_str
+            )));
         }
-        
+        let expected_key_bytes = hex::decode(&name_str)
+            .map_err(|_| rustls::Error::General("Failed to decode server name as hex".into()))?;
+        if pubkey != expected_key_bytes.as_slice() {
+            return Err(rustls::Error::General("Certificate public key does not match expected Node ID".into()));
+        }
+
         Ok(ServerCertVerified::assertion())
     }
 

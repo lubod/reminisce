@@ -20,6 +20,7 @@ pub struct P2PService {
     identity: Arc<NodeIdentity>,
     pub registry: PeerRegistry,
     pub coordinator_addr: Option<SocketAddr>,
+    pub coordinator_node_id: Option<String>,
 }
 
 impl P2PService {
@@ -33,16 +34,35 @@ impl P2PService {
             identity: Arc::new(identity),
             registry: PeerRegistry::new(),
             coordinator_addr: None,
+            coordinator_node_id: None,
         })
     }
 
+    /// Configure the coordinator for cross-network relay. `coordinator_node_id` is the
+    /// coordinator's 64-hex Node ID, bound to the QUIC connection so a spoofed
+    /// "coordinator" cannot MITM relayed messages.
+    pub fn set_coordinator(&mut self, addr: SocketAddr, node_id: String) {
+        self.coordinator_addr = Some(addr);
+        self.coordinator_node_id = Some(node_id);
+    }
+
     /// Connect directly to a known socket address.
+    ///
+    /// The peer's Node ID is resolved from the registry by address and bound to the
+    /// QUIC connection. If the address is not a registered peer, the connection is
+    /// refused (identity cannot be verified).
     pub async fn connect_to_addr(&self, addr: SocketAddr) -> Result<quinn::Connection> {
-        info!("[P2P] Connecting to {}", addr);
-        let res = tokio::time::timeout(Duration::from_secs(10), self.node.connect(addr, "reminisce")).await;
+        let node_id = self.registry.find_by_addr(addr).ok_or_else(|| {
+            crate::error::Np2pError::Network(format!(
+                "Cannot verify peer identity: {} not in registry",
+                addr
+            ))
+        })?;
+        info!("[P2P] Connecting to {} as node {}", addr, node_id);
+        let res = tokio::time::timeout(Duration::from_secs(10), self.node.connect(addr, &node_id)).await;
         match res {
             Ok(Ok(conn)) => {
-                info!("[P2P] Connected to {}", addr);
+                info!("[P2P] Connected to {} ({})", addr, node_id);
                 Ok(conn)
             }
             Ok(Err(e)) => {
@@ -97,12 +117,12 @@ impl P2PService {
         }
 
         // Fall back to coordinator relay
-        match self.coordinator_addr {
-            Some(coord) => {
-                coordinator::relay_message(coord, &self.node, node_id, message).await
+        match (self.coordinator_addr, self.coordinator_node_id.clone()) {
+            (Some(coord), Some(coord_id)) => {
+                coordinator::relay_message(coord, &coord_id, &self.node, node_id, message).await
             }
-            None => Err(crate::error::Np2pError::Network(format!(
-                "Peer {} unreachable and no coordinator configured",
+            _ => Err(crate::error::Np2pError::Network(format!(
+                "Peer {} unreachable and no coordinator configured (coordinator_node_id required)",
                 node_id
             ))),
         }

@@ -9,8 +9,7 @@ pub async fn detect_faces(
 ) -> Result<Vec<(Vec<i32>, Vector, f32)>, String> {
     info!("Requesting face detection via gRPC at: {}", config.ai_grpc_url);
 
-    let api_key = config.get_api_key().unwrap_or("").to_string();
-    let client = crate::ai_client::AiClient::new(config.ai_grpc_url.clone(), api_key);
+    let client = crate::ai_client::AiClient::shared(config);
     let faces = client.detect_faces(image_data.to_vec()).await?;
 
     info!("Detected {} faces via gRPC", faces.len());

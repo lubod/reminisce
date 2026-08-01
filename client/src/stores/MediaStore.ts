@@ -57,6 +57,11 @@ export interface ThumbnailsResponse {
 export class MediaStore {
     rootStore: RootStore;
     
+    // Monotonic counter used as a stale-response guard: when a fresh filter/search
+    // starts we bump it, and any in-flight response whose captured seq is stale is
+    // discarded so out-of-order responses can't overwrite newer results.
+    private requestSeq = 0;
+    
     // Data Collections
     images: MediaItem[] = [];
     videos: MediaItem[] = [];
@@ -223,6 +228,7 @@ export class MediaStore {
     // --- Data Fetching ---
 
     applyFilters = () => {
+        this.requestSeq += 1; // invalidate any in-flight responses
         runInAction(() => {
             this.searchMode = false;
             this.cleanupThumbnails();
@@ -263,10 +269,12 @@ export class MediaStore {
         if (append) {
             this.isLoadingMoreSearch = true;
         } else {
+            this.requestSeq += 1; // invalidate any in-flight response
             this.isSearching = true;
             this.searchMode = true;
             this.searchOffset = 0;
         }
+        const reqSeq = this.requestSeq;
 
         const offset = append ? this.searchOffset : 0;
 
@@ -297,6 +305,7 @@ export class MediaStore {
 
             const itemsWithThumbnails = await this.attachThumbnails(searchResults);
             const gotFullPage = itemsWithThumbnails.length === this.searchPageSize;
+            if (reqSeq !== this.requestSeq) return; // stale response — discard
 
             runInAction(() => {
                 if (append) {
@@ -344,6 +353,7 @@ export class MediaStore {
     };
 
     fetchImages = async (page: number = 1, limit: number = 50, append: boolean = false) => {
+        const seq = this.requestSeq;
         if (!append) this.rootStore.uiStore.setLoading(true);
         else this.isLoadingMore = true;
 
@@ -371,6 +381,7 @@ export class MediaStore {
                 ...t,
                 thumbnailUrl: t.thumbnail_url ? this.getAuthenticatedUrl(t.thumbnail_url) : undefined
             })));
+            if (seq !== this.requestSeq) return; // stale response — discard
 
             runInAction(() => {
                 this.images = append ? [...this.images, ...withUrls] : withUrls;
@@ -386,6 +397,7 @@ export class MediaStore {
     };
 
     fetchVideos = async (page: number = 1, limit: number = 50, append: boolean = false) => {
+        const seq = this.requestSeq;
         if (append) this.isLoadingMoreVideos = true;
 
         try {
@@ -412,6 +424,7 @@ export class MediaStore {
                 ...t,
                 thumbnailUrl: t.thumbnail_url ? this.getAuthenticatedUrl(t.thumbnail_url) : undefined
             })));
+            if (seq !== this.requestSeq) return; // stale response — discard
 
             runInAction(() => {
                 this.videos = append ? [...this.videos, ...withUrls] : withUrls;
@@ -427,6 +440,7 @@ export class MediaStore {
     };
 
     fetchAllMedia = async (page: number = 1, limit: number = 50, append: boolean = false) => {
+        const seq = this.requestSeq;
         if (append) this.isLoadingMoreAllMedia = true;
 
         try {
@@ -457,6 +471,7 @@ export class MediaStore {
                 ...t,
                 thumbnailUrl: t.thumbnail_url ? this.getAuthenticatedUrl(t.thumbnail_url) : undefined
             })));
+            if (seq !== this.requestSeq) return; // stale response — discard
 
             runInAction(() => {
                 this.allMedia = append ? [...this.allMedia, ...withUrls] : withUrls;
@@ -695,12 +710,10 @@ export class MediaStore {
 
     // --- Helper Methods ---
 
-    getAuthenticatedUrl = (baseUrl: string) => {
-        const token = this.rootStore.authStore.imageToken;
-        if (!token) return baseUrl;
-        const separator = baseUrl.includes('?') ? '&' : '?';
-        return `${baseUrl}${separator}token=${token}`;
-    };
+    // Media URLs are authenticated by the httpOnly session cookie (same-origin requests),
+    // so no token ever needs to appear in the URL query string (which would leak into
+    // nginx logs / history / Referer).
+    getAuthenticatedUrl = (baseUrl: string) => baseUrl;
 
     cleanupThumbnails = () => {
         const revoke = (list: MediaItem[]) => list.forEach(i => i.thumbnailUrl && URL.revokeObjectURL(i.thumbnailUrl));

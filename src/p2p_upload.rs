@@ -196,12 +196,20 @@ async fn stream_one_shard(
     let conn = p2p_service.connect_to_addr(addr).await.map_err(|e| e.to_string())?;
     let (mut send, mut recv) = conn.open_bi().await.map_err(|e| e.to_string())?;
 
+    // Token binds the stream to (file_hash, shard_index) — the storage node verifies
+    // it before accepting any chunk, matching the non-streamed StoreShardRequest auth.
+    let binding: [u8; 32] = blake3::hash(
+        &[file_hash_bytes.as_slice(), &[idx as u8]].concat()
+    ).into();
+    let token = p2p_service.identity().create_shard_token(&binding);
+
     let result: Result<String, String> = async {
         Protocol::send(&mut send, &Message::StoreShardStreamInit {
             file_hash: file_hash_bytes,
             shard_index: idx as u8,
             total_shard_bytes: 0,
             segment_count: 0,
+            token,
         }).await.map_err(|e| e.to_string())?;
         match Protocol::receive(&mut recv).await.map_err(|e| e.to_string())? {
             Message::StoreShardStreamAck { ready: true } => {}

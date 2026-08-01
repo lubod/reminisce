@@ -63,6 +63,18 @@ impl PeerRegistry {
         self.peers.read().unwrap_or_else(|e| e.into_inner()).get(node_id).cloned()
     }
 
+    /// Reverse lookup: return the node_id registered at `addr`, if any.
+    /// Used to resolve the expected Node ID before dialing a peer address so the
+    /// QUIC connection can be bound to the peer's certificate.
+    pub fn find_by_addr(&self, addr: SocketAddr) -> Option<String> {
+        self.peers
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .find(|(_, p)| p.addr == addr)
+            .map(|(node_id, _)| node_id.clone())
+    }
+
     pub fn all(&self) -> Vec<PeerInfo> {
         self.peers.read().unwrap_or_else(|e| e.into_inner()).values().cloned().collect()
     }

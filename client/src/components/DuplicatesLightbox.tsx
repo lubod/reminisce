@@ -6,14 +6,13 @@ interface Props {
     group: DuplicateGroup;
     initialIdx: number;
     isAdmin: boolean;
-    token: string | null;
     onClose: () => void;
     onDelete: (hash: string) => void;
     onPrev?: () => void;
     onNext?: () => void;
 }
 
-export function DuplicatesLightbox({ group, initialIdx, isAdmin, token, onClose, onDelete, onPrev, onNext }: Props) {
+export function DuplicatesLightbox({ group, initialIdx, isAdmin, onClose, onDelete, onPrev, onNext }: Props) {
     const [leftIdx, setLeftIdx] = useState(initialIdx);
     const [rightIdx, setRightIdx] = useState(initialIdx === 0 ? 1 : 0);
     const [transform, setTransform] = useState({ scale: 1, tx: 0, ty: 0 });
@@ -23,10 +22,8 @@ export function DuplicatesLightbox({ group, initialIdx, isAdmin, token, onClose,
     const leftRef = useRef<HTMLDivElement>(null);
     const rightRef = useRef<HTMLDivElement>(null);
 
-    const getAuthUrl = (hash: string) => {
-        const base = `/api/image/${hash}`;
-        return token ? `${base}?token=${token}` : base;
-    };
+    // Authenticated by the httpOnly session cookie — no token in the URL.
+    const getAuthUrl = (hash: string) => `/api/image/${hash}`;
 
     // Close or clamp indices when images are deleted from the group
     useEffect(() => {
@@ -131,9 +128,8 @@ export function DuplicatesLightbox({ group, initialIdx, isAdmin, token, onClose,
     };
 
     const getThumbSrc = (thumbnailUrl: string) => {
-        if (!token || thumbnailUrl.includes("token=")) return thumbnailUrl;
-        const sep = thumbnailUrl.includes("?") ? "&" : "?";
-        return `${thumbnailUrl}${sep}token=${token}`;
+        // Auth is via the session cookie; no token appending.
+        return thumbnailUrl;
     };
 
     const formatDate = (iso: string) => {

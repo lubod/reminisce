@@ -105,10 +105,21 @@ pub async fn get_face_thumbnail(
         let stored_orientation: Option<i16> = row.get(6);
 
         // Find the image file
-        let sub_dir_path = utils::get_subdirectory_path(config.get_images_dir(), &image_hash);
-        
-        let filename = format!("{}.{}", image_hash, ext);
-        let image_path = sub_dir_path.join(&filename);
+        let image_path = match crate::media_utils::safe_resolve_content_path(
+            config.get_images_dir(),
+            &image_hash,
+            &ext,
+        ) {
+            Ok(p) => p,
+            Err(e) => {
+                error!("Unsafe or missing image path for face hash '{}': {}", image_hash, e);
+                return Ok(
+                    HttpResponse::NotFound().json(
+                        serde_json::json!({"status": "error", "message": "Original image not found."})
+                    )
+                );
+            }
+        };
 
         if !async_fs::try_exists(&image_path).await.unwrap_or(false) {
              return Ok(
@@ -609,6 +620,12 @@ pub async fn get_thumbnail(
     };
 
     let media_hash = path.into_inner();
+    if !crate::media_utils::is_valid_content_hash(&media_hash) {
+        return Ok(HttpResponse::NotFound().json(serde_json::json!({
+            "status": "error",
+            "message": "Thumbnail not found"
+        })));
+    }
     let user_uuid = utils::parse_user_uuid(&claims.user_id)?;
     let client = utils::get_db_client(&pool.0).await?;
 

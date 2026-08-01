@@ -49,9 +49,11 @@ impl Node {
         Ok(self.endpoint.local_addr()?)
     }
 
-    /// Connects to a remote node.
+    /// Connects to a remote node, verifying its certificate against `server_name`,
+    /// which must be the peer's 64-hex Node ID (identity binding is mandatory).
     pub async fn connect(&self, addr: SocketAddr, server_name: &str) -> Result<Connection> {
-        let conn = self.endpoint.connect(addr, server_name)?.await?;
+        let sni = crate::crypto::sni_for_node_id(server_name)?;
+        let conn = self.endpoint.connect(addr, &sni)?.await?;
         Ok(conn)
     }
 

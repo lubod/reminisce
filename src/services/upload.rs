@@ -283,6 +283,19 @@ pub async fn upload_image_metadata(
         }),
     };
 
+    if !crate::media_utils::is_valid_content_hash(&metadata.hash) {
+        return HttpResponse::BadRequest().json(UploadImageMetadataResponse {
+            status: "error".to_string(),
+            message: "Invalid hash: must be 64 lowercase hex characters".to_string(),
+        });
+    }
+    if !crate::media_utils::is_valid_media_ext(&metadata.ext) {
+        return HttpResponse::BadRequest().json(UploadImageMetadataResponse {
+            status: "error".to_string(),
+            message: "Invalid file extension".to_string(),
+        });
+    }
+
     let client = match pool.0.get().await {
         Ok(c) => c,
         Err(_) => return HttpResponse::InternalServerError().json(UploadImageMetadataResponse {
@@ -365,6 +378,19 @@ pub async fn upload_video_metadata(
             message: "Invalid user ID".to_string(),
         }),
     };
+
+    if !crate::media_utils::is_valid_content_hash(&metadata.hash) {
+        return HttpResponse::BadRequest().json(UploadVideoMetadataResponse {
+            status: "error".to_string(),
+            message: "Invalid hash: must be 64 lowercase hex characters".to_string(),
+        });
+    }
+    if !crate::media_utils::is_valid_media_ext(&metadata.ext) {
+        return HttpResponse::BadRequest().json(UploadVideoMetadataResponse {
+            status: "error".to_string(),
+            message: "Invalid file extension".to_string(),
+        });
+    }
 
     let client = match pool.0.get().await {
         Ok(c) => c,
@@ -475,6 +501,7 @@ async fn internal_check_videos_exist(
     }
 }
 
+/// Dedupe check for image hashes (legacy alias of `/upload/batch-check-images`).
 #[utoipa::path(
     post,
     path = "/api/upload/check-images",
@@ -490,6 +517,34 @@ async fn internal_check_videos_exist(
 )]
 #[post("/upload/check-images")]
 pub async fn check_images_exist_batch(
+    req: web::Json<CheckImagesExistRequest>,
+    pool: web::Data<MainDbPool>,
+    claims: Claims,
+) -> HttpResponse {
+    let user_uuid = match Uuid::parse_str(&claims.user_id) {
+        Ok(u) => u,
+        Err(_) => return HttpResponse::Unauthorized().json(serde_json::json!({"error": "Unauthorized: Invalid user ID format"})),
+    };
+    internal_check_images_exist(&user_uuid, req.into_inner(), pool).await
+}
+
+/// Canonical dedupe check endpoint for image hashes (shares the impl with the
+/// legacy `/upload/check-images` alias — keep both in sync).
+#[utoipa::path(
+    post,
+    path = "/api/upload/batch-check-images",
+    request_body = CheckImagesExistRequest,
+    responses(
+        (status = 200, description = "Checked image hashes successfully", body = CheckImagesExistResponse),
+        (status = 401, description = "Unauthorized"),
+        (status = 500, description = "Internal server error")
+    ),
+    security(
+        ("jwt" = [])
+    )
+)]
+#[post("/upload/batch-check-images")]
+pub async fn batch_check_images(
     req: web::Json<CheckImagesExistRequest>,
     pool: web::Data<MainDbPool>,
     claims: Claims,
@@ -527,32 +582,8 @@ pub async fn check_videos_exist_batch(
     internal_check_videos_exist(&user_uuid, req.into_inner(), pool).await
 }
 
-#[utoipa::path(
-    post,
-    path = "/api/upload/batch-check-images",
-    request_body = CheckImagesExistRequest,
-    responses(
-        (status = 200, description = "Checked image hashes successfully", body = CheckImagesExistResponse),
-        (status = 401, description = "Unauthorized"),
-        (status = 500, description = "Internal server error")
-    ),
-    security(
-        ("jwt" = [])
-    )
-)]
-#[post("/upload/batch-check-images")]
-pub async fn batch_check_images(
-    req: web::Json<CheckImagesExistRequest>,
-    pool: web::Data<MainDbPool>,
-    claims: Claims,
-) -> HttpResponse {
-    let user_uuid = match Uuid::parse_str(&claims.user_id) {
-        Ok(u) => u,
-        Err(_) => return HttpResponse::Unauthorized().json(serde_json::json!({"error": "Unauthorized: Invalid user ID format"})),
-    };
-    internal_check_images_exist(&user_uuid, req.into_inner(), pool).await
-}
-
+/// Canonical dedupe check endpoint for video hashes (shares the impl with the
+/// legacy `/upload/check-videos` alias — keep both in sync).
 #[utoipa::path(
     post,
     path = "/api/upload/batch-check-videos",

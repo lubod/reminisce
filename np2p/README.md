@@ -16,8 +16,11 @@ np2p/
 ```
 
 ## Key Specs & Protocol Constants
-- **`PROTOCOL_VERSION`**: Fixed protocol version handshake check across all connecting peers.
+- **`PROTOCOL_VERSION`**: `0.2.0` — checked on every handshake; mismatched peers are rejected (the streaming `StoreShardStreamInit` message gained a `ShardToken` in 0.2.0, changing the wire format).
 - **Node Identity**: Ed25519 keypair formatted as hex string Node ID.
+- **Server identity binding**: Every `Node::connect` verifies the peer's self-signed cert public key equals the dialed 64-hex Node ID (split into two DNS labels, `first32.second32`, because a single 64-char label exceeds the 63-char DNS limit). Connections to non-node-id names are refused.
+- **Coordinator node ID**: Clients dialing the coordinator must supply its 64-hex Node ID (`--coordinator-node-id`; `coordinator_node_id` config for the backend). Without it, coordinator/tunnel use is refused.
+- **Streaming upload auth**: `StoreShardStreamInit` carries a `ShardToken` bound to `blake3(file_hash || shard_index)`; storage nodes verify it before accepting chunks and enforce a 1 GiB per-shard cap plus a free-space guard.
 - **Detailed Design**: Refer to [DESIGN.md](file:///Users/ldr/work/reminisce/np2p/DESIGN.md) for complete protocol specification.
 
 ## Subdirectory Documentation
@@ -26,3 +29,5 @@ np2p/
 
 ## Invariants & Gotchas
 - **Protocol Version Alignment**: All nodes participating in P2P mesh or connecting to coordinator must share the exact same `PROTOCOL_VERSION`.
+- **Authorized owner pin**: Storage nodes should set `--authorized-node-id` so both direct and relayed (channel) requests are owner-pinned; the relay path no longer bypasses the pin.
+- **`sni_for_node_id`**: `Node::connect` rejects non-64-hex names — never pass a literal like `"reminisce"` again.

@@ -10,8 +10,11 @@ const REGISTER_INTERVAL_SECS: u64 = 30;
 ///
 /// Use this when direct connection to the target is not possible.
 /// The coordinator forwards the serialized message and pipes back the response.
+/// `coordinator_node_id` is the coordinator's 64-hex Node ID — it is bound to the
+/// QUIC connection so a spoofed "coordinator" cannot MITM the relay.
 pub async fn relay_message(
     coordinator_addr: SocketAddr,
+    coordinator_node_id: &str,
     node: &Node,
     target_node_id: &str,
     message: &Message,
@@ -20,7 +23,7 @@ pub async fn relay_message(
 
     let conn = tokio::time::timeout(
         std::time::Duration::from_secs(10),
-        node.connect(coordinator_addr, "reminisce"),
+        node.connect(coordinator_addr, coordinator_node_id),
     )
     .await
     .map_err(|_| crate::error::Np2pError::Network("Relay connect timed out".into()))??;
@@ -54,17 +57,19 @@ pub async fn relay_message(
 /// fetches the peer list, and merges it into the registry. Repeats every 30s.
 pub fn start_coordinator_client(
     coordinator_addr: SocketAddr,
+    coordinator_node_id: &str,
     node: Node,
     node_id: String,
     quic_port: Option<u16>,
     registry: PeerRegistry,
     namespace: String,
 ) {
+    let coordinator_node_id = coordinator_node_id.to_string();
     tokio::spawn(async move {
         info!("[COORDINATOR] Client started for {} (namespace={})", coordinator_addr, namespace);
 
         loop {
-            match run_once(&node, coordinator_addr, &node_id, quic_port, &registry, &namespace).await {
+            match run_once(&node, coordinator_addr, &coordinator_node_id, &node_id, quic_port, &registry, &namespace).await {
                 Ok(n) => {
                     if n > 0 {
                         info!("[COORDINATOR] Merged {} peers from coordinator", n);
@@ -81,6 +86,7 @@ pub fn start_coordinator_client(
 async fn run_once(
     node: &Node,
     coordinator_addr: SocketAddr,
+    coordinator_node_id: &str,
     node_id: &str,
     quic_port: Option<u16>,
     registry: &PeerRegistry,
@@ -88,7 +94,7 @@ async fn run_once(
 ) -> crate::error::Result<usize> {
     let conn = tokio::time::timeout(
         std::time::Duration::from_secs(10),
-        node.connect(coordinator_addr, "reminisce"),
+        node.connect(coordinator_addr, coordinator_node_id),
     )
     .await
     .map_err(|_| crate::error::Np2pError::Network("Coordinator connect timed out".into()))??;

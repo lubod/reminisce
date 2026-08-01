@@ -117,59 +117,59 @@ impl FromRequest for Claims {
                 is_active: bool,
                 fetched_at: std::time::Instant,
             }
-            static USER_CACHE: std::sync::OnceLock<std::sync::Arc<std::sync::Mutex<std::collections::HashMap<uuid::Uuid, CachedUserStatus>>>> = std::sync::OnceLock::new();
-            let cache = USER_CACHE.get_or_init(|| std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())));
+            // RwLock: the hot path is a concurrent read per request; only the rare
+            // eviction + cache write take the exclusive lock, reducing contention.
+            static USER_CACHE: std::sync::OnceLock<std::sync::Arc<std::sync::RwLock<std::collections::HashMap<uuid::Uuid, CachedUserStatus>>>> = std::sync::OnceLock::new();
+            let cache = USER_CACHE.get_or_init(|| std::sync::Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())));
 
-            let (role, is_active) = {
-                let mut cache_guard = cache.lock().unwrap_or_else(|e| e.into_inner());
+            let (user_role, user_active) = {
+                // 1. Check the cache with a shared lock.
+                let hit = {
+                    let guard = cache.read().unwrap_or_else(|e| e.into_inner());
+                    if guard.len() > 500 {
+                        // Opportunistic eviction under the write lock (rare).
+                        drop(guard);
+                        let mut wguard = cache.write().unwrap_or_else(|e| e.into_inner());
+                        wguard.retain(|_, v| v.fetched_at.elapsed() < std::time::Duration::from_secs(60));
+                    }
+                    let guard = cache.read().unwrap_or_else(|e| e.into_inner());
+                    guard.get(&user_uuid)
+                        .filter(|c| c.fetched_at.elapsed() < std::time::Duration::from_secs(5))
+                        .map(|c| (c.role.clone(), c.is_active))
+                };
 
-                // Evict stale entries if cache grows beyond 500 items
-                if cache_guard.len() > 500 {
-                    cache_guard.retain(|_, v| v.fetched_at.elapsed() < std::time::Duration::from_secs(60));
-                }
+                if let Some((r, a)) = hit {
+                    (r, a)
+                } else if let Some(pool) = pool {
+                    let client = pool.0.get().await.map_err(|e| {
+                        log::error!("FromRequest DB connection error: {:?}", e);
+                        actix_web::error::ErrorInternalServerError("Database connection failed")
+                    })?;
+                    let row = client.query_opt(
+                        "SELECT role, is_active FROM users WHERE id = $1",
+                        &[&user_uuid]
+                    ).await.map_err(|e| {
+                        log::error!("FromRequest DB query error: {:?}", e);
+                        actix_web::error::ErrorInternalServerError("Database error")
+                    })?;
 
-                if let Some(cached) = cache_guard.get(&user_uuid) {
-                    if cached.fetched_at.elapsed() < std::time::Duration::from_secs(5) {
-                        Some((cached.role.clone(), cached.is_active))
+                    if let Some(row) = row {
+                        let r: String = row.get("role");
+                        let a: bool = row.get("is_active");
+                        let mut cache_write = cache.write().unwrap_or_else(|e| e.into_inner());
+                        cache_write.insert(user_uuid, CachedUserStatus {
+                            role: r.clone(),
+                            is_active: a,
+                            fetched_at: std::time::Instant::now(),
+                        });
+                        (r, a)
                     } else {
-                        None
+                        return Err(actix_web::error::ErrorUnauthorized("User not found"));
                     }
                 } else {
-                    None
+                    log::error!("MainDbPool app data is missing in Claims FromRequest");
+                    return Err(actix_web::error::ErrorInternalServerError("Database configuration error"));
                 }
-            }.unzip();
-
-            let (user_role, user_active) = if let (Some(r), Some(a)) = (role, is_active) {
-                (r, a)
-            } else if let Some(pool) = pool {
-                let client = pool.0.get().await.map_err(|e| {
-                    log::error!("FromRequest DB connection error: {:?}", e);
-                    actix_web::error::ErrorInternalServerError("Database connection failed")
-                })?;
-                let row = client.query_opt(
-                    "SELECT role, is_active FROM users WHERE id = $1",
-                    &[&user_uuid]
-                ).await.map_err(|e| {
-                    log::error!("FromRequest DB query error: {:?}", e);
-                    actix_web::error::ErrorInternalServerError("Database error")
-                })?;
-
-                if let Some(row) = row {
-                    let r: String = row.get("role");
-                    let a: bool = row.get("is_active");
-                    let mut cache_write = cache.lock().unwrap_or_else(|e| e.into_inner());
-                    cache_write.insert(user_uuid, CachedUserStatus {
-                        role: r.clone(),
-                        is_active: a,
-                        fetched_at: std::time::Instant::now(),
-                    });
-                    (r, a)
-                } else {
-                    return Err(actix_web::error::ErrorUnauthorized("User not found"));
-                }
-            } else {
-                log::error!("MainDbPool app data is missing in Claims FromRequest");
-                return Err(actix_web::error::ErrorInternalServerError("Database configuration error"));
             };
 
             if !user_active {
@@ -293,7 +293,31 @@ pub async fn setup_admin(
         Err(_) => return HttpResponse::InternalServerError().finish(),
     };
 
-    let row = match client.query_one("SELECT COUNT(*) FROM users", &[]).await {
+    // Serialize concurrent first-run setup requests with a transaction-scoped advisory
+    // lock so two simultaneous requests can't both see COUNT(*)==0 and create admins.
+    let mut client = client;
+    let tx = match client.transaction().await {
+        Ok(t) => t,
+        Err(e) => {
+            log::error!("Failed to begin setup transaction: {}", e);
+            return HttpResponse::InternalServerError().json(serde_json::json!({
+                "status": "error",
+                "message": "Database transaction failed"
+            }));
+        }
+    };
+    if let Err(e) = tx.query_opt(
+        "SELECT pg_advisory_xact_lock($1)",
+        &[&0x524D_4E53_i64], // arbitrary app-wide constant for "setup"
+    ).await {
+        log::error!("Failed to acquire setup lock: {}", e);
+        return HttpResponse::InternalServerError().json(serde_json::json!({
+            "status": "error",
+            "message": "Failed to acquire setup lock"
+        }));
+    }
+
+    let row = match tx.query_one("SELECT COUNT(*) FROM users", &[]).await {
         Ok(r) => r,
         Err(e) => {
             log::error!("Failed to query user count during setup: {}", e);
@@ -317,11 +341,18 @@ pub async fn setup_admin(
     };
 
     let email = format!("{}@local", req_body.username);
-    match client.execute(
+    match tx.execute(
         "INSERT INTO users (username, email, password_hash, role) VALUES ($1, $2, $3, 'admin')",
         &[&req_body.username, &email, &password_hash],
     ).await {
         Ok(_) => {
+            if tx.commit().await.is_err() {
+                log::error!("Failed to commit setup transaction");
+                return HttpResponse::InternalServerError().json(serde_json::json!({
+                    "status": "error",
+                    "message": "Failed to commit setup"
+                }));
+            }
             info!("Initial admin account created: {}", req_body.username);
             USER_REGISTRATIONS_TOTAL.inc();
             HttpResponse::Created().json(serde_json::json!({ "status": "ok" }))

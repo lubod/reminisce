@@ -5,11 +5,11 @@ Configures the centralized Axios HTTP client instance used by MobX stores for ba
 
 ## Interceptors & Authentication Flow
 - **Base Config**: `baseURL` is fixed to `/api` and `withCredentials` is enabled.
-- **Request Interceptor**: Automatically attaches the JWT bearer token from `localStorage.getItem("token")` into the `Authorization: Bearer <token>` HTTP header on every outgoing request.
+- **Request Interceptor**: The no-op request interceptor exists as a seam; authentication is delegated to the backend's `HttpOnly`, `SameSite` session cookie set on login. No JWT is read from or written to `localStorage`, so tokens are not exposed to XSS or the DOM.
 - **Response Interceptor (401 Auto-Handling)**:
   - Listens for HTTP 401 Unauthorized responses.
   - Excludes login and identity verification endpoints (`user-login`, `/auth/me`, `/login`) to avoid infinite redirect loops on invalid credentials.
-  - Clears `token` from `localStorage` and forces page navigation to `/login` when session expires.
+  - Redirects to `/login` when the session cookie expires or is invalid.
 
 ## Architectural Convention
 - **No Per-Endpoint API Modules**: Do not create separate API abstraction files (e.g. `api/media.ts`, `api/users.ts`). MobX stores import the default Axios `instance` from `api/axiosConfig.ts` and make HTTP calls directly. This keeps API payload types tied directly to store actions.

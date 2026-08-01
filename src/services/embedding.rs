@@ -656,8 +656,7 @@ pub async fn perform_semantic_search(
 async fn get_text_embedding(text: &str, config: &Config) -> Result<Vector, String> {
     info!("Requesting text embedding via gRPC at: {}", config.ai_grpc_url);
 
-    let api_key = config.get_api_key().unwrap_or("").to_string();
-    let client = crate::ai_client::AiClient::new(config.ai_grpc_url.clone(), api_key);
+    let client = crate::ai_client::AiClient::shared(config);
     let embedding_vec = client.embed_text(text.to_string()).await?;
 
     if embedding_vec.len() != 1152 {
@@ -670,8 +669,7 @@ async fn get_text_embedding(text: &str, config: &Config) -> Result<Vector, Strin
 
 /// Get image embedding from AI gRPC service
 pub async fn get_image_embedding(image_data: &[u8], config: &Config) -> Result<Vector, String> {
-    let api_key = config.get_api_key().unwrap_or("").to_string();
-    let client = crate::ai_client::AiClient::new(config.ai_grpc_url.clone(), api_key);
+    let client = crate::ai_client::AiClient::shared(config);
     let embedding_vec = client.embed_image(image_data.to_vec()).await?;
 
     if embedding_vec.len() != 1152 {

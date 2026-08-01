@@ -443,8 +443,9 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
                             AI_DESCRIPTION_DURATION.observe(duration.as_secs_f64());
                             AI_DESCRIPTION_FAILURES_TOTAL.inc();
                             error!("Failed to get AI description for {} {} (took {:.2}s): {}", file_type, hash, duration.as_secs_f64(), e);
-                            // Mark permanent failures (400 Bad Request) so they aren't retried
-                            if e.contains("400 Bad Request") {
+                            // Mark permanent failures (invalid input / auth errors) so
+                            // they aren't retried forever.
+                            if crate::ai_client::is_permanent_failure(&e) {
                                 let table_name = if file_type == "image" { "images" } else { "videos" };
                                 if let Err(e) = crate::utils::validate_table_name(table_name) {
                                     error!("Table name validation failed for {}: {}", table_name, e);
@@ -488,7 +489,7 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
                             EMBEDDING_FAILURES_TOTAL.inc();
                             error!("Failed to generate embedding for {} {} (took {:.2}s): {}", file_type, hash, duration.as_secs_f64(), e);
                             // Mark permanent failures so they aren't retried
-                            if e.contains("400 Bad Request") {
+                            if crate::ai_client::is_permanent_failure(&e) {
                                 let table_name = if file_type == "video" { "videos" } else { "images" };
                                 if let Err(e) = crate::utils::validate_table_name(table_name) {
                                     error!("Table name validation failed for {}: {}", table_name, e);
@@ -651,8 +652,7 @@ async fn get_image_description(
     // Pre-resize to 768px max for VLM input — saves ~98% bandwidth for full-res images
     let buffer = resize_image_for_ai(buffer, 768).await?;
 
-    let api_key = config.get_api_key().map_err(|e| format!("Failed to retrieve API key: {}", e))?.to_string();
-    let ai_client = crate::ai_client::AiClient::new(config.ai_grpc_url.clone(), api_key);
+    let ai_client = crate::ai_client::AiClient::shared(config);
 
     info!("Sending gRPC describe_image request for {}", hash);
     let (description, model_used) = ai_client.describe_image(buffer, false).await?;
@@ -781,8 +781,7 @@ async fn generate_and_store_video_embedding(
         return Ok(());
     }
 
-    let api_key = config.get_api_key().map_err(|e| format!("Failed to retrieve API key: {}", e))?.to_string();
-    let ai_client = crate::ai_client::AiClient::new(config.ai_grpc_url.clone(), api_key);
+    let ai_client = crate::ai_client::AiClient::shared(config);
 
     let mut keyframe_embeddings = Vec::new();
     for (timestamp, raw_bytes) in keyframes {

@@ -25,10 +25,9 @@ export class TrashStore {
     }
 
     getThumbnailUrl = (item: TrashItem): string => {
-        const base = `/api/thumbnail/${item.hash}`;
-        const token = this.rootStore.authStore.imageToken;
-        if (!token) return base;
-        return `${base}?token=${token}`;
+        // Authenticated by the httpOnly session cookie — no token in the URL (avoids leaking
+        // into nginx logs / history / Referer).
+        return `/api/thumbnail/${item.hash}`;
     };
 
     fetchTrash = async () => {

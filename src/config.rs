@@ -98,6 +98,11 @@ pub struct Config {
     /// Coordinator QUIC address for cross-network peer discovery (e.g. 1.2.3.4:5055).
     #[serde(default)]
     pub p2p_coordinator_addr: Option<String>,
+    /// Coordinator's 64-hex Node ID (printed in the coordinator startup log).
+    /// Required when `p2p_coordinator_addr` is set — it is bound to the QUIC connection
+    /// so a spoofed "coordinator" cannot impersonate the real one.
+    #[serde(default)]
+    pub p2p_coordinator_node_id: Option<String>,
 
     // Reverse tunnel — lets Android reach the home server through the VPS coordinator
     /// Local port to expose through the coordinator tunnel (e.g. 28444 for nginx HTTPS).

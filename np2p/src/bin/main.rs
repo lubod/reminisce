@@ -33,6 +33,12 @@ struct Args {
     #[arg(long)]
     coordinator_addr: Option<SocketAddr>,
 
+    /// Coordinator's 64-hex Node ID (printed in the coordinator startup log).
+    /// Required when --coordinator-addr is set — it is bound to the QUIC connection so
+    /// a spoofed "coordinator" cannot impersonate the real one.
+    #[arg(long)]
+    coordinator_node_id: Option<String>,
+
     /// Namespace for coordinator peer isolation (e.g. "production", "dev")
     #[arg(long, default_value = "default")]
     namespace: String,
@@ -76,6 +82,12 @@ async fn main() -> anyhow::Result<()> {
     info!("Node ID: {}", node_id_hex);
     std::fs::write(args.data_dir.join("node_id.txt"), &node_id_hex)?;
 
+    let authorized_owner_id = args.authorized_node_id.as_ref().map(|s| {
+        let mut key = [0u8; 32];
+        hex::decode_to_slice(s, &mut key).expect("Invalid authorized_node_id hex format");
+        key
+    });
+
     let storage_path = args.data_dir.join("shards");
     let storage = DiskStorage::new(storage_path).await?;
 
@@ -89,32 +101,39 @@ async fn main() -> anyhow::Result<()> {
 
     // Coordinator — for nodes on different networks
     if let Some(addr) = args.coordinator_addr {
-        service.coordinator_addr = Some(addr);
-        coordinator::start_coordinator_client(
-            addr,
-            service.node().clone(),
-            node_id_hex.clone(),
-            Some(quic_port),
-            service.registry.clone(),
-            args.namespace.clone(),
-        );
+        match args.coordinator_node_id.clone() {
+            Some(coord_node_id) => {
+                service.set_coordinator(addr, coord_node_id.clone());
+                coordinator::start_coordinator_client(
+                    addr,
+                    &coord_node_id,
+                    service.node().clone(),
+                    node_id_hex.clone(),
+                    Some(quic_port),
+                    service.registry.clone(),
+                    args.namespace.clone(),
+                );
 
-        // Reverse channel — so coordinator can relay messages to us even when behind NAT
-        np2p::network::channel::start_channel_client(
-            addr,
-            service.node().clone(),
-            identity.clone(),
-            storage.clone(),
-        );
+                // Reverse channel — so coordinator can relay messages to us even when behind NAT
+                np2p::network::channel::start_channel_client(
+                    addr,
+                    &coord_node_id,
+                    service.node().clone(),
+                    identity.clone(),
+                    storage.clone(),
+                    authorized_owner_id,
+                );
+            }
+            None => {
+                // Fail secure but stay useful: without the coordinator's Node ID we cannot
+                // verify its identity, so we skip coordinator/channel clients and run LAN-only
+                // rather than exiting the daemon.
+                warn!("--coordinator-addr is set but --coordinator-node-id is missing — cannot verify coordinator identity; running LAN-only (no coordinator/channel clients)");
+            }
+        }
     } else {
         info!("No coordinator configured — LAN discovery only");
     }
-
-    let authorized_owner_id = args.authorized_node_id.as_ref().map(|s| {
-        let mut key = [0u8; 32];
-        hex::decode_to_slice(s, &mut key).expect("Invalid authorized_node_id hex format");
-        key
-    });
 
     let service = Arc::new(service);
     let identity_arc = Arc::new(identity);

@@ -11,6 +11,10 @@ pub struct DiskStorage {
     base_path: PathBuf,
 }
 
+/// Hard cap on the size of a single shard accepted via streaming upload.
+/// Bounds disk usage per shard stream (defense against disk-exhaustion DoS).
+pub const MAX_SHARD_BYTES: u64 = 1 << 30; // 1 GiB
+
 #[cfg(unix)]
 fn get_available_space(path: &Path) -> std::io::Result<u64> {
     use std::ffi::CString;
@@ -28,8 +32,29 @@ fn get_available_space(path: &Path) -> std::io::Result<u64> {
 }
 
 #[cfg(not(unix))]
-fn get_available_space(_path: &Path) -> std::io::Result<u64> {
-    Ok(u64::MAX)
+fn get_available_space(path: &Path) -> std::io::Result<u64> {
+    // Free-space detection is not implemented on this platform: fail closed instead of
+    // reporting unlimited space (which would silently disable the disk-exhaustion guard).
+    let _ = path;
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "free-space detection not implemented on this platform",
+    ))
+}
+
+/// Refuse to write when free space is low or cannot be determined (fail-closed guard).
+fn ensure_sufficient_space(base_path: &Path) -> Result<()> {
+    match get_available_space(base_path) {
+        Ok(avail) if avail < 100 * 1024 * 1024 => Err(crate::error::Np2pError::Storage(format!(
+            "Insufficient disk space on node: {} bytes available",
+            avail
+        ))),
+        Err(e) => Err(crate::error::Np2pError::Storage(format!(
+            "Cannot determine free space on node: {}",
+            e
+        ))),
+        Ok(_) => Ok(()),
+    }
 }
 
 impl DiskStorage {
@@ -61,15 +86,8 @@ impl DiskStorage {
 
     /// Stores a shard on disk.
     pub async fn store(&self, shard_hash: [u8; 32], data: &[u8]) -> Result<()> {
-        // Assert at least 100MB of free space is available
-        if let Ok(avail) = get_available_space(&self.base_path) {
-            if avail < 100 * 1024 * 1024 {
-                return Err(crate::error::Np2pError::Storage(format!(
-                    "Insufficient disk space on node: {} bytes available",
-                    avail
-                )));
-            }
-        }
+        // Assert at least 100MB of free space is available (fails closed off-Unix).
+        ensure_sufficient_space(&self.base_path)?;
 
         let path = self.get_shard_path(&shard_hash);
 
@@ -86,6 +104,16 @@ impl DiskStorage {
 
     /// Appends a chunk to the in-progress temp file for a streaming shard upload.
     pub async fn store_stream_chunk(&self, temp_path: &Path, data: &[u8]) -> Result<()> {
+        // Reject once the shard stream exceeds the hard cap (bounds disk use).
+        if data.len() as u64 > MAX_SHARD_BYTES {
+            return Err(crate::error::Np2pError::Storage(format!(
+                "Shard chunk exceeds MAX_SHARD_BYTES ({} bytes)", MAX_SHARD_BYTES
+            )));
+        }
+        // Refuse to grow the temp file when disk space is low (same policy as `store`,
+        // fails closed off-Unix).
+        ensure_sufficient_space(&self.base_path)?;
+
         if let Some(parent) = temp_path.parent() {
             if !parent.exists() {
                 fs::create_dir_all(parent).await?;
