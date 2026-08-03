@@ -4,8 +4,6 @@ pub mod proto {
 
 use proto::ai_service_client::AiServiceClient;
 use proto::*;
-use std::sync::Arc;
-use tokio::sync::OnceCell;
 use tonic::transport::Channel;
 use tonic::Request;
 
@@ -34,7 +32,6 @@ static SHARED: std::sync::OnceLock<std::sync::Arc<AiClient>> = std::sync::OnceLo
 pub struct AiClient {
     grpc_url: String,
     api_key: String,
-    channel: Arc<OnceCell<Channel>>,
 }
 
 impl AiClient {
@@ -45,13 +42,13 @@ impl AiClient {
         Self {
             grpc_url,
             api_key,
-            channel: Arc::new(OnceCell::new()),
         }
     }
 
-    /// Process-wide shared `AiClient`, so the underlying tonic channel (the `OnceCell`
-    /// inside) is actually reused across RPCs instead of opening a fresh connection per
-    /// request. Constructed once from the first seen `Config`.
+    /// Process-wide shared `AiClient`, so the (state-less) client plus connection
+    /// settings are reused across RPCs. Each RPC builds its own tonic `Channel` to the
+    /// configured gRPC URL; the transport connect-or-fail behaviour is exercised by
+    /// `channel`/`client` below and by the ai_speed integration test.
     pub fn shared(config: &crate::config::Config) -> std::sync::Arc<AiClient> {
         SHARED
             .get_or_init(|| {
