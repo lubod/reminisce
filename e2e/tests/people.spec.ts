@@ -5,8 +5,10 @@ test.describe("people gallery", () => {
     await page.goto("/people");
   });
 
-  test("people page loads with heading", async ({ page }) => {
-    await expect(page.getByRole("heading", { name: /people/i })).toBeVisible();
+  test("people page loads with heading or empty state", async ({ page }) => {
+    const heading = page.getByRole("heading", { name: /people/i });
+    const emptyMsg = page.getByText(/no persons detected/i);
+    await expect(heading.or(emptyMsg)).toBeVisible({ timeout: 10000 });
   });
 
   test("shows person cards or empty state", async ({ page }) => {

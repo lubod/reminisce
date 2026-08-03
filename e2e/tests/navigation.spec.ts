@@ -36,6 +36,8 @@ test.describe("navigation", () => {
 });
 
 test.describe("auth guards", () => {
+  test.use({ storageState: { cookies: [], origins: [] } });
+
   test("unauthenticated user is redirected from all protected routes", async ({
     page,
   }) => {
