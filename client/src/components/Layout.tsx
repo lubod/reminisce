@@ -2,7 +2,7 @@ import { useState } from "react";
 import { observer } from "mobx-react-lite";
 import { useStore } from "../stores/RootStore";
 import { Outlet, Link, useNavigate, useLocation } from "react-router-dom";
-import { LogOut, Activity, Menu, X, RefreshCw, MonitorPlay, Users, Folder, Copy, Trash2 } from "lucide-react";
+import { LogOut, Activity, Menu, X, RefreshCw, MonitorPlay, Users, Folder, Copy, Trash2, ScanLine } from "lucide-react";
 
 export const Layout = observer(() => {
     const { authStore, statsStore, mediaStore, uiStore, personStore, duplicatesStore, trashStore } = useStore();
@@ -22,6 +22,7 @@ export const Layout = observer(() => {
         if (location.pathname.startsWith('/people')) return { title: 'People', icon: <Users className="w-5 h-5" /> };
         if (location.pathname.startsWith('/present')) return { title: 'Presentation Mode', icon: <MonitorPlay className="w-5 h-5" /> };
         if (location.pathname.startsWith('/duplicates')) return { title: 'Duplicates', icon: <Copy className="w-5 h-5" /> };
+        if (location.pathname.startsWith('/orientation')) return { title: 'Orientation Check', icon: <ScanLine className="w-5 h-5" /> };
         if (location.pathname.startsWith('/trash')) return { title: 'Trash', icon: <Trash2 className="w-5 h-5" /> };
         return { title: 'Reminisce', icon: null };
     };
@@ -36,6 +37,8 @@ export const Layout = observer(() => {
             personStore.fetchPersons();
         } else if (location.pathname.startsWith('/duplicates')) {
             duplicatesStore.fetchDuplicates();
+        } else if (location.pathname.startsWith('/orientation')) {
+            mediaStore.fetchNoExifImages(1, 50, false);
         } else if (location.pathname.startsWith('/trash')) {
             trashStore.fetchTrash();
         }
@@ -47,6 +50,7 @@ export const Layout = observer(() => {
         if (location.pathname.startsWith('/media')) return mediaStore.isLoadingMoreAllMedia || mediaStore.isSearching;
         if (location.pathname.startsWith('/people')) return personStore.isLoading;
         if (location.pathname.startsWith('/duplicates')) return duplicatesStore.isLoading;
+        if (location.pathname.startsWith('/orientation')) return mediaStore.isLoadingNoExif;
         if (location.pathname.startsWith('/trash')) return trashStore.isLoading;
         return false;
     };
@@ -115,6 +119,9 @@ export const Layout = observer(() => {
                                     <Link to="/duplicates" className={getLinkClass('/duplicates')}>
                                         Duplicates
                                     </Link>
+                                    <Link to="/orientation" className={getLinkClass('/orientation')}>
+                                        Orientation
+                                    </Link>
                                     <Link to="/trash" className={getLinkClass('/trash')}>
                                         Trash
                                     </Link>
@@ -176,6 +183,13 @@ export const Layout = observer(() => {
                                     className={getMobileLinkClass('/duplicates')}
                                 >
                                     Duplicates
+                                </Link>
+                                <Link
+                                    to="/orientation"
+                                    onClick={() => setMobileMenuOpen(false)}
+                                    className={getMobileLinkClass('/orientation')}
+                                >
+                                    Orientation
                                 </Link>
                                 <Link
                                     to="/trash"

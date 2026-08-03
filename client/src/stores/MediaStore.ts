@@ -84,6 +84,13 @@ export class MediaStore {
     allMediaHasMore: boolean = true;
     isLoadingMoreAllMedia: boolean = false;
 
+    // "Orientation check" tab: images with no EXIF metadata (rely on AI orientation)
+    noExifImages: MediaItem[] = [];
+    noExifCurrentPage: number = 1;
+    totalNoExif: number = 0;
+    noExifHasMore: boolean = true;
+    isLoadingNoExif: boolean = false;
+
     // View Preferences
     groupBy: 'day' | 'place' = 'day';
     videoGroupBy: 'day' | 'place' = 'day';
@@ -510,6 +517,46 @@ export class MediaStore {
         } else {
             if (!this.isLoadingMoreAllMedia) this.fetchAllMedia(this.allMediaCurrentPage + 1, 50, true);
         }
+    };
+
+    // "Orientation check" tab — images with no EXIF metadata
+    fetchNoExifImages = async (page: number = 1, limit: number = 50, append: boolean = false) => {
+        const seq = this.requestSeq;
+        if (append) this.isLoadingNoExif = true;
+        else this.rootStore.uiStore.setLoading(true);
+
+        try {
+            const params = new URLSearchParams({
+                page: page.toString(),
+                limit: limit.toString(),
+                no_exif: "true"
+            });
+            const response = await axios.get<ThumbnailsResponse>(`/image_thumbnails?${params}`);
+            const withUrls = await this.attachThumbnails(response.data.thumbnails.map(t => ({
+                ...t,
+                thumbnailUrl: t.thumbnail_url ? this.getAuthenticatedUrl(t.thumbnail_url) : undefined
+            })));
+            if (seq !== this.requestSeq) { this.revokeThumbnailUrls(withUrls); return; }
+
+            runInAction(() => {
+                this.noExifImages = append ? [...this.noExifImages, ...withUrls] : withUrls;
+                this.noExifCurrentPage = response.data.page;
+                this.totalNoExif = response.data.total;
+                this.noExifHasMore = this.noExifImages.length < response.data.total;
+            });
+        } catch {
+            this.rootStore.uiStore.setError("Failed to fetch no-EXIF images");
+        } finally {
+            runInAction(() => {
+                this.isLoadingNoExif = false;
+                this.rootStore.uiStore.setLoading(false);
+            });
+        }
+    };
+
+    loadMoreNoExif = () => {
+        if (!this.noExifHasMore || this.isLoadingNoExif) return;
+        this.fetchNoExifImages(this.noExifCurrentPage + 1, 50, true);
     };
 
     // --- Lightbox Methods ---

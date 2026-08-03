@@ -68,6 +68,7 @@ Co-located architecture and invariant guides are maintained alongside code modul
 ### Multi-Tenancy & Authentication
 - **Declarative Auth (`Claims`)**: REST endpoints declare `claims: Claims` in their function signature. `Claims` implements `actix_web::FromRequest` to automatically validate `Authorization: Bearer <token>` headers.
 - **Imperative Auth (`authenticate_request`)**: Used for raw media/thumbnail streaming endpoints where HTML `<img>` and `<video>` tags supply tokens via `?token=` query parameters.
+- **Native form login (`POST /api/auth/user-login-form`)**: the web login form is a real `application/x-www-form-urlencoded` POST — the backend sets the same httpOnly session cookie and responds `302` to `/` (or `/login?error=1`). Unlike a JSON/XHR login this is a genuine form submission + navigation, which makes browser password managers offer to save the credentials.
 - **Multi-Tenant Isolation**: Enforced at the SQL query layer using `WHERE user_id = $N` matching `claims.sub`.
 - **SQL Injection Safeguards**: Dynamic table interpolations are checked against an explicit whitelist via `validate_table_name()` (`"images"`, `"videos"`, etc.). `query_builder.rs` formats all user inputs as positional SQL parameters (`$1`, `$2`, ...).
 
@@ -79,7 +80,8 @@ Workers run an adaptive loop with exponential backoff (`run_worker_loop`):
 
 | Worker | File | Responsibility & Pipeline |
 |--------|------|---------------------------|
-| **AI Worker** | `ai_worker.rs` | Fetches unindexed media (images + video keyframes), resizes via CPU thread pool (`web::block`), calls the AI service over gRPC (`:50051`), and saves SigLIP2 embeddings, SmolVLM descriptions, and InsightFace clusters. |
+| **AI Worker** | `ai_worker.rs` | Fetches unindexed media (images + video keyframes), resizes via CPU thread pool (`web::block`), calls the AI service over gRPC (`:50051`), and saves SigLIP2 embeddings, SmolVLM descriptions, InsightFace clusters, and — for images with no EXIF — a BEiT orientation-classifier result stored into `images.orientation` / `images.orientation_detected_at`. |
+| **Orientation Check UI** | `client/src/components/OrientationCheck.tsx` | Lists no-EXIF photos (`/api/image_thumbnails?no_exif=true`) in a review grid + lightbox so users can manually check AI-detected orientation. |
 | **Verification Worker** | `verification_worker.rs` | Computes BLAKE3 checksums of local files on disk; flags `verification_status` to trigger restoration if files are corrupted or missing. |
 | **Replication Worker** | `media_replication_worker.rs` | Uses Rendezvous Hashing to select top 5 storage nodes for unsynced files, encrypts payload (ChaCha20-Poly1305), encodes into 3/5 Reed-Solomon shards, and streams to nodes over QUIC. |
 | **Audit Worker** | `p2p_audit_worker.rs` | Verifies shard health across storage nodes; if available shards drop below 5 (but $\ge 3$), downloads surviving shards, reconstructs the missing shards, and pushes them to new storage nodes. |

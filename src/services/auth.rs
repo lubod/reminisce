@@ -385,73 +385,151 @@ pub async fn user_login(
 ) -> HttpResponse {
     info!("User login attempt for username: {}", req_body.username);
 
-    if req_body.username.trim().is_empty() || req_body.password.is_empty() {
-        return HttpResponse::BadRequest().json(serde_json::json!({
+    match perform_login(&pool, &config, &req_body.username, &req_body.password).await {
+        Ok(outcome) => {
+            let image_token_exp = chrono::Utc::now() + chrono::Duration::hours(24);
+            let image_claims = Claims {
+                user_id: outcome.user_id.to_string(),
+                username: outcome.username.clone(),
+                email: String::new(),
+                role: outcome.role.clone(),
+                exp: image_token_exp.timestamp() as usize,
+                scope: Some("media_read".to_string()),
+            };
+            let image_token = encode(
+                &Header::new(Algorithm::HS512),
+                &image_claims,
+                &EncodingKey::from_secret(config.get_api_key().unwrap_or("").as_bytes()),
+            ).unwrap_or_default();
+
+            let mut response = HttpResponse::Ok();
+            response.cookie(outcome.cookie);
+            response.json(serde_json::json!({
+                "access_token": outcome.access_token,
+                "image_token": image_token,
+                "user": {
+                    "id": outcome.user_id.to_string(),
+                    "username": outcome.username,
+                    "role": outcome.role
+                }
+            }))
+        }
+        Err(resp) => resp,
+    }
+}
+
+/// Native form login used by the browser login form. Performs the same auth as
+/// `user_login`, sets the same httpOnly session cookie, then redirects to the app
+/// root. A real form POST followed by a navigation is exactly what makes the
+/// browser's password manager offer to save credentials.
+#[utoipa::path(
+    post,
+    path = "/auth/user-login-form",
+    request_body = UserLoginRequest,
+    responses(
+        (status = 303, description = "Login successful — redirect to app root"),
+        (status = 401, description = "Invalid credentials")
+    )
+)]
+#[post("/auth/user-login-form")]
+pub async fn user_login_form(
+    req_body: web::Form<UserLoginRequest>,
+    pool: web::Data<MainDbPool>,
+    config: web::Data<Config>,
+) -> HttpResponse {
+    info!("Form login attempt for username: {}", req_body.username);
+
+    match perform_login(&pool, &config, &req_body.username, &req_body.password).await {
+        Ok(outcome) => {
+            let mut response = HttpResponse::Found();
+            response.insert_header((actix_web::http::header::LOCATION, "/"));
+            response.cookie(outcome.cookie);
+            response.finish()
+        }
+        Err(_) => {
+            let mut response = HttpResponse::Found();
+            response.insert_header((actix_web::http::header::LOCATION, "/login?error=1"));
+            response.finish()
+        }
+    }
+}
+
+/// Shared login logic: validates credentials and, on success, issues a 7-day
+/// httpOnly session cookie plus the access token. Used by both the JSON API
+/// (`user_login`) and the native form login (`user_login_form`).
+struct LoginOutcome {
+    cookie: actix_web::cookie::Cookie<'static>,
+    access_token: String,
+    user_id: Uuid,
+    username: String,
+    role: String,
+}
+
+async fn perform_login(
+    pool: &web::Data<MainDbPool>,
+    config: &web::Data<Config>,
+    username: &str,
+    password: &str,
+) -> Result<LoginOutcome, HttpResponse> {
+    if username.trim().is_empty() || password.is_empty() {
+        return Err(HttpResponse::BadRequest().json(serde_json::json!({
             "status": "error",
             "message": "Username and password are required"
-        }));
+        })));
     }
 
-    // Get database connection
     let client = match pool.0.get().await {
         Ok(client) => client,
         Err(e) => {
             warn!("Failed to get database connection: {:?}", e);
-            return HttpResponse::InternalServerError().json(serde_json::json!({
+            return Err(HttpResponse::InternalServerError().json(serde_json::json!({
                 "status": "error",
                 "message": "Database connection failed"
-            }));
+            })));
         }
     };
 
-    // Query user from database
     let query = "SELECT id, username, password_hash, role, is_active FROM users WHERE username = $1";
-
-    let row = match instrumented_query_opt(&client, query, &[&req_body.username], "user_login_query").await {
+    let row = match instrumented_query_opt(&client, query, &[&username], "user_login_query").await {
         Ok(Some(row)) => row,
         Ok(None) => {
-            warn!("User not found: {}", req_body.username);
-
-            // Increment failed login metrics
+            warn!("User not found: {}", username);
             USER_LOGIN_FAILURES_TOTAL.inc();
-
-            return HttpResponse::Unauthorized().json(serde_json::json!({
+            return Err(HttpResponse::Unauthorized().json(serde_json::json!({
                 "status": "error",
                 "message": "Invalid username or password"
-            }));
+            })));
         }
         Err(e) => {
             warn!("Database error during login: {:?}", e);
-            return HttpResponse::InternalServerError().json(serde_json::json!({
+            return Err(HttpResponse::InternalServerError().json(serde_json::json!({
                 "status": "error",
                 "message": "Login failed"
-            }));
+            })));
         }
     };
 
     let user_id: Uuid = row.get("id");
-    let username: String = row.get("username");
+    let db_username: String = row.get("username");
     let password_hash: String = row.get("password_hash");
     let role: String = row.get("role");
     let is_active: bool = row.get("is_active");
 
-    // Check if user is active
     if !is_active {
         warn!("Inactive user attempted login: {}", username);
-        return HttpResponse::Unauthorized().json(serde_json::json!({
+        USER_LOGIN_FAILURES_TOTAL.inc();
+        return Err(HttpResponse::Unauthorized().json(serde_json::json!({
             "status": "error",
             "message": "Account is disabled"
-        }));
+        })));
     }
 
-    // Verify password
-    match verify_password(&req_body.password, &password_hash) {
+    match verify_password(password, &password_hash) {
         Ok(true) => {
-            // Password is correct, generate JWT
             let expiration_time = chrono::Utc::now() + chrono::Duration::days(7);
             let claims = Claims {
                 user_id: user_id.to_string(),
-                username: username.clone(),
+                username: username.to_string(),
                 email: String::new(),
                 role: role.clone(),
                 exp: expiration_time.timestamp() as usize,
@@ -460,31 +538,28 @@ pub async fn user_login(
 
             let api_key = match config.get_api_key() {
                 Ok(k) => k,
-                Err(e) => return HttpResponse::InternalServerError().json(serde_json::json!({
+                Err(e) => return Err(HttpResponse::InternalServerError().json(serde_json::json!({
                     "status": "error",
                     "message": format!("Configuration error: {}", e)
-                })),
+                }))),
             };
 
             let token = encode(
                 &Header::new(Algorithm::HS512),
                 &claims,
-                &EncodingKey::from_secret(api_key.as_bytes())
+                &EncodingKey::from_secret(api_key.as_bytes()),
             );
 
             match token {
                 Ok(t) => {
-                    // Update last_login_at
                     let _ = instrumented_execute(
                         &client,
                         "UPDATE users SET last_login_at = NOW() WHERE id = $1",
                         &[&user_id],
-                        "update_last_login"
+                        "update_last_login",
                     ).await;
 
                     info!("User logged in successfully: {}", username);
-
-                    // Increment successful login metrics
                     USER_LOGINS_TOTAL.inc();
 
                     let is_secure = config.environment.as_deref() != Some("development") && config.environment.as_deref() != Some("dev");
@@ -496,59 +571,31 @@ pub async fn user_login(
                         .max_age(actix_web::cookie::time::Duration::days(7))
                         .finish();
 
-                    let image_token_exp = chrono::Utc::now() + chrono::Duration::hours(24);
-                    let image_claims = Claims {
-                        user_id: user_id.to_string(),
-                        username: username.clone(),
-                        email: String::new(),
-                        role: role.clone(),
-                        exp: image_token_exp.timestamp() as usize,
-                        scope: Some("media_read".to_string()),
-                    };
-                    let image_token = encode(
-                        &Header::new(Algorithm::HS512),
-                        &image_claims,
-                        &EncodingKey::from_secret(api_key.as_bytes())
-                    ).unwrap_or_default();
-
-                    let mut response = HttpResponse::Ok();
-                    response.cookie(cookie);
-                    response.json(serde_json::json!({
-                        "access_token": t,
-                        "image_token": image_token,
-                        "user": {
-                            "id": user_id.to_string(),
-                            "username": username,
-                            "role": role
-                        }
-                    }))
+                    Ok(LoginOutcome { cookie, access_token: t, user_id, username: db_username, role })
                 }
                 Err(e) => {
                     warn!("Failed to generate token: {:?}", e);
-                    HttpResponse::InternalServerError().json(serde_json::json!({
+                    Err(HttpResponse::InternalServerError().json(serde_json::json!({
                         "status": "error",
                         "message": "Failed to generate token"
-                    }))
+                    })))
                 }
             }
         }
         Ok(false) => {
             warn!("Invalid password for user: {}", username);
-
-            // Increment failed login metrics
             USER_LOGIN_FAILURES_TOTAL.inc();
-
-            HttpResponse::Unauthorized().json(serde_json::json!({
+            Err(HttpResponse::Unauthorized().json(serde_json::json!({
                 "status": "error",
                 "message": "Invalid username or password"
-            }))
+            })))
         }
         Err(e) => {
             warn!("Password verification error: {:?}", e);
-            HttpResponse::InternalServerError().json(serde_json::json!({
+            Err(HttpResponse::InternalServerError().json(serde_json::json!({
                 "status": "error",
                 "message": "Authentication failed"
-            }))
+            })))
         }
     }
 }

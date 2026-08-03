@@ -11,6 +11,9 @@ export const LoginForm = observer(() => {
     const [showPassword, setShowPassword] = useState(false);
     const [error, setError] = useState("");
     const [isLoading, setIsLoading] = useState(true);
+    const serverError = new URLSearchParams(window.location.search).get("error")
+        ? "Invalid username or password"
+        : "";
 
     useEffect(() => {
         authStore.checkSetupStatus().finally(() => setIsLoading(false));
@@ -36,19 +39,11 @@ export const LoginForm = observer(() => {
         if (!result.success) setError(result.error || "Setup failed");
     };
 
-    const handleLogin = async (e: React.FormEvent) => {
-        e.preventDefault();
-        setError("");
-        setIsLoading(true);
-        const result = await authStore.login(username, password);
-        if (result.success) {
-            // Force a full page reload to trigger password save
-            window.location.href = "/";
-            return;
-        }
-        setIsLoading(false);
-        setError(result.error || "Login failed");
-    };
+    // Native form submission: the browser posts the credentials to the backend,
+    // which sets the session cookie and redirects to "/". A real form POST that
+    // results in a navigation is what reliably triggers the browser's password
+    // manager to offer "Save password", even on self-hosted/IP origins.
+    // (No preventDefault — let the browser submit the form natively.)
 
     if (!authStore.initialized) {
         return (
@@ -142,8 +137,9 @@ export const LoginForm = observer(() => {
                     <p className="text-gray-400 text-sm mt-1">Sign in to your account</p>
                 </div>
 
-                <form onSubmit={handleLogin} className="space-y-4">
+                <form method="post" action="/api/auth/user-login-form" className="space-y-4">
                     {error && <p className="text-xs text-red-400 bg-red-900/20 border border-red-800 rounded-lg px-3 py-2">{error}</p>}
+                    {serverError && <p className="text-xs text-red-400 bg-red-900/20 border border-red-800 rounded-lg px-3 py-2">{serverError}</p>}
 
                     <div>
                         <label htmlFor="login-username" className="block text-sm font-medium text-gray-300 mb-1.5">Username</label>

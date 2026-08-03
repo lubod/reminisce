@@ -9,6 +9,7 @@ Reminisce lets you back up photos and videos from your phone to your own server,
 - **AI-powered search** — semantic similarity search using SigLIP2 embeddings; find photos by typing "beach sunset" or "birthday cake"
 - **Automatic descriptions** — SmolVLM-500M generates text descriptions for every photo (~5s per image)
 - **Face recognition** — InsightFace clusters faces into people; name them and search by person
+- **Photo orientation auto-fix** — photos without EXIF orientation are analyzed by an AI orientation classifier (BEiT); the Orientation tab lists them for manual review
 - **Location tagging** — GPS reverse-geocoding (offline PostGIS database, no API key required)
 - **P2P distributed storage** — files are erasure-coded (3/5 Reed-Solomon) and distributed across your own storage nodes, with no single point of failure
 - **Cross-device deduplication** — the same photo from multiple phones is stored once
@@ -62,6 +63,11 @@ docker compose up -d
 
 The web UI will be available at `https://localhost:28444` (self-signed cert).
 
+Login uses a native form POST (`/api/auth/user-login-form`) that sets an httpOnly session
+cookie and redirects — this makes browsers reliably offer to save the password. (Chrome will
+only prompt once the site serves a trusted TLS certificate; for a self-signed/LAN setup, use
+`mkcert` and install its root CA.)
+
 On first run, create the admin account:
 ```bash
 curl -X POST http://localhost:8080/api/auth/setup \
@@ -104,6 +110,7 @@ The AI service runs as a Docker container (`lubod/reminisce-ai-server`) and expo
 | `POST /describe` | SmolVLM-500M-Instruct | ~5.5s |
 | `POST /describe/qwen` | Qwen2.5-VL-3B | ~28s |
 | `POST /detect` | InsightFace buffalo_l | ~625ms |
+| gRPC `DetectOrientation` | BEiT-Base Image-Orientation-Fixer | ~few ms |
 
 GPU acceleration is supported for AMD ROCm and CUDA. InsightFace runs on CPU to avoid ROCm ONNX crashes on RDNA3 iGPUs.
 

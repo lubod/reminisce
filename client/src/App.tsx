@@ -6,6 +6,7 @@ import { Layout } from "./components/Layout";
 import { Dashboard } from "./components/Dashboard";
 import { MediaBrowser } from "./components/MediaBrowser";
 import { PresentationMode } from "./components/PresentationMode";
+import { OrientationCheck } from "./components/OrientationCheck";
 import { People } from "./components/People";
 import { DuplicatesBrowser } from "./components/DuplicatesBrowser";
 import { TrashBrowser } from "./components/TrashBrowser";
@@ -58,6 +59,7 @@ const App = observer(() => {
             <Route path="people/:personId" element={<People />} />
             <Route path="present" element={<PresentationMode />} />
             <Route path="duplicates" element={<DuplicatesBrowser />} />
+            <Route path="orientation" element={<OrientationCheck />} />
             <Route path="trash" element={<TrashBrowser />} />
           </Route>
         </Routes>

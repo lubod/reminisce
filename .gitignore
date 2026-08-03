@@ -42,3 +42,6 @@ e2e/.auth/
 
 .DS_Store
 p2p_keys.escrow
+
+# Local geocoding DB data (runtime only)
+geodb_builder/pgdata/

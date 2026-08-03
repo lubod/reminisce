@@ -393,6 +393,10 @@ pub struct PaginationQuery {
     /// Sort direction: "desc" (default) or "asc"
     #[serde(default)]
     pub sort_order: Option<String>,
+    /// Only images with NO EXIF metadata (customer: "Orientation check" tab — no
+    /// EXIF orientation available, so these rely on AI detect / manual review).
+    #[serde(default)]
+    pub no_exif: bool,
 }
 
 fn default_page() -> usize {
@@ -495,6 +499,7 @@ async fn list_media_thumbnails(
         query.location_radius_km,
         query.label_id,
         apply_user_id_filter,
+        query.no_exif,
         &pool
     ).await;
 
@@ -514,6 +519,7 @@ async fn list_media_thumbnails(
             query.location_radius_km,
             query.label_id,
             apply_user_id_filter,
+            query.no_exif,
             query.sort_by.as_deref(),
             query.sort_order.as_deref(),
             &pool

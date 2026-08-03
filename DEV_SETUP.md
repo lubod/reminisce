@@ -112,6 +112,25 @@ The `./dev` script is your primary tool for development:
 | `./dev fullstack`      | Start everything (server, client, all nodes) in Docker |
 | `./dev fullstack-recreate` | Force recreate all containers in Docker |
 
+### Fast image sync to production (dev -> prod)
+
+When `dev` and `prod` are LXD containers on the **same LXD host**, skip the registry entirely and
+stream images through the host's LXD socket — dramatically faster than `docker push`/`pull`
+(server image ~18s instead of minutes):
+
+```bash
+# On the LXD host (not inside the container)
+/home/ldr/docker-sync.sh                 # sync all Reminisce images dev -> prod
+/home/ldr/docker-sync.sh remind client   # only specific images (names: postgres reminiscent client ai-server p2p-node coordinator)
+/home/ldr/docker-sync.sh --list          # show images available in dev
+```
+
+Equivalent one-liner for a single image:
+
+```bash
+lxc exec dev -- docker save <image> | gzip -1 | lxc exec prod -- docker load
+```
+
 ### Maintenance
 | Command | Description |
 |---------|-------------|

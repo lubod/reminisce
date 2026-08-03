@@ -355,6 +355,7 @@ pub async fn list_thumbnails(
     location_radius_km: Option<f64>,
     label_id: Option<i32>,
     apply_user_id_filter: bool,
+    no_exif: bool,
     sort_by: Option<&str>,
     sort_order: Option<&str>,
     pool: &web::Data<MainDbPool>,
@@ -391,6 +392,9 @@ pub async fn list_thumbnails(
         }
         if end_date.is_some() {
             builder.with_end_date();
+        }
+        if no_exif && builder.is_images_table() {
+            builder.with_no_exif();
         }
     };
 
@@ -588,6 +592,7 @@ pub async fn total_thumbnails(
     location_radius_km: Option<f64>,
     label_id: Option<i32>,
     apply_user_id_filter: bool,
+    no_exif: bool,
     pool: &web::Data<MainDbPool>,
 ) -> i64 {
     let client = match pool.0.get().await {
@@ -629,6 +634,9 @@ pub async fn total_thumbnails(
         }
         if end_date.is_some() {
             builder.with_end_date();
+        }
+        if no_exif && builder.is_images_table() {
+            builder.with_no_exif();
         }
     };
 

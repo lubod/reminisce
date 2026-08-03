@@ -77,6 +77,18 @@ impl MediaQueryBuilder {
         self.conditions.push("t.has_thumbnail = true".to_string());
     }
 
+    /// Only include images that carry no EXIF metadata at all (no EXIF orientation available).
+    /// Used by the "Orientation check" tab: these photos rely on AI orientation detection
+    /// and may need manual review. Images table only.
+    pub fn with_no_exif(&mut self) {
+        self.conditions.push("t.exif IS NULL".to_string());
+    }
+
+    /// True when this builder targets the images table (only images have an `exif` column).
+    pub fn is_images_table(&self) -> bool {
+        self.table == tables::IMAGES
+    }
+
     /// Add start date filter condition (created_at >= start_date)
     pub fn with_start_date(&mut self) -> QueryParam {
         self.param_count += 1;
