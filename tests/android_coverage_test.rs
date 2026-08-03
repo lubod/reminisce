@@ -157,7 +157,7 @@ async fn test_upload_video_metadata_success() {
         .execute(
             "INSERT INTO videos (hash, name, metadata, created_at, type, deviceid, ext, has_thumbnail, verification_status, user_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
             &[
-                &"test_video_meta_hash",
+                &"1111111122222222333333334444444455555555666666667777777788888888",
                 &"VID_20250101.mp4",
                 &None::<&str>,
                 &chrono::Utc::now(),
@@ -175,7 +175,7 @@ async fn test_upload_video_metadata_success() {
     client
         .execute(
             "INSERT INTO media_sources (user_id, hash, media_type, device_id, uploaded_at) VALUES ($1, $2, 'video', $3, NOW())",
-            &[&user_uuid, &"test_video_meta_hash", &"original_device"],
+            &[&user_uuid, &"1111111122222222333333334444444455555555666666667777777788888888", &"original_device"],
         ).await
         .expect("Failed to insert test media source");
 
@@ -195,7 +195,7 @@ async fn test_upload_video_metadata_success() {
     // Upload metadata from a second device
     let request_body = serde_json::json!({
         "deviceid": "second_device",
-        "hash": "test_video_meta_hash",
+        "hash": "1111111122222222333333334444444455555555666666667777777788888888",
         "name": "/sdcard/DCIM/VID_20250101.mp4",
         "ext": "mp4",
     });
@@ -214,14 +214,14 @@ async fn test_upload_video_metadata_success() {
 
     // Verify one record exists in videos
     let video_rows = client
-        .query("SELECT deviceid, name FROM videos WHERE hash = $1", &[&"test_video_meta_hash"])
+        .query("SELECT deviceid, name FROM videos WHERE hash = $1", &[&"1111111122222222333333334444444455555555666666667777777788888888"])
         .await
         .expect("Failed to query database");
     assert_eq!(video_rows.len(), 1, "Should have 1 entry in videos");
 
     // Verify both records exist in media_sources
     let source_rows = client
-        .query("SELECT device_id FROM media_sources WHERE hash = $1 ORDER BY device_id", &[&"test_video_meta_hash"])
+        .query("SELECT device_id FROM media_sources WHERE hash = $1 ORDER BY device_id", &[&"1111111122222222333333334444444455555555666666667777777788888888"])
         .await
         .expect("Failed to query database");
     assert_eq!(source_rows.len(), 2, "Should have 2 entries in media_sources (one per device)");
@@ -231,8 +231,8 @@ async fn test_upload_video_metadata_success() {
     assert!(device_ids.contains(&"second_device".to_string()));
 
     // Clean up
-    client.execute("DELETE FROM videos WHERE hash = $1", &[&"test_video_meta_hash"]).await.ok();
-    client.execute("DELETE FROM media_sources WHERE hash = $1", &[&"test_video_meta_hash"]).await.ok();
+    client.execute("DELETE FROM videos WHERE hash = $1", &[&"1111111122222222333333334444444455555555666666667777777788888888"]).await.ok();
+    client.execute("DELETE FROM media_sources WHERE hash = $1", &[&"1111111122222222333333334444444455555555666666667777777788888888"]).await.ok();
 }
 
 /// Test soft-delete of a video (admin only).

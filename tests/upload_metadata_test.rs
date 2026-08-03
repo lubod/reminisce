@@ -5,7 +5,7 @@ use chrono::{self, TimeZone, Utc};
 use serial_test::serial;
 mod common;
 
-const TEST_IMAGE_HASH: &str = "test_image_hash_metadata";
+const TEST_IMAGE_HASH: &str = "2222222233333333444444445555555566666666777777778888888899999999";
 const TEST_IMAGE_NAME: &str = "test_image_name_metadata.jpg";
 
 #[actix_web::test]
@@ -131,7 +131,7 @@ async fn test_upload_image_metadata_filename_date() {
     ).await;
 
     let token = common::utils::create_test_jwt_token().await;
-    let hash = "test_meta_filename_date_hash";
+    let hash = "3333333344444444555555556666666677777777888888889999999900000000";
     let name = "IMG-20210615-WA0000.jpg";
 
     let req = test::TestRequest::post()
@@ -191,7 +191,7 @@ async fn test_upload_video_metadata_filename_date() {
     ).await;
 
     let token = common::utils::create_test_jwt_token().await;
-    let hash = "test_meta_vid_filename_date_hash";
+    let hash = "4444444455555555666666667777777788888888999999990000000011111111";
     let name = "VID_20210615_143025.mp4";
 
     let req = test::TestRequest::post()

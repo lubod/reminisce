@@ -62,16 +62,10 @@ impl AiClient {
     }
 
     async fn channel(&self) -> Result<Channel, String> {
-        let channel = self
-            .channel
-            .get_or_try_init(|| async {
-                let endpoint = Channel::from_shared(self.grpc_url.clone())
-                    .map_err(|e| format!("invalid gRPC URL '{}': {}", self.grpc_url, e))?;
-                endpoint.connect().await.map_err(|e| format!("gRPC connect failed: {}", e))
-            })
-            .await
-            .map_err(|e| e.clone())?;
-        Ok(channel.clone())
+        let endpoint = Channel::from_shared(self.grpc_url.clone())
+            .map_err(|e| format!("invalid gRPC URL '{}': {}", self.grpc_url, e))?;
+        let channel = endpoint.connect().await.map_err(|e| format!("gRPC connect failed: {}", e))?;
+        Ok(channel)
     }
 
     async fn client(&self) -> Result<AiServiceClient<Channel>, String> {
@@ -139,10 +133,30 @@ impl AiClient {
     }
 
     pub async fn health_check(&self) -> Result<HealthCheckResponse, String> {
-        let mut client = self.client().await?;
+        let mut client = match self.client().await {
+            Ok(c) => c,
+            Err(_) => {
+                tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+                self.client().await?
+            }
+        };
         let request = self.make_request(HealthCheckRequest {});
 
-        let response = client.health_check(request).await.map_err(|e| format!("HealthCheck gRPC call failed: {}", e))?;
-        Ok(response.into_inner())
+        match client.health_check(request).await {
+            Ok(resp) => Ok(resp.into_inner()),
+            Err(e) => {
+                let err_str = e.to_string();
+                if !is_permanent_failure(&err_str) {
+                    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                    if let Ok(mut c) = self.client().await {
+                        let request = self.make_request(HealthCheckRequest {});
+                        if let Ok(resp) = c.health_check(request).await {
+                            return Ok(resp.into_inner());
+                        }
+                    }
+                }
+                Err(format!("HealthCheck gRPC call failed: {}", err_str))
+            }
+        }
     }
 }
