@@ -40,6 +40,12 @@ export const MediaLightbox = observer(() => {
     const isFirstMedia = mediaStore.selectedMediaIndex === 0;
     const isLastMedia = mediaStore.selectedMediaIndex === mediaStore.activeLightboxItems.length - 1;
 
+    const handleDelete = useCallback(async () => {
+        if (selectedMedia && window.confirm("Are you sure you want to delete this media?")) {
+            await mediaStore.deleteMedia(selectedMedia.hash);
+        }
+    }, [selectedMedia, mediaStore]);
+
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
             const target = e.target as HTMLElement;
@@ -69,13 +75,10 @@ export const MediaLightbox = observer(() => {
 
         window.addEventListener("keydown", handleKeyDown);
         return () => window.removeEventListener("keydown", handleKeyDown);
-    }, [mediaStore, isAdmin]);
-
-    const handleDelete = async () => {
-        if (selectedMedia && window.confirm("Are you sure you want to delete this media?")) {
-            await mediaStore.deleteMedia(selectedMedia.hash);
-        }
-    };
+        // handleDelete intentionally included: it closes over `selectedMedia`, so the
+        // listener must be re-registered whenever the displayed media changes —
+        // otherwise the "D" shortcut would delete a stale image.
+    }, [mediaStore, isAdmin, handleDelete]);
 
     // Pan & Zoom Handlers
     const handleWheel = (e: React.WheelEvent) => {

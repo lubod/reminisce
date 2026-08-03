@@ -24,6 +24,12 @@ use np2p::network::protocol::{Message, Protocol};
 /// unbounded `tokio::spawn` per connection (memory-DoS protection).
 const MAX_CONNECTIONS: usize = 512;
 
+/// Maximum size of a single relayed payload. Must accommodate a whole shard being
+/// retrieved over the relay (a 256 MB file sharded to 3 data shards yields shards
+/// of ~85 MB plus bincode overhead). A relayed shard upload uses bounded 16 MiB
+/// chunks, so this only really bounds shard *retrieval*.
+const MAX_RELAY_PAYLOAD: usize = 128 * 1024 * 1024;
+
 /// Fixed-window per-IP rate limiter for registration / discovery / relay requests.
 /// Prevents an attacker from flooding the coordinator with unauthenticated messages.
 struct RateLimiter {
@@ -296,7 +302,7 @@ async fn handle_stream(
         }
 
         Message::RelayRequest { target_node_id, payload } => {
-            if payload.len() > 2 * 1024 * 1024 {
+            if payload.len() > MAX_RELAY_PAYLOAD {
                 let _ = Protocol::send(&mut send, &Message::Error { code: 400, message: "Relay payload too large".into() }).await;
                 return;
             }
@@ -322,7 +328,7 @@ async fn relay(
     payload: Vec<u8>,
     channels: &ChannelMap,
 ) {
-    if payload.len() > 2 * 1024 * 1024 {
+    if payload.len() > MAX_RELAY_PAYLOAD {
         return;
     }
 
@@ -349,7 +355,7 @@ async fn relay(
         let mut len_buf = [0u8; 4];
         if tr.read_exact(&mut len_buf).await.is_err() { return; }
         let resp_len = u32::from_be_bytes(len_buf) as usize;
-        if resp_len > 2 * 1024 * 1024 { return; }
+        if resp_len > MAX_RELAY_PAYLOAD { return; }
         let mut resp_payload = vec![0u8; resp_len];
         if tr.read_exact(&mut resp_payload).await.is_err() { return; }
         let _ = Protocol::send(send, &Message::RelayResponse { payload: resp_payload }).await;
@@ -412,7 +418,7 @@ async fn relay(
     let mut len_buf = [0u8; 4];
     if tr.read_exact(&mut len_buf).await.is_err() { return; }
     let resp_len = u32::from_be_bytes(len_buf) as usize;
-    if resp_len > 2 * 1024 * 1024 { return; }
+    if resp_len > MAX_RELAY_PAYLOAD { return; }
     let mut resp_payload = vec![0u8; resp_len];
     if tr.read_exact(&mut resp_payload).await.is_err() { return; }
 
@@ -449,12 +455,13 @@ async fn pipe<R, W>(
 {
     let to_home = tokio::io::copy(&mut client_read, &mut quic_send);
     let to_client = tokio::io::copy(&mut quic_recv, &mut client_write);
-    // 5-minute timeout: prevents stalled connections from holding QUIC streams open.
-    let timeout = tokio::time::sleep(std::time::Duration::from_secs(300));
+    // 30-minute timeout: prevents stalled connections from holding QUIC streams
+    // open, while allowing long media uploads/downloads through the tunnel.
+    let timeout = tokio::time::sleep(std::time::Duration::from_secs(1800));
     tokio::select! {
         _ = to_home => {}
         _ = to_client => {}
-        _ = timeout => { warn!("[TUNNEL] Pipe timed out after 300s — closing"); }
+        _ = timeout => { warn!("[TUNNEL] Pipe timed out after 1800s — closing"); }
     }
 }
 

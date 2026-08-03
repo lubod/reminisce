@@ -51,7 +51,7 @@ class ThumbnailAuthInterceptor(private val context: Context) : Interceptor {
             try {
                 val parts = token.split(".")
                 if (parts.size == 3) {
-                    val payload = String(android.util.Base64.decode(parts[1], android.util.Base64.URL_SAFE))
+                    val payload = String(android.util.Base64.decode(parts[1], android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING))
                     val json = org.json.JSONObject(payload)
                     tokenExpiryTime = json.optLong("exp", 0) * 1000
                 }

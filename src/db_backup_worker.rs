@@ -160,7 +160,7 @@ async fn backup_dump_file(
     let parity_shards = config.p2p_parity_shards;
 
     let (uploaded, enc_size, segment_count, segment_enc_sizes) = if file_size > SEGMENT_THRESHOLD {
-        let (u, sizes) = p2p_upload::upload_segmented(p2p_service, nodes, &backup_hash, dump_path, &encryption_key).await?;
+        let (u, sizes) = p2p_upload::upload_segmented(p2p_service, nodes, &backup_hash, dump_path, &encryption_key, data_shards, parity_shards).await?;
         (u, 0i64, sizes.len() as i32, Some(sizes))
     } else {
         let data = tokio::fs::read(dump_path).await.map_err(|e| e.to_string())?;
@@ -203,7 +203,7 @@ async fn backup_dump_file(
         trans.execute(
             "INSERT INTO p2p_nodes (node_id, public_addr, is_active) VALUES ($1, $2, TRUE)
              ON CONFLICT (node_id) DO UPDATE SET public_addr = $2, is_active = TRUE, last_seen = NOW()",
-            &[&shard.node_id, &shard.node_id],
+            &[&shard.node_id, &shard.addr],
         ).await.map_err(|e| e.to_string())?;
         trans.execute(
             "INSERT INTO db_backup_shards (backup_hash, shard_index, node_id, shard_hash)

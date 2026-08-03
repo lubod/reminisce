@@ -88,6 +88,10 @@ async fn main() -> anyhow::Result<()> {
         key
     });
 
+    if authorized_owner_id.is_none() {
+        warn!("⚠️  --authorized-node-id not set: this storage node will accept shard store/retrieve/delete requests from ANY node that presents a self-signed token. Pin the owner with --authorized-node-id <home-server-node-id> to restrict access.");
+    }
+
     let storage_path = args.data_dir.join("shards");
     let storage = DiskStorage::new(storage_path).await?;
 

@@ -14,7 +14,7 @@
 | `docker-compose.yml` | Production: API, AI service, Postgres, nginx |
 | `docker/docker-compose-dev.yml` | Development with hot-reload and exposed debug ports |
 | `docker/docker-compose-build.yml` | Build images locally (used before pushing to registry) |
-| `docker/docker-compose-observability.yml` | Prometheus + Loki + Grafana + Tempo monitoring stack |
+| `docker/docker-compose-observability.yml` | Prometheus + Loki + Grafana monitoring stack |
 
 Start everything:
 ```bash
@@ -59,7 +59,7 @@ Copy `config-fullstack.yaml.example` to `config-fullstack.yaml`. Required fields
 | `port` | No | HTTP listen port (default `8080`) |
 | `p2p_coordinator_addr` | No | `host:port` of coordinator for WAN peer discovery |
 | `p2p_coordinator_node_id` | Required with `p2p_coordinator_addr` | The coordinator's 64-hex Node ID (printed in the coordinator startup log). Bound to the QUIC connection so a spoofed coordinator cannot impersonate the real one. If set without `p2p_coordinator_addr` it is ignored; if `p2p_coordinator_addr` is set without it, coordinator/tunnel use is disabled with a clear error. |
-| `p2p_discovery_port` | No | UDP port for LAN peer discovery broadcasts (default `5056`) |
+| `p2p_discovery_port` | No | UDP port for LAN peer discovery broadcasts (default `5066`) |
 | `p2p_deterministic_identity` | No | Derive P2P node identity from `api_secret_key` (default `false`). Enables true full-disk-loss recovery but changes node_id — use for new setups |
 | `p2p_tunnel_local_port` | No | Local HTTP port the reverse tunnel should forward to |
 | `otlp_endpoint` | No | OpenTelemetry OTLP gRPC endpoint for distributed tracing |
@@ -81,25 +81,25 @@ Each snapshot also writes a self-contained restore manifest to `<p2p_data_dir>/d
 
 ## TLS / HTTPS
 
-The server uses `rustls`. Put TLS termination in nginx (see `docker/nginx/`) rather than configuring rustls directly. The included nginx config handles:
+The server uses `rustls`. Put TLS termination in nginx (see `nginx/` at the repo root) rather than configuring rustls directly. The included nginx config handles:
 - HTTPS on port 28444 (self-signed cert for LAN use)
 - WebSocket proxying for live updates
 - Static file serving for the React client
 
 ## Storage Nodes (Pi Setup)
 
-Each Pi runs the `np2p` daemon binary:
+Each Pi runs the `np2p` daemon binary (`np2pd`):
 
 ```bash
-cargo build --release --bin np2p_daemon
-scp target/release/np2p_daemon pi@192.168.1.x:/usr/local/bin/
+cargo build --release --bin np2pd
+scp target/release/np2pd pi@192.168.1.x:/usr/local/bin/
 
 # On the Pi:
-np2p_daemon --data-dir /mnt/disk/p2p --coordinator yourcoordinator.example.com:5055 \
+np2pd --data-dir /mnt/disk/p2p --coordinator-addr yourcoordinator.example.com:5055 \
   --coordinator-node-id <64-hex-coordinator-node-id>
 ```
 
-The home server will auto-discover Pi nodes via LAN UDP broadcast (`p2p_discovery_port`) or via the coordinator for WAN. `--coordinator-node-id` is mandatory whenever `--coordinator` is used (identity binding); the value is printed in the coordinator's startup log. On the home server, set `p2p_coordinator_node_id` in the config (see the table above).
+The home server will auto-discover Pi nodes via LAN UDP broadcast (`p2p_discovery_port`) or via the coordinator for WAN. `--coordinator-node-id` is mandatory whenever `--coordinator-addr` is used (identity binding); the value is printed in the coordinator's startup log. On the home server, set `p2p_coordinator_node_id` in the config (see the table above).
 
 > **Coordinator tunnel**: on the VPS, register the home server as the tunnel backend with `--allowed-tunnel-node-id <home-server-node-id>` (refused by default). Never rely on the old "any node may register" default; if you must, pass `--allow-any-tunnel` explicitly.
 
@@ -111,7 +111,7 @@ All components export metrics and traces:
 |-----------|----------|--------|
 | Reminisce API | `GET /metrics` | Prometheus text |
 | AI service | `GET /metrics` | Prometheus text |
-| Traces | → `otlp_endpoint` | OTLP gRPC → Tempo |
+| Traces | → `otlp_endpoint` | OTLP gRPC (bring your own backend, e.g. Tempo/Jaeger) |
 
 Grafana dashboards are in `observability/grafana/dashboards/`. Promtail scrapes Docker container logs into Loki.
 

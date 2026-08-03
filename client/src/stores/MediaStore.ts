@@ -61,6 +61,7 @@ export class MediaStore {
     // starts we bump it, and any in-flight response whose captured seq is stale is
     // discarded so out-of-order responses can't overwrite newer results.
     private requestSeq = 0;
+    private locationRequestSeq = 0;
     
     // Data Collections
     images: MediaItem[] = [];
@@ -256,6 +257,11 @@ export class MediaStore {
             this.filters.starredOnly = false;
             this.filters.selectedLabelId = null;
             this.filters.allMediaTypeFilter = 'all';
+            this.filters.selectedDeviceId = 'all';
+            this.minSimilarity = 0.2;
+            this.filters.locationRadiusKm = 10;
+            this.sortBy = 'date';
+            this.sortOrder = 'desc';
         });
     };
 
@@ -305,7 +311,7 @@ export class MediaStore {
 
             const itemsWithThumbnails = await this.attachThumbnails(searchResults);
             const gotFullPage = itemsWithThumbnails.length === this.searchPageSize;
-            if (reqSeq !== this.requestSeq) return; // stale response — discard
+            if (reqSeq !== this.requestSeq) { this.revokeThumbnailUrls(itemsWithThumbnails); return; } // stale response — discard
 
             runInAction(() => {
                 if (append) {
@@ -345,11 +351,20 @@ export class MediaStore {
                     const thumbResponse = await axios.get(`/thumbnail/${item.hash}`, { responseType: 'blob' });
                     const thumbnailUrl = URL.createObjectURL(thumbResponse.data);
                     return { ...item, thumbnailUrl };
-                } catch (error) {
+                } catch  {
                     return item;
                 }
             })
         );
+    };
+
+    /// Revoke blob URLs created for a discarded (stale) response so they don't leak.
+    private revokeThumbnailUrls(items: MediaItem[]) {
+        for (const item of items) {
+            if (item.thumbnailUrl?.startsWith('blob:')) {
+                URL.revokeObjectURL(item.thumbnailUrl);
+            }
+        }
     };
 
     fetchImages = async (page: number = 1, limit: number = 50, append: boolean = false) => {
@@ -381,7 +396,7 @@ export class MediaStore {
                 ...t,
                 thumbnailUrl: t.thumbnail_url ? this.getAuthenticatedUrl(t.thumbnail_url) : undefined
             })));
-            if (seq !== this.requestSeq) return; // stale response — discard
+            if (seq !== this.requestSeq) { this.revokeThumbnailUrls(withUrls); return; } // stale response — discard
 
             runInAction(() => {
                 this.images = append ? [...this.images, ...withUrls] : withUrls;
@@ -389,7 +404,7 @@ export class MediaStore {
                 this.totalImages = response.data.total;
                 this.hasMore = this.images.length < response.data.total;
             });
-        } catch (error) {
+        } catch  {
             this.rootStore.uiStore.setError("Failed to fetch images");
         } finally {
             runInAction(() => { this.isLoadingMore = false; this.rootStore.uiStore.setLoading(false); });
@@ -424,7 +439,7 @@ export class MediaStore {
                 ...t,
                 thumbnailUrl: t.thumbnail_url ? this.getAuthenticatedUrl(t.thumbnail_url) : undefined
             })));
-            if (seq !== this.requestSeq) return; // stale response — discard
+            if (seq !== this.requestSeq) { this.revokeThumbnailUrls(withUrls); return; } // stale response — discard
 
             runInAction(() => {
                 this.videos = append ? [...this.videos, ...withUrls] : withUrls;
@@ -471,7 +486,7 @@ export class MediaStore {
                 ...t,
                 thumbnailUrl: t.thumbnail_url ? this.getAuthenticatedUrl(t.thumbnail_url) : undefined
             })));
-            if (seq !== this.requestSeq) return; // stale response — discard
+            if (seq !== this.requestSeq) { this.revokeThumbnailUrls(withUrls); return; } // stale response — discard
 
             runInAction(() => {
                 this.allMedia = append ? [...this.allMedia, ...withUrls] : withUrls;
@@ -656,7 +671,7 @@ export class MediaStore {
 
                 if (this.imageMetadata?.hash === hash) this.imageMetadata.starred = starred;
             });
-        } catch (error) {
+        } catch  {
             // Rollback on error
             runInAction(() => {
                 const imageItem = this.images.find(i => i.hash === hash);
@@ -702,7 +717,7 @@ export class MediaStore {
         try {
             const endpoint = item.media_type === 'video' ? 'video' : 'image';
             await axios.post(`/${endpoint}/${hash}/delete`);
-        } catch (error) {
+        } catch  {
             this.rootStore.uiStore.setError("Deletion failed");
             this.applyFilters(); // Full refresh on error
         }
@@ -804,21 +819,29 @@ export class MediaStore {
 
     setLocationQuery = (query: string) => {
         this.locationQuery = query;
-        if (query.length >= 3) this.fetchLocationSuggestions(query);
+        this.locationRequestSeq += 1; // invalidate any in-flight suggestion responses
+        if (query.length >= 3) this.fetchLocationSuggestions(query, this.locationRequestSeq);
         else this.locationSuggestions = [];
     };
 
-    fetchLocationSuggestions = async (query: string) => {
+    fetchLocationSuggestions = async (query: string, seq: number) => {
         this.isLoadingLocationSuggestions = true;
         try {
             const response = await axios.get(`/search/places?query=${query}&limit=20`);
+            if (seq !== this.locationRequestSeq) return; // stale response — discard
             runInAction(() => { this.locationSuggestions = response.data; });
         } catch (error) {
             logger.error("Location suggestions fetch failed", error);
             this.rootStore.uiStore.setError("Failed to fetch location suggestions");
-            this.locationSuggestions = [];
+            if (seq === this.locationRequestSeq) {
+                runInAction(() => { this.locationSuggestions = []; });
+            }
         }
-        finally { runInAction(() => { runInAction(() => { this.isLoadingLocationSuggestions = false; }); }); }
+        finally {
+            if (seq === this.locationRequestSeq) {
+                runInAction(() => { this.isLoadingLocationSuggestions = false; });
+            }
+        }
     };
 
     selectLocation = (location: LocationResult) => {

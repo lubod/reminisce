@@ -126,7 +126,7 @@ class BackupService : Service() {
         Log.d(TAG, "Starting backup work - Type: $backupType, Quick: $quickBackup")
 
         val constraints = Constraints.Builder()
-            .setRequiredNetworkType(NetworkType.NOT_REQUIRED)  // Remove network constraint since backup is working
+            .setRequiredNetworkType(NetworkType.CONNECTED)  // Backup needs the home server; without a network the run would fail instantly. The work stays enqueued until connectivity returns.
             .build()
 
         val inputData = Data.Builder()
@@ -138,6 +138,7 @@ class BackupService : Service() {
             .setConstraints(constraints)
             .setInputData(inputData)
             .addTag("backup_work")  // Add tag for tracking
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS) // Retry transient failures with backoff
             .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST) // Keep wake lock during execution
             .build()
 

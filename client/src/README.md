@@ -21,7 +21,7 @@ main.tsx ──▶ telemetry.ts (OpenTelemetry initialization)
 ## HttpOnly-Cookie Authentication Model
 - **Session Cookie**: Login/setup set an `HttpOnly`, `SameSite=Lax` (Secure in production) `access_token` cookie. Axios (`withCredentials: true`) and native `<img>`/`<video>` same-origin requests send it automatically. JWTs are kept in memory only (`AuthStore`), never in `localStorage`, and never in URL query strings — keeping them out of XSS reach, nginx logs, history, and `Referer` headers.
 - **Media URLs**: Media/thumbnail URLs must NOT append `?token=` — they are authenticated by the session cookie.
-- **Logout**: `user_logout` clears the cookie; `AuthStore` clears in-memory state.
+- **Logout**: `POST /auth/logout` clears the cookie; `AuthStore` clears in-memory state.
 
 ## Three-Tier Error Handling
 1. **Tier 1 (Network / Auth)**: Axios response interceptor in `api/` catches HTTP 401 unauthenticated errors and auto-redirects to `/login`. Transient failures (network/5xx) do NOT log the user out.

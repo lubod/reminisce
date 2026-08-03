@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x10\x61i_service.proto\x12\nai_service\"\'\n\x11\x45mbedImageRequest\x12\x12\n\nimage_data\x18\x01 \x01(\x0c\"\'\n\x12\x45mbedImageResponse\x12\x11\n\tembedding\x18\x01 \x03(\x02\" \n\x10\x45mbedTextRequest\x12\x0c\n\x04text\x18\x01 \x01(\t\"&\n\x11\x45mbedTextResponse\x12\x11\n\tembedding\x18\x01 \x03(\x02\"<\n\x14\x44\x65scribeImageRequest\x12\x12\n\nimage_data\x18\x01 \x01(\x0c\x12\x10\n\x08use_qwen\x18\x02 \x01(\x08\"@\n\x15\x44\x65scribeImageResponse\x12\x13\n\x0b\x64\x65scription\x18\x01 \x01(\t\x12\x12\n\nmodel_used\x18\x02 \x01(\t\"l\n\x0f\x46\x61\x63\x65\x42oundingBox\x12\t\n\x01x\x18\x01 \x01(\x05\x12\t\n\x01y\x18\x02 \x01(\x05\x12\r\n\x05width\x18\x03 \x01(\x05\x12\x0e\n\x06height\x18\x04 \x01(\x05\x12\x11\n\tembedding\x18\x05 \x03(\x02\x12\x11\n\tdet_score\x18\x06 \x01(\x02\"(\n\x12\x44\x65tectFacesRequest\x12\x12\n\nimage_data\x18\x01 \x01(\x0c\"A\n\x13\x44\x65tectFacesResponse\x12*\n\x05\x66\x61\x63\x65s\x18\x01 \x03(\x0b\x32\x1b.ai_service.FaceBoundingBox\"\x14\n\x12HealthCheckRequest\"\x8d\x01\n\x13HealthCheckResponse\x12\x0e\n\x06status\x18\x01 \x01(\t\x12\x0e\n\x06\x64\x65vice\x18\x02 \x01(\t\x12\x15\n\rsiglip_loaded\x18\x03 \x01(\x08\x12\x12\n\nvlm_loaded\x18\x04 \x01(\x08\x12\x16\n\x0esmolvlm_loaded\x18\x05 \x01(\x08\x12\x13\n\x0b\x66\x61\x63\x65_loaded\x18\x06 \x01(\x08\x32\x98\x03\n\tAIService\x12K\n\nEmbedImage\x12\x1d.ai_service.EmbedImageRequest\x1a\x1e.ai_service.EmbedImageResponse\x12H\n\tEmbedText\x12\x1c.ai_service.EmbedTextRequest\x1a\x1d.ai_service.EmbedTextResponse\x12T\n\rDescribeImage\x12 .ai_service.DescribeImageRequest\x1a!.ai_service.DescribeImageResponse\x12N\n\x0b\x44\x65tectFaces\x12\x1e.ai_service.DetectFacesRequest\x1a\x1f.ai_service.DetectFacesResponse\x12N\n\x0bHealthCheck\x12\x1e.ai_service.HealthCheckRequest\x1a\x1f.ai_service.HealthCheckResponseb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x10\x61i_service.proto\x12\nai_service\"\'\n\x11\x45mbedImageRequest\x12\x12\n\nimage_data\x18\x01 \x01(\x0c\"\'\n\x12\x45mbedImageResponse\x12\x11\n\tembedding\x18\x01 \x03(\x02\" \n\x10\x45mbedTextRequest\x12\x0c\n\x04text\x18\x01 \x01(\t\"&\n\x11\x45mbedTextResponse\x12\x11\n\tembedding\x18\x01 \x03(\x02\"<\n\x14\x44\x65scribeImageRequest\x12\x12\n\nimage_data\x18\x01 \x01(\x0c\x12\x10\n\x08use_qwen\x18\x02 \x01(\x08\"@\n\x15\x44\x65scribeImageResponse\x12\x13\n\x0b\x64\x65scription\x18\x01 \x01(\t\x12\x12\n\nmodel_used\x18\x02 \x01(\t\"l\n\x0f\x46\x61\x63\x65\x42oundingBox\x12\t\n\x01x\x18\x01 \x01(\x05\x12\t\n\x01y\x18\x02 \x01(\x05\x12\r\n\x05width\x18\x03 \x01(\x05\x12\x0e\n\x06height\x18\x04 \x01(\x05\x12\x11\n\tembedding\x18\x05 \x03(\x02\x12\x11\n\tdet_score\x18\x06 \x01(\x02\"(\n\x12\x44\x65tectFacesRequest\x12\x12\n\nimage_data\x18\x01 \x01(\x0c\"A\n\x13\x44\x65tectFacesResponse\x12*\n\x05\x66\x61\x63\x65s\x18\x01 \x03(\x0b\x32\x1b.ai_service.FaceBoundingBox\")\n\x13QualityScoreRequest\x12\x12\n\nimage_data\x18\x01 \x01(\x0c\"g\n\x14QualityScoreResponse\x12\x17\n\x0f\x61\x65sthetic_score\x18\x01 \x01(\x02\x12\x17\n\x0fsharpness_score\x18\x02 \x01(\x02\x12\r\n\x05width\x18\x03 \x01(\x05\x12\x0e\n\x06height\x18\x04 \x01(\x05\"7\n\x13\x45nhanceImageRequest\x12\x12\n\nimage_data\x18\x01 \x01(\x0c\x12\x0c\n\x04mode\x18\x02 \x01(\t\">\n\x14\x45nhanceImageResponse\x12\x12\n\nimage_data\x18\x01 \x01(\x0c\x12\x12\n\noperations\x18\x02 \x03(\t\"\x14\n\x12HealthCheckRequest\"\x8d\x01\n\x13HealthCheckResponse\x12\x0e\n\x06status\x18\x01 \x01(\t\x12\x0e\n\x06\x64\x65vice\x18\x02 \x01(\t\x12\x15\n\rsiglip_loaded\x18\x03 \x01(\x08\x12\x12\n\nvlm_loaded\x18\x04 \x01(\x08\x12\x16\n\x0esmolvlm_loaded\x18\x05 \x01(\x08\x12\x13\n\x0b\x66\x61\x63\x65_loaded\x18\x06 \x01(\x08\x32\xbe\x04\n\tAIService\x12K\n\nEmbedImage\x12\x1d.ai_service.EmbedImageRequest\x1a\x1e.ai_service.EmbedImageResponse\x12H\n\tEmbedText\x12\x1c.ai_service.EmbedTextRequest\x1a\x1d.ai_service.EmbedTextResponse\x12T\n\rDescribeImage\x12 .ai_service.DescribeImageRequest\x1a!.ai_service.DescribeImageResponse\x12N\n\x0b\x44\x65tectFaces\x12\x1e.ai_service.DetectFacesRequest\x1a\x1f.ai_service.DetectFacesResponse\x12Q\n\x0cQualityScore\x12\x1f.ai_service.QualityScoreRequest\x1a .ai_service.QualityScoreResponse\x12Q\n\x0c\x45nhanceImage\x12\x1f.ai_service.EnhanceImageRequest\x1a .ai_service.EnhanceImageResponse\x12N\n\x0bHealthCheck\x12\x1e.ai_service.HealthCheckRequest\x1a\x1f.ai_service.HealthCheckResponseb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -49,10 +49,18 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_DETECTFACESREQUEST']._serialized_end=466
   _globals['_DETECTFACESRESPONSE']._serialized_start=468
   _globals['_DETECTFACESRESPONSE']._serialized_end=533
-  _globals['_HEALTHCHECKREQUEST']._serialized_start=535
-  _globals['_HEALTHCHECKREQUEST']._serialized_end=555
-  _globals['_HEALTHCHECKRESPONSE']._serialized_start=558
-  _globals['_HEALTHCHECKRESPONSE']._serialized_end=699
-  _globals['_AISERVICE']._serialized_start=702
-  _globals['_AISERVICE']._serialized_end=1110
+  _globals['_QUALITYSCOREREQUEST']._serialized_start=535
+  _globals['_QUALITYSCOREREQUEST']._serialized_end=576
+  _globals['_QUALITYSCORERESPONSE']._serialized_start=578
+  _globals['_QUALITYSCORERESPONSE']._serialized_end=681
+  _globals['_ENHANCEIMAGEREQUEST']._serialized_start=683
+  _globals['_ENHANCEIMAGEREQUEST']._serialized_end=738
+  _globals['_ENHANCEIMAGERESPONSE']._serialized_start=740
+  _globals['_ENHANCEIMAGERESPONSE']._serialized_end=802
+  _globals['_HEALTHCHECKREQUEST']._serialized_start=804
+  _globals['_HEALTHCHECKREQUEST']._serialized_end=824
+  _globals['_HEALTHCHECKRESPONSE']._serialized_start=827
+  _globals['_HEALTHCHECKRESPONSE']._serialized_end=968
+  _globals['_AISERVICE']._serialized_start=971
+  _globals['_AISERVICE']._serialized_end=1545
 # @@protoc_insertion_point(module_scope)

@@ -160,6 +160,8 @@ pub async fn run_migrations_with_schema(pool: &Pool, init_sql: &str) -> Result<(
         ("002", include_str!("../db/migrations/002_add_duplicate_pairs.sql")),
         ("003", include_str!("../db/migrations/003_add_orientation_column.sql")),
         ("004", include_str!("../db/migrations/004_multi_tenancy.sql")),
+        ("005", include_str!("../db/migrations/005_add_segmented_sharding.sql")),
+        ("006", include_str!("../db/migrations/006_backfill_orientation.sql")),
     ];
 
     for (version, sql) in migrations {

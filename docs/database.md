@@ -80,6 +80,9 @@ All migrations are idempotent (`ADD COLUMN IF NOT EXISTS`, `CREATE INDEX IF NOT 
 | `003_add_orientation_column.sql` | `orientation` on `images` for EXIF rotation |
 | `004_multi_tenancy.sql` | `user_id` FKs across all tables; admin/user roles |
 | `005_add_segmented_sharding.sql` | `p2p_segment_count` + `p2p_segment_enc_sizes` for large-file P2P support |
+| `006_backfill_orientation.sql` | Backfills `orientation` for pre-existing images from their EXIF JSON |
+
+All six are embedded in the server (`src/db.rs`) and run once on startup, tracked in `schema_migrations`.
 
 To apply manually:
 ```bash

@@ -68,8 +68,8 @@ services:
     expose:
       - "8080"
     ports:
-      - "5050:5050/udp" # P2P QUIC Ingestion & Sharding
-      - "5060:5060/udp" # P2P LAN Discovery (Server listens)
+      - "5066:5066/udp" # P2P LAN Discovery (server listens — must match p2p_discovery_port)
+      - "5050:5050/udp" # legacy atomic broadcast target kept for older storage nodes
     volumes:
       - ./uploaded_images:/app/uploaded_images
       - ./uploaded_videos:/app/uploaded_videos

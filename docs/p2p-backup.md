@@ -57,7 +57,7 @@ The segment sizes are stored in `p2p_segment_enc_sizes BIGINT[]` and the count i
 
 ### Replication Worker (`media_replication_worker.rs`)
 
-Runs every 30 seconds. Picks up files where `p2p_synced_at IS NULL`:
+Runs on an adaptive backoff loop (config `workers.replication_min_secs`/`max_secs`, default 10–60 s). Picks up files where `p2p_synced_at IS NULL`:
 1. Rendezvous-select 5 target nodes
 2. Encrypt + shard the file
 3. Upload each shard via QUIC (`Message::StoreShardRequest`)
@@ -65,7 +65,7 @@ Runs every 30 seconds. Picks up files where `p2p_synced_at IS NULL`:
 
 ### Audit Worker (`p2p_audit_worker.rs`)
 
-Runs every 7 days. For each synced file:
+Runs on an adaptive backoff loop (config `workers.audit_min_secs`/`max_secs`, default 60–3600 s). Audits shards that haven't been verified in 7 days (batches of 50) and repairs each lost shard:
 1. **Orphan cleanup** — delete `p2p_shards` rows for soft-deleted files
 2. **Consistency check** — count shards per file; flag files with < 3 shards
 3. **Repair** — for each under-sharded file, re-encrypt and re-upload the missing shard(s) to the correct node(s)

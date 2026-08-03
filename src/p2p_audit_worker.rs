@@ -186,7 +186,11 @@ pub async fn find_undersharded_files(pool: &Pool, limit: i64) -> Result<Vec<Stri
          SELECT s.hash
          FROM synced_files s
          LEFT JOIN shard_counts c ON s.hash = c.file_hash
-         WHERE c.count IS NULL OR c.count < 3
+         WHERE c.count IS NULL OR c.count < COALESCE(
+             (SELECT p2p_data_shards FROM images WHERE hash = s.hash),
+             (SELECT p2p_data_shards FROM videos WHERE hash = s.hash),
+             3
+         )
          LIMIT $1",
         &[&limit],
     ).await.map_err(|e| e.to_string())?;
@@ -249,10 +253,10 @@ async fn repair_file(
 
     // Check if this is a segmented large file and get segment metadata
     let seg_row = client.query_opt(
-        "SELECT ext, p2p_encryption_key, p2p_segment_count, p2p_segment_enc_sizes \
+        "SELECT ext, p2p_encryption_key, p2p_segment_count, p2p_segment_enc_sizes, p2p_data_shards, p2p_parity_shards \
          FROM images WHERE hash = $1 AND p2p_segment_count > 1 \
          UNION ALL \
-         SELECT ext, p2p_encryption_key, p2p_segment_count, p2p_segment_enc_sizes \
+         SELECT ext, p2p_encryption_key, p2p_segment_count, p2p_segment_enc_sizes, p2p_data_shards, p2p_parity_shards \
          FROM videos WHERE hash = $1 AND p2p_segment_count > 1 \
          LIMIT 1",
         &[&file_hash]
@@ -260,11 +264,20 @@ async fn repair_file(
 
     if let Some(seg_info) = seg_row {
         let ext: String = seg_info.get(0);
-        let key: Option<Vec<u8>> = seg_info.get(1);
-        let _segment_count: i32 = seg_info.get(2);
+        let key_enc: Option<Vec<u8>> = seg_info.get(1);
+        let data_shards = seg_info.get::<_, Option<i32>>(4).unwrap_or(3) as usize;
+        let parity_shards = seg_info.get::<_, Option<i32>>(5).unwrap_or(2) as usize;
+        let total_shards = data_shards + parity_shards;
 
-        if let Some(key) = key {
+        if let Some(key_enc) = key_enc {
+            let api_secret = config.get_api_key().map_err(|e| format!("Failed to retrieve API key: {}", e))?;
+            let key = crate::utils::decrypt_key(&key_enc, api_secret)?;
+
             info!("Repairing shard {} of segmented large file {} by streaming re-shard", failed_shard_index, file_hash);
+
+            if failed_shard_index >= total_shards {
+                return Err(format!("Shard index {} out of range (total {})", failed_shard_index, total_shards).into());
+            }
 
             let images_path = PathBuf::from(config.get_images_dir())
                 .join(&file_hash[0..2])
@@ -279,9 +292,12 @@ async fn repair_file(
 
             // Stream through the file in SEGMENT_THRESHOLD chunks, collecting the
             // sub-shard for failed_shard_index from each segment, then concatenate.
+            // The same chunking (SEGMENT_THRESHOLD) and per-segment nonce derivation
+            // as upload_segmented keeps sub-shard offsets aligned with the survivors.
             let mut file_handle = tokio::fs::File::open(&file_path).await?;
             let mut buf = vec![0u8; SEGMENT_THRESHOLD];
             let mut full_shard_data: Vec<u8> = Vec::new();
+            let mut hasher = blake3::Hasher::new();
             let mut seg_idx: u32 = 0;
 
             loop {
@@ -293,9 +309,10 @@ async fn repair_file(
                     }
                 }
                 if total == 0 { break; }
+                hasher.update(&buf[..total]);
 
                 let nonce_ctx: Vec<u8> = key.iter().chain(seg_idx.to_le_bytes().iter()).cloned().collect();
-                let (sub_shards, _enc_size) = StorageEngine::process_for_backup(&buf[..total], &key, &nonce_ctx, 3, 2)?;
+                let (sub_shards, _enc_size) = StorageEngine::process_for_backup(&buf[..total], &key, &nonce_ctx, data_shards, parity_shards)?;
 
                 if failed_shard_index < sub_shards.len() {
                     full_shard_data.extend_from_slice(&sub_shards[failed_shard_index]);
@@ -307,6 +324,17 @@ async fn repair_file(
 
             if full_shard_data.is_empty() {
                 return Err(format!("Segmented repair produced empty shard for {}", file_hash).into());
+            }
+
+            // A repaired shard is only valid if the local file is byte-identical to the
+            // one that was originally sharded (identified by its BLAKE3 content hash).
+            // If the file changed, re-sharding would produce a shard incompatible with
+            // the surviving ones — refuse the repair instead of writing a corrupt shard.
+            let local_hash = hasher.finalize().to_hex().to_string();
+            if local_hash != file_hash {
+                return Err(format!(
+                    "Local file hash mismatch ({local_hash} != {file_hash}) — refusing to repair from a modified file"
+                ).into());
             }
 
             let new_shard_hash = upload_shard_to_node(p2p_service, *target_node_addr, &full_shard_data).await?;
@@ -346,6 +374,16 @@ async fn repair_file(
             } else {
                 return Err(format!("Local file not found for hash {}", file_hash).into());
             };
+
+            // Only re-shard when the local file still matches the content hash the
+            // surviving shards were created from (see segmented path above).
+            let actual_hash = blake3::hash(&file_data).to_hex().to_string();
+            if actual_hash != file_hash {
+                return Err(format!(
+                    "Local file hash mismatch ({} != {}) — refusing to repair from a modified file",
+                    &actual_hash[..16], &file_hash[..16]
+                ).into());
+            }
 
             let (shards, _) = StorageEngine::process_for_backup(&file_data, &key, &key, data_shards, parity_shards)?;
 

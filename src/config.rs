@@ -24,15 +24,8 @@ pub struct Config {
     // AI service configuration (gRPC; legacy HTTP URLs removed)
     #[serde(default = "default_ai_grpc_url")]
     pub ai_grpc_url: String,
-    // P2P daemon connection
-    #[serde(default)]
-    pub p2p_daemon_host: Option<String>,
-    #[serde(default)]
-    pub p2p_daemon_port: Option<u16>,
     #[serde(skip)]
     pub enable_media_backup: Arc<AtomicBool>,
-    #[serde(default)]
-    pub external_ip: Option<String>,
     #[serde(default)]
     pub allowed_import_dirs: Option<Vec<String>>,
 
@@ -64,19 +57,6 @@ pub struct Config {
     #[serde(default)]
     pub environment: Option<String>,
 
-    // Relay configuration for home-server discovery
-    #[serde(default)]
-    pub relay_url: Option<String>,
-    #[serde(default)]
-    pub relay_api_key: Option<String>,
-    #[serde(default)]
-    pub relay_username: Option<String>,
-    #[serde(default)]
-    pub relay_password: Option<String>,
-    #[serde(default)]
-    pub advertise_addr: Option<String>,
-    #[serde(default)]
-    pub main_server_url: Option<String>,
     #[serde(default = "default_port")]
     pub port: u16,
 

@@ -16,16 +16,11 @@ Endpoints:
 - GET  /health       - Health check endpoint
 """
 
-import base64
-import io
 import logging
 import sys
 
-import cv2
-import numpy as np
 import torch
-from flask import Flask, request, jsonify
-from PIL import Image
+from flask import Flask, jsonify
 from transformers import AutoModel, AutoProcessor, SmolVLMForConditionalGeneration
 from insightface.app import FaceAnalysis
 
@@ -37,30 +32,9 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 import os
-from functools import wraps
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50MB limit to prevent OOM (C11)
-
-def require_api_key(f):
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        expected_key = os.environ.get('API_SECRET_KEY') or os.environ.get('REMINISCE_API_SECRET_KEY')
-        if not expected_key:
-            return jsonify({'error': 'Server misconfigured: API_SECRET_KEY not set'}), 500
-
-        auth_header = request.headers.get('Authorization')
-        api_key = None
-        if auth_header and auth_header.startswith('Bearer '):
-            api_key = auth_header.split(" ")[1]
-        if not api_key:
-            api_key = request.headers.get('X-API-Key')
-        if not api_key:
-            return jsonify({'error': 'Unauthorized: Missing API Key'}), 401
-        if api_key != expected_key:
-            return jsonify({'error': 'Unauthorized: Invalid API Key'}), 401
-        return f(*args, **kwargs)
-    return decorated
 
 # Global model references
 siglip_model = None
@@ -96,34 +70,6 @@ def detect_device():
     # Fallback to CPU
     logger.info("PyTorch using CPU")
     return "cpu"
-
-
-def get_onnx_providers():
-    """Get available ONNX execution providers, preferring GPU"""
-    available_providers = ['CPUExecutionProvider']
-    try:
-        import onnxruntime as ort
-        all_providers = ort.get_available_providers()
-        logger.info(f"Available ONNX providers: {all_providers}")
-        
-        # Priority order for ROCm/AMD and NVIDIA
-        # Skip MIGraphX — it doesn't support all gfx targets (e.g. gfx1150)
-        gpu_priority = ['ROCMExecutionProvider', 'CUDAExecutionProvider']
-        
-        # Build prioritized list
-        to_use = []
-        for p in gpu_priority:
-            if p in all_providers:
-                to_use.append(p)
-        
-        # Add CPU at the end
-        to_use.append('CPUExecutionProvider')
-        
-        logger.info(f"Prioritized ONNX providers: {to_use}")
-        return to_use
-    except Exception as e:
-        logger.warning(f"Could not check ONNX providers: {e}")
-    return available_providers
 
 
 models_loaded = False
@@ -225,28 +171,6 @@ def load_models():
     except Exception as e:
         logger.error(f"Failed to initialize InsightFace: {e}", exc_info=True)
         # Continue without face detection - other features will work
-
-
-def decode_image_to_pil(base64_string):
-    """Decode base64 string to PIL Image (RGB)"""
-    if ',' in base64_string:
-        base64_string = base64_string.split(',')[1]
-
-    image_data = base64.b64decode(base64_string)
-    pil_image = Image.open(io.BytesIO(image_data))
-
-    if pil_image.mode != 'RGB':
-        pil_image = pil_image.convert('RGB')
-
-    return pil_image
-
-
-def decode_image_to_bgr(base64_string):
-    """Decode base64 string to numpy array (BGR for OpenCV/InsightFace)"""
-    pil_image = decode_image_to_pil(base64_string)
-    image_np = np.array(pil_image)
-    image_bgr = cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR)
-    return image_bgr
 
 
 QUALITY_TEXTS = [

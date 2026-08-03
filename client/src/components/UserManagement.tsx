@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { observer } from "mobx-react-lite";
 import { useStore } from "../stores/RootStore";
 import type { ManagedUser } from "../stores/AuthStore";
@@ -22,7 +22,7 @@ export const UserManagement = observer(() => {
     const [resetUserId, setResetUserId] = useState<string | null>(null);
     const [resetPassword, setResetPassword] = useState("");
 
-    const load = async () => {
+    const load = useCallback(async () => {
         setIsLoading(true);
         setError("");
         try {
@@ -33,9 +33,13 @@ export const UserManagement = observer(() => {
         } finally {
             setIsLoading(false);
         }
-    };
+    }, [authStore]);
 
-    useEffect(() => { load(); }, []);
+    useEffect(() => { load(); }, [load]);
+
+    const currentUserId = authStore.user?.id;
+    const activeAdminCount = users.filter(u => u.role === "admin" && u.is_active).length;
+    const isSelf = (user: ManagedUser) => user.id === currentUserId;
 
     const handleAdd = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -53,16 +57,40 @@ export const UserManagement = observer(() => {
     };
 
     const handleToggleActive = async (user: ManagedUser) => {
+        if (isSelf(user)) {
+            window.alert("You cannot disable your own account.");
+            return;
+        }
+        if (user.role === "admin" && user.is_active && activeAdminCount === 1) {
+            window.alert("You cannot disable the last active admin.");
+            return;
+        }
         await authStore.updateUser(user.id, { is_active: !user.is_active });
         load();
     };
 
     const handleRoleChange = async (user: ManagedUser, role: string) => {
+        if (isSelf(user) && role !== "admin") {
+            window.alert("You cannot remove your own admin role.");
+            return;
+        }
+        if (user.role === "admin" && user.is_active && activeAdminCount === 1 && role !== "admin") {
+            window.alert("You cannot demote the last active admin.");
+            return;
+        }
         await authStore.updateUser(user.id, { role });
         load();
     };
 
     const handleDelete = async (user: ManagedUser) => {
+        if (isSelf(user)) {
+            window.alert("You cannot delete your own account.");
+            return;
+        }
+        if (user.role === "admin" && user.is_active && activeAdminCount === 1) {
+            window.alert("You cannot delete the last active admin.");
+            return;
+        }
         if (!window.confirm(`Delete user "${user.username}"? This cannot be undone.`)) return;
         await authStore.deleteUser(user.id);
         load();

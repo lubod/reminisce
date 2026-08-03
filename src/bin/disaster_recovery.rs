@@ -398,7 +398,7 @@ async fn cmd_media(
 
     for (file_hash, _ext) in targets.iter() {
         if cap > 0 && restored >= cap { break; }
-        match restore_file(&pool, &svc, file_hash).await {
+        match restore_file(&pool, &svc, file_hash, &api_secret).await {
             Ok(restored_file) => {
                 match write_media_to_disk(&config, file_hash, &restored_file) {
                     Ok(path) => {

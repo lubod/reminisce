@@ -64,6 +64,10 @@ export const DirectoryImportModal = observer(({ onClose }: { onClose: () => void
     const [failedFiles, setFailedFiles] = useState<string[]>([]);
     const cancelRef = useRef(false);
     const modalRef = useRef<HTMLDivElement>(null);
+    // Ref that always points at the latest handleCancel, so the Escape key path
+    // requests cancellation (instead of just closing the modal while the upload
+    // keeps running in the background on an unmounted component).
+    const modalCloseRef = useRef<() => void>(() => {});
 
     useEffect(() => {
         const previouslyFocused = document.activeElement as HTMLElement;
@@ -71,7 +75,7 @@ export const DirectoryImportModal = observer(({ onClose }: { onClose: () => void
 
         const handleKeyDown = (e: KeyboardEvent) => {
             if (e.key === "Escape") {
-                onClose();
+                modalCloseRef.current();
                 return;
             }
             if (e.key === "Tab" && modalRef.current) {
@@ -209,9 +213,9 @@ export const DirectoryImportModal = observer(({ onClose }: { onClose: () => void
                 try {
                     const label = await labelStore.createLabel(labelName.trim());
                     labelId = label.id;
-                } catch (error: any) {
+                } catch (error) {
                     // Label might already exist (409 conflict)
-                    if (error.response?.status === 409) {
+                    if (isAxiosError(error) && error.response?.status === 409) {
                         // Find existing label with same name
                         await labelStore.fetchLabels();
                         const existingLabel = labelStore.labels.find(l => l.name === labelName.trim());
@@ -331,6 +335,7 @@ export const DirectoryImportModal = observer(({ onClose }: { onClose: () => void
             onClose();
         }
     };
+    modalCloseRef.current = handleCancel;
 
     return (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">

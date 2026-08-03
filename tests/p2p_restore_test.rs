@@ -136,7 +136,7 @@ async fn test_restore_single_segment_image_all_shards() {
     }
 
     let store = Arc::new(shard_store_from(&shards));
-    let restored = restore_file_with_fetcher(&pool, hash, memory_fetcher(store))
+    let restored = restore_file_with_fetcher(&pool, hash, memory_fetcher(store), "test-secret")
         .await
         .expect("restore should succeed");
 
@@ -161,7 +161,7 @@ async fn test_restore_single_segment_video() {
     }
 
     let store = Arc::new(shard_store_from(&shards));
-    let restored = restore_file_with_fetcher(&pool, hash, memory_fetcher(store))
+    let restored = restore_file_with_fetcher(&pool, hash, memory_fetcher(store), "test-secret")
         .await
         .expect("restore should succeed");
 
@@ -191,7 +191,7 @@ async fn test_restore_degraded_one_shard_missing() {
     store_map.remove(&missing_hash);
     let store = Arc::new(store_map);
 
-    let restored = restore_file_with_fetcher(&pool, hash, memory_fetcher(store))
+    let restored = restore_file_with_fetcher(&pool, hash, memory_fetcher(store), "test-secret")
         .await
         .expect("should recover with 4/5 shards");
 
@@ -220,7 +220,7 @@ async fn test_restore_fails_with_only_two_shards() {
     let h3: [u8;32] = blake3::hash(&shards[3]).into(); store_map.remove(&h3);
     let store = Arc::new(store_map);
 
-    let err = restore_file_with_fetcher(&pool, hash, memory_fetcher(store))
+    let err = restore_file_with_fetcher(&pool, hash, memory_fetcher(store), "test-secret")
         .await
         .unwrap_err();
 
@@ -251,7 +251,7 @@ async fn test_restore_hash_mismatch_treated_as_missing() {
     let store = Arc::new(store_map);
 
     // Still has 4 valid shards — restore should succeed despite the corrupted one
-    let restored = restore_file_with_fetcher(&pool, hash, memory_fetcher(store))
+    let restored = restore_file_with_fetcher(&pool, hash, memory_fetcher(store), "test-secret")
         .await
         .expect("should recover ignoring corrupted shard");
 
@@ -263,7 +263,7 @@ async fn test_restore_file_not_found() {
     let (pool, _db) = setup_test_database_with_instance().await;
 
     let store = Arc::new(HashMap::<[u8; 32], Vec<u8>>::new());
-    let err = restore_file_with_fetcher(&pool, "nonexistent_hash_xyz", memory_fetcher(store))
+    let err = restore_file_with_fetcher(&pool, "nonexistent_hash_xyz", memory_fetcher(store), "test-secret")
         .await
         .unwrap_err();
 
@@ -281,7 +281,7 @@ async fn test_restore_no_shards_in_db() {
     insert_image(&client, hash, "noshards", "jpg", &key, 100, 1, None).await;
 
     let store = Arc::new(HashMap::<[u8; 32], Vec<u8>>::new());
-    let err = restore_file_with_fetcher(&pool, hash, memory_fetcher(store))
+    let err = restore_file_with_fetcher(&pool, hash, memory_fetcher(store), "test-secret")
         .await
         .unwrap_err();
 
@@ -328,7 +328,7 @@ async fn test_restore_multi_segment_full_fetch() {
     }
 
     let store = Arc::new(shard_store_from(&full_shards));
-    let restored = restore_file_with_fetcher(&pool, hash, memory_fetcher(store))
+    let restored = restore_file_with_fetcher(&pool, hash, memory_fetcher(store), "test-secret")
         .await
         .expect("multi-segment restore should succeed");
 
@@ -374,7 +374,7 @@ async fn test_restore_multi_segment_one_shard_missing() {
     let hf4: [u8;32] = blake3::hash(&full_shards[4]).into(); store_map.remove(&hf4);
     let store = Arc::new(store_map);
 
-    let restored = restore_file_with_fetcher(&pool, hash, memory_fetcher(store))
+    let restored = restore_file_with_fetcher(&pool, hash, memory_fetcher(store), "test-secret")
         .await
         .expect("should recover multi-segment with 4/5 shards");
 

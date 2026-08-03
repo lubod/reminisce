@@ -101,11 +101,16 @@ class SecureStorageHelper {
         }
 
         fun setPassword(context: Context, password: String) {
-            // Do not store plaintext password for security
+            // Stored in Android Keystore-backed EncryptedSharedPreferences (AES256-GCM),
+            // not plaintext — see getEncryptedSharedPreferences(). Required so the app
+            // can automatically re-authenticate after the server JWT (7 days) expires.
+            val prefs = getEncryptedSharedPreferences(context)
+            prefs.edit().putString(PASSWORD_KEY, password).apply()
         }
 
         fun getPassword(context: Context): String? {
-            return null
+            val prefs = getEncryptedSharedPreferences(context)
+            return prefs.getString(PASSWORD_KEY, null)
         }
 
         fun setEmail(context: Context, email: String) {

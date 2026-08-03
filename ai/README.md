@@ -5,8 +5,8 @@ Python sidecar providing machine learning inference for Reminisce: image embeddi
 
 ## Service Architecture
 The service runs **two servers** in one process, both sharing the models loaded at startup:
-- **HTTP (Flask, `:8081`)** — `/health`, `/enhance`, `/quality`, `/orientation`. Still used by the backend for health checks and media processing endpoints.
-- **gRPC (`:50051`)** — binary protobuf RPCs for the high-throughput inference calls (embed, describe, face detection), replacing the old HTTP Base64 JSON path. Schema in `proto/ai_service.proto`; implemented in `ai_service_grpc.py` (imported and started in a background thread by `ai_service.py`).
+- **HTTP (Flask, `:8081`)** — `/health` and `/` only. Kept solely for container healthchecks; all inference is via gRPC.
+- **gRPC (`:50051`)** — binary protobuf RPCs for the high-throughput inference calls (embed, describe, face detection, quality, enhance), replacing the old HTTP Base64 JSON path. Schema in `proto/ai_service.proto`; implemented in `ai_service_grpc.py` (imported and started in a background thread by `ai_service.py`).
 
 ```
 Backend (Rust) ──HTTP POST / :8081 (X-API-Key)──▶ Flask (ai_service.py)     [health/enhance/quality/orientation]
@@ -20,7 +20,7 @@ Backend (Rust) ──HTTP POST / :8081 (X-API-Key)──▶ Flask (ai_service.py
 
 ## Security & Authentication
 - All endpoints require authentication via **either** the `Authorization: Bearer <key>` header **or** the `X-API-Key` header (HTTP) / `x-api-key` metadata (gRPC). Requests with missing or non-matching keys return HTTP 401 / gRPC UNAUTHENTICATED.
-- If `API_SECRET_KEY` (or `REMINISCE_API_SECRET_KEY`) is not set on the service, requests are allowed (development fallback) — always set it in production.
+- If `API_SECRET_KEY` (or `REMINISCE_API_SECRET_KEY`) is not set on the service, requests are **rejected** (fails closed — gRPC `UNAVAILABLE`, HTTP 500). Always set the master secret in both backend and AI service configs.
 
 ## Hardware & Acceleration Auto-Detection
 The service automatically detects and configures available hardware accelerators upon startup:

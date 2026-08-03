@@ -262,8 +262,10 @@ class AuthHelper {
             }
             
             try {
-                // Decode payload (second part of JWT)
-                val payload = String(android.util.Base64.decode(parts[1], android.util.Base64.URL_SAFE))
+                // Decode payload (second part of JWT). JWTs use unpadded base64url — without
+                // NO_PADDING, tokens whose payload length isn't a multiple of 4 fail to decode
+                // and would be (incorrectly) treated as invalid.
+                val payload = String(android.util.Base64.decode(parts[1], android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING))
                 val json = JSONObject(payload)
                 
                 val exp = json.optLong("exp", 0)

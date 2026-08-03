@@ -20,8 +20,10 @@ pub const SHARD_COUNT: usize = 5;
 pub const MIN_NODES_REQUIRED: usize = 1;
 /// Files larger than this are uploaded via segmented streaming (caps peak RAM).
 pub const SEGMENT_THRESHOLD: usize = 256 * 1024 * 1024; // 256 MB
-/// Max bytes per StoreShardChunk protocol message (under the 20 MB protocol cap).
-pub const CHUNK_MSG_SIZE: usize = 32 * 1024 * 1024; // 32 MB
+/// Max bytes per StoreShardChunk protocol message. Kept safely under the protocol
+/// receive cap (see np2p::network::protocol::Protocol::receive) so bincode framing
+/// overhead never trips it — 16 MiB chunks leave generous headroom under 128 MiB.
+pub const CHUNK_MSG_SIZE: usize = 16 * 1024 * 1024; // 16 MiB
 
 /// One successfully uploaded shard.
 #[derive(Clone, Debug)]
@@ -45,14 +47,28 @@ pub fn rendezvous_select(id_hash: &str, nodes: &[(String, SocketAddr)], count: u
     scored.into_iter().take(count).map(|(_, i)| nodes[i].clone()).collect()
 }
 
-/// Store a single in-memory shard on a node with retries. Returns the shard hash hex.
+/// Store a single in-memory shard on a node with retries.
+///
+/// Streams the shard as bounded `StoreShardChunk` messages instead of one whole
+/// `StoreShardRequest` — a single message would exceed the protocol size cap for
+/// any shard larger than a few tens of MB (i.e. plaintext files above ~60 MB).
+/// Returns the shard hash hex.
+///
+/// The stream token is bound to `blake3(file_hash || shard_index)` (file_hash is
+/// the rendezvous id hash) so the storage node authenticates the stream exactly
+/// like it does for the segmented upload path.
 pub async fn store_shard(
     p2p_service: &Arc<P2PService>,
     addr: SocketAddr,
+    file_hash_bytes: [u8; 32],
+    shard_index: u8,
     shard_data: &[u8],
 ) -> Result<String, String> {
     let shard_hash_bytes: [u8; 32] = blake3::hash(shard_data).into();
-    let shard_hash_hex = blake3::hash(shard_data).to_hex().to_string();
+    let shard_hash_hex = blake3::Hash::from(shard_hash_bytes).to_hex().to_string();
+    let binding: [u8; 32] = blake3::hash(
+        &[file_hash_bytes.as_slice(), &[shard_index]].concat()
+    ).into();
     let mut last_err = String::new();
 
     for attempt in 1..=3 {
@@ -68,13 +84,30 @@ pub async fn store_shard(
             Err(e) => { last_err = format!("open_bi failed: {}", e); conn.close(0u32.into(), b"error"); continue; }
         };
 
-        let token = p2p_service.identity().create_shard_token(&shard_hash_bytes);
-        let req = Message::StoreShardRequest { shard_hash: shard_hash_bytes, data: shard_data.to_vec(), token };
+        let token = p2p_service.identity().create_shard_token(&binding);
         let attempt_result: Result<bool, String> = async {
-            Protocol::send(&mut send, &req).await.map_err(|e| e.to_string())?;
-            let msg = Protocol::receive(&mut recv).await.map_err(|e| e.to_string())?;
-            match msg {
-                Message::StoreShardResponse { success, .. } => Ok(success),
+            Protocol::send(&mut send, &Message::StoreShardStreamInit {
+                file_hash: file_hash_bytes,
+                shard_index,
+                total_shard_bytes: 0,
+                segment_count: 0,
+                token,
+            }).await.map_err(|e| e.to_string())?;
+            match Protocol::receive(&mut recv).await.map_err(|e| e.to_string())? {
+                Message::StoreShardStreamAck { ready: true } => {}
+                other => return Err(format!("unexpected stream ack: {:?}", other)),
+            }
+            let mut hasher = blake3::Hasher::new();
+            for chunk in shard_data.chunks(CHUNK_MSG_SIZE) {
+                hasher.update(chunk);
+                Protocol::send(&mut send, &Message::StoreShardChunk { data: chunk.to_vec() })
+                    .await.map_err(|e| e.to_string())?;
+            }
+            let shard_hash: [u8; 32] = hasher.finalize().into();
+            Protocol::send(&mut send, &Message::StoreShardStreamFinal { shard_hash })
+                .await.map_err(|e| e.to_string())?;
+            match Protocol::receive(&mut recv).await.map_err(|e| e.to_string())? {
+                Message::StoreShardStreamResponse { success } => Ok(success),
                 other => Err(format!("unexpected response: {:?}", other)),
             }
         }.await;
@@ -99,6 +132,7 @@ pub async fn upload_inmemory(
     id_hash: &str,
     shards: Vec<Vec<u8>>,
 ) -> Result<Vec<UploadedShard>, String> {
+    let file_hash_bytes: [u8; 32] = blake3::hash(id_hash.as_bytes()).into();
     let target_nodes = rendezvous_select(id_hash, nodes, shards.len().min(nodes.len()).max(1));
     let mut set = tokio::task::JoinSet::new();
 
@@ -106,7 +140,7 @@ pub async fn upload_inmemory(
         let (node_id, addr) = target_nodes[idx % target_nodes.len()].clone();
         let svc = p2p_service.clone();
         set.spawn(async move {
-            store_shard(&svc, addr, &shard_data).await.map(|shard_hash_hex| UploadedShard {
+            store_shard(&svc, addr, file_hash_bytes, idx as u8, &shard_data).await.map(|shard_hash_hex| UploadedShard {
                 idx,
                 node_id,
                 addr: addr.to_string(),
@@ -126,23 +160,27 @@ pub async fn upload_inmemory(
     Ok(uploaded)
 }
 
-/// Upload a large file via segmented streaming: per-segment encrypt+shard (3/2 RS),
-/// with one persistent QUIC stream per shard. Peak RAM stays bounded regardless of
-/// file size. Returns the uploaded shards and per-segment encrypted sizes.
+/// Upload a large file via segmented streaming: per-segment encrypt+shard
+/// (`data_shards`+`parity_shards` RS), with one persistent QUIC stream per shard.
+/// Peak RAM stays bounded regardless of file size. Returns the uploaded shards and
+/// per-segment encrypted sizes.
 pub async fn upload_segmented(
     p2p_service: &Arc<P2PService>,
     nodes: &[(String, SocketAddr)],
     id_hash: &str,
     file_path: &Path,
     encryption_key: &[u8; 32],
+    data_shards: usize,
+    parity_shards: usize,
 ) -> Result<(Vec<UploadedShard>, Vec<i64>), String> {
     let file_hash_bytes: [u8; 32] = blake3::hash(id_hash.as_bytes()).into();
-    let target_nodes = rendezvous_select(id_hash, nodes, SHARD_COUNT.min(nodes.len()).max(1));
+    let total_shards = data_shards + parity_shards;
+    let target_nodes = rendezvous_select(id_hash, nodes, total_shards.min(nodes.len()).max(1));
 
     // One bounded channel + task per shard (provides backpressure).
-    let mut senders: Vec<mpsc::Sender<Vec<u8>>> = Vec::with_capacity(SHARD_COUNT);
-    let mut handles = Vec::with_capacity(SHARD_COUNT);
-    for idx in 0..SHARD_COUNT {
+    let mut senders: Vec<mpsc::Sender<Vec<u8>>> = Vec::with_capacity(total_shards);
+    let mut handles = Vec::with_capacity(total_shards);
+    for idx in 0..total_shards {
         let (tx, rx) = mpsc::channel::<Vec<u8>>(2);
         senders.push(tx);
         let (node_id, addr) = target_nodes[idx % target_nodes.len()].clone();
@@ -163,7 +201,7 @@ pub async fn upload_segmented(
         if n == 0 { break; }
         let seg_idx = segment_enc_sizes.len() as u32;
         let nonce_ctx: Vec<u8> = encryption_key.iter().chain(seg_idx.to_le_bytes().iter()).cloned().collect();
-        let (sub_shards, enc_size) = StorageEngine::process_for_backup(&buf[..n], encryption_key, &nonce_ctx, 3, 2)
+        let (sub_shards, enc_size) = StorageEngine::process_for_backup(&buf[..n], encryption_key, &nonce_ctx, data_shards, parity_shards)
             .map_err(|e| e.to_string())?;
         segment_enc_sizes.push(enc_size as i64);
         for (idx, sub_shard) in sub_shards.iter().enumerate() {

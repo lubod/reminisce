@@ -26,7 +26,7 @@ data class BackupStats(
     val failedFiles: List<String> = emptyList() // Names of files that failed
 )
 
-class BackupWorker(context: Context, params: WorkerParameters) : Worker(context, params) {
+class BackupWorker(context: Context, val params: WorkerParameters) : Worker(context, params) {
     companion object {
         private const val TAG = "BackupWorker"
         private const val PROGRESS_UPDATE_THROTTLE_MS = 200L // Send progress updates frequently for responsive UI (200ms ~5 updates/sec)
@@ -60,12 +60,13 @@ class BackupWorker(context: Context, params: WorkerParameters) : Worker(context,
 
             // NUCLEAR OPTION for Honor/Huawei devices with extremely aggressive battery management
             // Use PARTIAL_WAKE_LOCK to keep CPU running during backup without forcing screen on
+            // Timeout capped at 6h: Android 14 limits dataSync foreground services to 6h/day.
             wakeLock = powerManager.newWakeLock(
                 android.os.PowerManager.PARTIAL_WAKE_LOCK,
                 WAKE_LOCK_TAG
             ).apply {
                 setReferenceCounted(false)
-                acquire(10 * 60 * 60 * 1000L) // 10 hours max timeout
+                acquire(6 * 60 * 60 * 1000L) // 6 hours max timeout
             }
 
             // Also acquire a separate CPU wake lock for double protection
@@ -74,7 +75,7 @@ class BackupWorker(context: Context, params: WorkerParameters) : Worker(context,
                 "${WAKE_LOCK_TAG}:CPU"
             ).apply {
                 setReferenceCounted(false)
-                acquire(10 * 60 * 60 * 1000L)
+                acquire(6 * 60 * 60 * 1000L)
             }
 
             Log.d(TAG, "Wake locks acquired (PARTIAL_WAKE_LOCK) for background backup execution")
@@ -238,7 +239,10 @@ class BackupWorker(context: Context, params: WorkerParameters) : Worker(context,
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Backup worker failed with exception", e)
-                Result.failure()
+                // Transient failures (network drop, server restart, timeouts) should be
+                // retried with backoff instead of terminating the run. Give up after a few
+                // attempts so a persistently broken setup doesn't retry forever.
+                if (params.runAttemptCount < 4) Result.retry() else Result.failure()
             }
         } finally {
             // Always release wake lock when work completes

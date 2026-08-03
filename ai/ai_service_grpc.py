@@ -2,11 +2,13 @@
 """
 gRPC AI Inference Server for Reminisce
 
-Serves gRPC endpoints defined in proto/get_ai_service().proto:
+Serves gRPC endpoints defined in proto/ai_service.proto:
 - EmbedImage
 - EmbedText
 - DescribeImage
 - DetectFaces
+- QualityScore
+- EnhanceImage
 - HealthCheck
 """
 

@@ -108,7 +108,12 @@ impl Protocol {
         recv.read_exact(&mut len_buf).await?;
         let len = u32::from_be_bytes(len_buf) as usize;
 
-        if len > 20 * 1024 * 1024 { // 20MB limit
+        // Cap must accommodate the largest intentional message we can receive:
+        // a relayed shard payload (RetrieveShardResponse) for the largest single
+        // shard (~85 MB for a 256 MB file split into 3 data shards) plus bincode
+        // framing overhead. Peers in a mesh are identity-authenticated, so this is
+        // a trust-boundary limit (an unpinned storage node is already an open relay).
+        if len > 128 * 1024 * 1024 {
             return Err(crate::error::Np2pError::Protocol("Message too large".into()));
         }
 

@@ -32,10 +32,14 @@ struct FileRecord {
 }
 
 /// Restore a file from P2P backup, fetching shards from peers via P2PService.
+///
+/// `api_secret` is the master secret used to unwrap the per-file ChaCha20 key stored
+/// in `p2p_encryption_key` (which is wrapped via `utils::encrypt_key`).
 pub async fn restore_file(
     pool: &Pool,
     p2p_service: &Arc<P2PService>,
     file_hash: &str,
+    api_secret: &str,
 ) -> Result<RestoredFile, Box<dyn std::error::Error + Send + Sync>> {
     let svc = p2p_service.clone();
     restore_file_with_fetcher(pool, file_hash, move |node_id, shard_hash| {
@@ -47,7 +51,7 @@ pub async fn restore_file(
                 _ => None,
             }
         }
-    }).await
+    }, api_secret).await
 }
 
 /// Core restore logic with an injectable shard fetcher.
@@ -58,6 +62,7 @@ pub async fn restore_file_with_fetcher<F, Fut>(
     pool: &Pool,
     file_hash: &str,
     fetch: F,
+    api_secret: &str,
 ) -> Result<RestoredFile, Box<dyn std::error::Error + Send + Sync>>
 where
     F: Fn(String, [u8; 32]) -> Fut,
@@ -65,7 +70,7 @@ where
 {
     let client = pool.get().await?;
 
-    let rec = query_file_record(&client, file_hash).await?
+    let rec = query_file_record(&client, file_hash, api_secret).await?
         .ok_or_else(|| format!("File {} not found in database", file_hash))?;
 
     let shard_rows = client.query(
@@ -145,6 +150,7 @@ where
 async fn query_file_record(
     client: &deadpool_postgres::Object,
     file_hash: &str,
+    api_secret: &str,
 ) -> Result<Option<FileRecord>, Box<dyn std::error::Error + Send + Sync>> {
     let row = client.query_opt(
         "SELECT name, ext, p2p_encryption_key, p2p_encrypted_size, \
@@ -154,12 +160,15 @@ async fn query_file_record(
     ).await?;
 
     if let Some(r) = row {
-        let key: Option<Vec<u8>> = r.get(2);
+        let key = r.get::<_, Option<Vec<u8>>>(2)
+            .map(|k| crate::utils::decrypt_key(&k, api_secret))
+            .transpose()?
+            .ok_or("p2p_encryption_key is NULL")?;
         return Ok(Some(FileRecord {
             name: r.get(0),
             ext: r.get(1),
             media_type: "image".to_string(),
-            encryption_key: key.ok_or("p2p_encryption_key is NULL")?,
+            encryption_key: key,
             encrypted_size: r.get(3),
             segment_count: r.get(4),
             segment_enc_sizes: r.get(5),
@@ -176,12 +185,15 @@ async fn query_file_record(
     ).await?;
 
     if let Some(r) = row {
-        let key: Option<Vec<u8>> = r.get(2);
+        let key = r.get::<_, Option<Vec<u8>>>(2)
+            .map(|k| crate::utils::decrypt_key(&k, api_secret))
+            .transpose()?
+            .ok_or("p2p_encryption_key is NULL")?;
         return Ok(Some(FileRecord {
             name: r.get(0),
             ext: r.get(1),
             media_type: "video".to_string(),
-            encryption_key: key.ok_or("p2p_encryption_key is NULL")?,
+            encryption_key: key,
             encrypted_size: r.get(3),
             segment_count: r.get(4),
             segment_enc_sizes: r.get(5),

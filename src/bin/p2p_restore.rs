@@ -17,6 +17,9 @@ struct Args {
     #[arg(long, help = "File hash to restore (hex string)")]
     hash: String,
 
+    #[arg(long, default_value = "", help = "Master API secret key (api_secret_key) used to unwrap the per-file encryption key")]
+    api_secret: String,
+
     #[arg(long, default_value = ".", help = "Output directory for restored file")]
     output: String,
 }
@@ -49,7 +52,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     }
 
-    let restored = restore_file(&pool, &p2p_service, &args.hash).await?;
+    let restored = restore_file(&pool, &p2p_service, &args.hash, &args.api_secret).await?;
 
     let out_dir = std::path::Path::new(&args.output);
     std::fs::create_dir_all(out_dir)?;

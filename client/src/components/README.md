@@ -33,7 +33,7 @@ React UI component inventory. Components render the visual interface, handle use
 ### Duplicates & Trash
 - [DuplicatesBrowser.tsx](file:///Users/ldr/work/reminisce/client/src/components/DuplicatesBrowser.tsx): List view of detected duplicate image candidate pairs (`DuplicatesStore`).
 - [DuplicatesLightbox.tsx](file:///Users/ldr/work/reminisce/client/src/components/DuplicatesLightbox.tsx): Side-by-side comparison modal for keeping/deleting duplicates (`DuplicatesStore`).
-- [TrashBrowser.tsx](file:///Users/ldr/work/reminisce/client/src/components/TrashBrowser.tsx): Soft-deleted media bin with restore and permanent deletion controls (`TrashStore`).
+- [TrashBrowser.tsx](file:///Users/ldr/work/reminisce/client/src/components/TrashBrowser.tsx): Soft-deleted media bin with restore actions (`TrashStore`).
 
 ### System & Admin
 - [UserManagement.tsx](file:///Users/ldr/work/reminisce/client/src/components/UserManagement.tsx): Admin user creation and role configuration interface (`AuthStore`).

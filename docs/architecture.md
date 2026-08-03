@@ -63,7 +63,7 @@ Co-located architecture and invariant guides are maintained alongside code modul
    - `WorkerDbPool`: Separate connection pool (capped at 10) for background workers to prevent database connection starvation during bulk indexing.
    - `GeotaggingDbPool`: Separate connection pool for PostGIS location resolution.
 3. **Automated Schema Migrations**: Runs idempotent database migrations on startup.
-4. **Worker Spawning**: Spawns 6 Tokio tasks sharing a `tokio_util::sync::CancellationToken` for graceful shutdown on SIGINT/SIGTERM.
+4. **Worker Spawning**: Spawns 7 Tokio tasks sharing a `tokio_util::sync::CancellationToken` for graceful shutdown on SIGINT/SIGTERM.
 
 ### Multi-Tenancy & Authentication
 - **Declarative Auth (`Claims`)**: REST endpoints declare `claims: Claims` in their function signature. `Claims` implements `actix_web::FromRequest` to automatically validate `Authorization: Bearer <token>` headers.

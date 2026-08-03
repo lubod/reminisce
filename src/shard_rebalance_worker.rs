@@ -220,20 +220,22 @@ async fn migrate_shard(
     let api_key = config.get_api_key().map_err(|e| format!("Failed to retrieve API key: {}", e))?;
     let file_info = find_file_info(&client, file_hash, api_key).await?;
 
+    // Prefer re-sharding from the local file. If the local file no longer matches its
+    // content hash (reshard_from_local refuses to re-shard a modified file), or local
+    // re-sharding fails for any other reason, fall back to pulling the shard from the
+    // old node.
     let shard_data = match file_info {
         Some((ext, Some(key), _enc_size, data_shards, parity_shards)) => {
-            reshard_from_local(config, file_hash, &ext, &key, shard_index, data_shards, parity_shards).await?
+            match reshard_from_local(config, file_hash, &ext, &key, shard_index, data_shards, parity_shards).await {
+                Ok(data) => data,
+                Err(e) => {
+                    warn!("reshard_from_local failed for {}: {} — falling back to old node", file_hash, e);
+                    retrieve_shard_from_old_node(pool, p2p_service, old_node_id, old_shard_hash).await?
+                }
+            }
         }
         _ => {
-            // Look up old node's addr from DB public_addr or in-memory registry
-            let old_addr = lookup_node_addr(pool, p2p_service, old_node_id).await;
-            match old_addr {
-                Some(addr) => retrieve_shard_from_node(p2p_service, addr, old_shard_hash).await
-                    .map_err(|_| -> Box<dyn std::error::Error + Send + Sync> {
-                        "Cannot migrate: no encryption key and old node unreachable".into()
-                    })?,
-                None => return Err("Cannot migrate: no encryption key and old node addr unknown".into()),
-            }
+            retrieve_shard_from_old_node(pool, p2p_service, old_node_id, old_shard_hash).await?
         }
     };
 
@@ -241,6 +243,23 @@ async fn migrate_shard(
     upload_shard_to_node(p2p_service, new_node_addr, &shard_data).await?;
 
     Ok(shard_hash)
+}
+
+/// Look up the old node's address and pull the shard from it.
+async fn retrieve_shard_from_old_node(
+    pool: &Pool,
+    p2p_service: &Arc<P2PService>,
+    old_node_id: &str,
+    old_shard_hash: &str,
+) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
+    let old_addr = lookup_node_addr(pool, p2p_service, old_node_id).await;
+    match old_addr {
+        Some(addr) => retrieve_shard_from_node(p2p_service, addr, old_shard_hash).await
+            .map_err(|_| -> Box<dyn std::error::Error + Send + Sync> {
+                "Cannot migrate: old node unreachable".into()
+            }),
+        None => Err("Cannot migrate: old node addr unknown".into()),
+    }
 }
 
 /// Resolve a node's socket address: check in-memory registry first, then DB public_addr.
@@ -336,6 +355,18 @@ async fn reshard_from_local(
     } else {
         return Err(format!("Local file not found for hash {}", file_hash).into());
     };
+
+    // Re-sharding produces shards that must be byte-compatible with the survivors
+    // on the other nodes. If the local file changed since it was sharded (its BLAKE3
+    // no longer matches the content hash), refuse to migrate from it so we don't end
+    // up with an inconsistent shard set.
+    let actual_hash = blake3::hash(&file_data).to_hex().to_string();
+    if actual_hash != file_hash {
+        return Err(format!(
+            "Local file hash mismatch ({} != {}): refusing to migrate from a modified file",
+            &actual_hash[..16], &file_hash[..16]
+        ).into());
+    }
 
     let (shards, _enc_size) = StorageEngine::process_for_backup(&file_data, encryption_key, encryption_key, data_shards, parity_shards)?;
 

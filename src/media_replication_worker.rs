@@ -17,7 +17,7 @@ use crate::metrics::{
     BACKUP_PEERS_AVAILABLE, BACKUP_ATTEMPTS_TOTAL, BACKUP_SUCCESS_TOTAL,
     BACKUP_FAILURES_TOTAL, BACKUP_SIZE_BYTES, BACKUP_DURATION_SECONDS,
 };
-use crate::p2p_upload::{self, MIN_NODES_REQUIRED, SEGMENT_THRESHOLD, SHARD_COUNT};
+use crate::p2p_upload::{self, MIN_NODES_REQUIRED, SEGMENT_THRESHOLD};
 use np2p::network::P2PService;
 use np2p::storage::StorageEngine;
 
@@ -208,21 +208,21 @@ async fn replicate_single_file(
     let metadata = tokio::fs::metadata(&file_path).await?;
     let file_size = metadata.len() as usize;
 
+    let data_shards = config.p2p_data_shards;
+    let parity_shards = config.p2p_parity_shards;
+    let total_shards = data_shards + parity_shards;
+
     let start = std::time::Instant::now();
 
     // Route large files through the segmented streaming path to cap peak RAM at ~940 MB.
     if file_size > SEGMENT_THRESHOLD {
-        let res = replicate_large_file(pool, p2p_service, table, nodes, file, &file_path).await;
+        let res = replicate_large_file(pool, p2p_service, base_dir, table, nodes, file, &file_path, api_secret, data_shards, parity_shards).await;
         if res.is_ok() {
             BACKUP_SIZE_BYTES.observe(file_size as f64);
             BACKUP_DURATION_SECONDS.observe(start.elapsed().as_secs_f64());
         }
         return res;
     }
-
-    let data_shards = config.p2p_data_shards;
-    let parity_shards = config.p2p_parity_shards;
-    let total_shards = data_shards + parity_shards;
 
     // 1. Encrypt and Shard
     let file_data = tokio::fs::read(&file_path).await?;
@@ -285,22 +285,7 @@ async fn replicate_single_file(
     trans.commit().await?;
 
     // Append to escrow file for key recovery
-    let abs_base = std::fs::canonicalize(base_dir).unwrap_or_else(|_| PathBuf::from(base_dir));
-    let escrow_path = abs_base.parent().unwrap_or(&abs_base).join("p2p_keys.escrow");
-
-    let mut options = std::fs::OpenOptions::new();
-    options.create(true).append(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-
-    if let Ok(mut escrow_file) = options.open(&escrow_path) {
-        use std::io::Write;
-        let line = format!("{},{}\n", file.hash, hex::encode(&encrypted_key));
-        let _ = escrow_file.write_all(line.as_bytes());
-    }
+    append_key_to_escrow(base_dir, &file.hash, &encrypted_key);
 
     info!("Replicated {}: {} shards stored (rendezvous)", file.hash, final_results.len());
     BACKUP_SIZE_BYTES.observe(file_size as f64);
@@ -311,26 +296,39 @@ async fn replicate_single_file(
 /// Replicates a file larger than SEGMENT_THRESHOLD by processing it in 256 MB segments.
 /// Opens one persistent QUIC stream per shard, then streams sub-shard chunks across all
 /// segments before finalising with a BLAKE3 hash. Peak RAM ≈ 940 MB regardless of file size.
+///
+/// The per-file encryption key is stored wrapped with the master secret (same as the
+/// single-segment path) and appended to the on-disk escrow, so large-file keys survive
+/// a database loss and are never stored in plaintext in the DB.
+#[allow(clippy::too_many_arguments)]
 async fn replicate_large_file(
     pool: &Pool,
     p2p_service: &Arc<P2PService>,
+    base_dir: &str,
     table: &str,
     nodes: &[(String, SocketAddr)],
     file: &MediaToReplicate,
     file_path: &Path,
+    api_secret: &str,
+    data_shards: usize,
+    parity_shards: usize,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut encryption_key = [0u8; 32];
     rand::fill(&mut encryption_key);
 
     info!("Replicating large file {} using segmented streaming", file.hash);
-    let (shard_results, segment_enc_sizes) = p2p_upload::upload_segmented(p2p_service, nodes, &file.hash, file_path, &encryption_key).await?;
+    let (shard_results, segment_enc_sizes) = p2p_upload::upload_segmented(
+        p2p_service, nodes, &file.hash, file_path, &encryption_key, data_shards, parity_shards,
+    ).await?;
 
-    if shard_results.len() < np2p::storage::DATA_SHARDS {
+    if shard_results.len() < data_shards {
         return Err(format!(
             "Only {}/{} shards stored for large file {}. Minimum {} required.",
-            shard_results.len(), SHARD_COUNT, file.hash, np2p::storage::DATA_SHARDS
+            shard_results.len(), data_shards + parity_shards, file.hash, data_shards
         ).into());
     }
+
+    let encrypted_key = crate::utils::encrypt_key(&encryption_key, api_secret)?;
 
     // Update database
     let mut client = pool.get().await?;
@@ -352,15 +350,40 @@ async fn replicate_large_file(
     }
 
     let segment_count = segment_enc_sizes.len() as i32;
-    let key_bytes: &[u8] = &encryption_key;
     let update_query = format!(
-        "UPDATE {} SET p2p_synced_at = NOW(), p2p_shard_hash = $1, p2p_encryption_key = $2, \
-         p2p_encrypted_size = 0, p2p_segment_count = $3, p2p_segment_enc_sizes = $4 WHERE hash = $5",
+        "UPDATE {} SET p2p_synced_at = NOW(), p2p_encryption_key = $2, \
+         p2p_encrypted_size = 0, p2p_segment_count = $3, p2p_segment_enc_sizes = $4, \
+         p2p_data_shards = $5, p2p_parity_shards = $6 WHERE hash = $1",
         table
     );
-    trans.execute(&update_query, &[&file.hash, &key_bytes, &segment_count, &segment_enc_sizes, &file.hash]).await?;
+    trans.execute(&update_query, &[&file.hash, &encrypted_key, &segment_count, &segment_enc_sizes, &(data_shards as i32), &(parity_shards as i32)]).await?;
     trans.commit().await?;
+
+    // Append to escrow file for key recovery (same as the single-segment path).
+    append_key_to_escrow(base_dir, &file.hash, &encrypted_key);
 
     info!("Replicated {} ({} segments, {} shards stored)", file.hash, segment_count, shard_results.len());
     Ok(())
+}
+
+/// Best-effort append of `hash,encrypted_key` to the `p2p_keys.escrow` file that
+/// lives next to the media data directory (mode 0600), so backup keys survive a
+/// database loss.
+fn append_key_to_escrow(base_dir: &str, hash: &str, encrypted_key: &[u8]) {
+    use std::io::Write;
+    let abs_base = std::fs::canonicalize(base_dir).unwrap_or_else(|_| PathBuf::from(base_dir));
+    let escrow_path = abs_base.parent().unwrap_or(&abs_base).join("p2p_keys.escrow");
+
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+
+    if let Ok(mut escrow_file) = options.open(&escrow_path) {
+        let line = format!("{},{}\n", hash, hex::encode(encrypted_key));
+        let _ = escrow_file.write_all(line.as_bytes());
+    }
 }

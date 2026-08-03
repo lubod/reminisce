@@ -437,7 +437,18 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
                                 error!("Failed to update description for {} {}: {}", file_type, hash, e);
                             }
                         }
-                        Ok(_) => {}
+                        // Empty generation output is treated as a permanent skip so the
+                        // row isn't re-fetched and re-sent to the AI service every cycle.
+                        Ok(_) => {
+                            let table_name = if file_type == "image" { "images" } else { "videos" };
+                            if let Err(e) = crate::utils::validate_table_name(table_name) {
+                                error!("Table name validation failed for {}: {}", table_name, e);
+                                return;
+                            }
+                            warn!("AI returned empty description for {} {}, marking as skipped to avoid infinite retry", file_type, hash);
+                            let query = format!("UPDATE {} SET description = $1 WHERE hash = $2 AND user_id = $3", table_name);
+                            let _ = client.execute(&query, &[&"[skipped]", &hash, &user_id]).await;
+                        }
                         Err(e) => {
                             let duration = start_time.elapsed();
                             AI_DESCRIPTION_DURATION.observe(duration.as_secs_f64());
@@ -539,12 +550,16 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
                             FACE_DETECTION_DURATION.observe(duration.as_secs_f64());
                             FACE_DETECTION_FAILURES_TOTAL.inc();
                             error!("Failed face detection for image {} (took {:.2}s): {}", hash, duration.as_secs_f64(), e);
-                            // Still mark as processed to avoid retry loops
-                            if let Err(e) = client.execute(
-                                "UPDATE images SET face_detection_completed_at = NOW() WHERE hash = $1 AND user_id = $2",
-                                &[&hash, &user_id]
-                            ).await {
-                                error!("Failed to mark face detection complete for image {}: {}", hash, e);
+                            // Mark as processed ONLY on permanent failures (invalid/missing
+                            // input, auth errors). A transient gRPC outage must not burn
+                            // the image forever — it is retried on the next cycle.
+                            if crate::ai_client::is_permanent_failure(&e) {
+                                if let Err(e) = client.execute(
+                                    "UPDATE images SET face_detection_completed_at = NOW() WHERE hash = $1 AND user_id = $2",
+                                    &[&hash, &user_id]
+                                ).await {
+                                    error!("Failed to mark face detection complete for image {}: {}", hash, e);
+                                }
                             }
                         }
                     }
@@ -578,8 +593,9 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
                                             ).await;
                                             info!("Quality scored image {} (aesthetic={:.1}, sharpness={:.0})", hash, q.aesthetic_score, q.sharpness_score);
                                         }
-                                        Err(e) if e.contains("400") => {
-                                            // Permanent failure — mark done to avoid retry
+                                        Err(e) if crate::ai_client::is_permanent_failure(&e) => {
+                                            // Permanent failure (invalid image, auth error) —
+                                            // mark done to avoid retrying forever.
                                             let _ = client.execute(
                                                 "UPDATE images SET quality_score_generated_at=NOW() WHERE hash=$1 AND user_id=$2",
                                                 &[&hash, &user_id],
@@ -720,8 +736,10 @@ async fn process_face_detection(
             .map_err(|e| format!("Blocking task failed: {}", e))??
     };
 
-    // Pre-resize to 2048px max for face detection — reduces data transfer to AI service
-    const FACE_DET_MAX_DIM: u32 = 2048;
+    // Pre-resize to 2000px max for face detection — reduces data transfer to the AI
+    // service while keeping max pixels (2000²=4,000,000) at-or-under the server's
+    // MAX_IMAGE_PIXELS cap so square images near the limit aren't rejected.
+    const FACE_DET_MAX_DIM: u32 = 2000;
     let resized_data = resize_image_for_ai(oriented_image_data, FACE_DET_MAX_DIM).await?;
 
     let faces = crate::services::face_detection::detect_faces(&resized_data, config).await?;

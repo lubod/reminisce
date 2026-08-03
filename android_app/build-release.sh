@@ -37,10 +37,6 @@ if [ ! -f "$KEYSTORE_FILE" ]; then
     exit 1
 fi
 
-KEYSTORE_ALIAS=$(grep "keyAlias=" keystore.properties | cut -d'=' -f2)
-KEYSTORE_PASSWORD=$(grep "storePassword=" keystore.properties | cut -d'=' -f2)
-KEY_PASSWORD=$(grep "keyPassword=" keystore.properties | cut -d'=' -f2)
-
 # Find apksigner
 APKSIGNER=$(find $HOME/Library/Android/sdk/build-tools -name "apksigner" 2>/dev/null | sort -V | tail -1)
 if [ -z "$APKSIGNER" ]; then
@@ -48,32 +44,18 @@ if [ -z "$APKSIGNER" ]; then
     exit 1
 fi
 
-echo -e "${BLUE}Step 1/4: Cleaning previous build...${NC}"
+echo -e "${BLUE}Step 1/3: Cleaning previous build...${NC}"
 ./gradlew clean
 
 echo ""
-echo -e "${BLUE}Step 2/4: Building release APK...${NC}"
+echo -e "${BLUE}Step 2/3: Building release APK...${NC}"
+# Gradle signs the release build via `signingConfig signingConfigs.release`
+# (keystore.properties) — no separate apksigner step needed.
 ./gradlew assembleRelease
 
 echo ""
-echo -e "${BLUE}Step 3/4: Signing APK...${NC}"
-UNSIGNED_APK="app/build/outputs/apk/release/app-release.apk"
-SIGNED_APK="app/build/outputs/apk/release/app-release-signed.apk"
-
-# Remove old signed APK if exists
-rm -f "$SIGNED_APK"
-
-# Sign the APK
-"$APKSIGNER" sign \
-    --ks "$KEYSTORE_FILE" \
-    --ks-key-alias "$KEYSTORE_ALIAS" \
-    --ks-pass pass:"$KEYSTORE_PASSWORD" \
-    --key-pass pass:"$KEY_PASSWORD" \
-    --out "$SIGNED_APK" \
-    "$UNSIGNED_APK" 2>&1 | grep -v "WARNING: A restricted method" | grep -v "WARNING: java.lang.System" | grep -v "WARNING: Use --enable-native-access" | grep -v "WARNING: Restricted methods" || true
-
-echo ""
-echo -e "${BLUE}Step 4/4: Verifying signature...${NC}"
+echo -e "${BLUE}Step 3/3: Verifying signature...${NC}"
+SIGNED_APK="app/build/outputs/apk/release/app-release.apk"
 "$APKSIGNER" verify --verbose "$SIGNED_APK" 2>&1 | grep -E "Verifies|Verified using" | head -5
 
 echo ""

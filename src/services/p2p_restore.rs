@@ -32,9 +32,18 @@ pub async fn restore_p2p_file(
     };
 
     let file_hash = path.into_inner();
-    match restore_file(&pool.0, &p2p_service, &file_hash).await {
+    let api_secret = match config.get_api_key() {
+        Ok(k) => k.to_string(),
+        Err(e) => return Ok(HttpResponse::InternalServerError().body(e.to_string())),
+    };
+    match restore_file(&pool.0, &p2p_service, &file_hash, &api_secret).await {
         Ok(restored) => {
-            let disposition = format!("attachment; filename=\"{}\"", restored.filename);
+            // Sanitize the (client-supplied) filename for use inside a Content-Disposition
+            // header so it can't inject newlines/quotes.
+            let safe_name: String = restored.filename.chars()
+                .filter(|c| !matches!(c, '"' | '\r' | '\n' | '\\'))
+                .collect();
+            let disposition = format!("attachment; filename=\"{}\"", safe_name);
             Ok(HttpResponse::Ok()
                 .content_type("application/octet-stream")
                 .append_header(("Content-Disposition", disposition))

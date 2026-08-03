@@ -267,12 +267,14 @@ pub fn verify_shard_token(
         }
     }
 
-    // 2. Check if timestamp is recent (prevent replay attacks, 5 minutes window)
+    // 2. Check if timestamp is recent (prevent replay attacks, 5 minutes window).
+    //    `abs_diff` accepts tokens within ±5 minutes of the current time; anything
+    //    older (or clock-skewed into the future) is rejected.
     let now = std::time::SystemTime::now()
         .duration_since(std::time::SystemTime::UNIX_EPOCH)
         .unwrap_or(std::time::Duration::from_secs(0))
         .as_secs();
-    if now.saturating_sub(token.timestamp) > 300 && token.timestamp.saturating_sub(now) > 300 {
+    if now.abs_diff(token.timestamp) > 300 {
         return false;
     }
 
@@ -328,6 +330,50 @@ mod tests {
         println!("EXTRACTED: {:?}", extracted.map(hex::encode));
         println!("EXPECTED : {}", hex::encode(identity.node_id()));
         assert_eq!(extracted.unwrap(), identity.node_id());
+    }
+
+    #[test]
+    fn test_verify_shard_token_accepts_recent() {
+        let identity = NodeIdentity::generate();
+        let shard_hash = [7u8; 32];
+        let token = identity.create_shard_token(&shard_hash);
+        assert!(verify_shard_token(&token, &shard_hash, Some(&identity.node_id())));
+        // Without an owner pin, a validly-signed recent token is still accepted.
+        assert!(verify_shard_token(&token, &shard_hash, None));
+    }
+
+    #[test]
+    fn test_verify_shard_token_rejects_expired() {
+        let identity = NodeIdentity::generate();
+        let shard_hash = [7u8; 32];
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        // Token signed 10 minutes in the past — beyond the 5-minute replay window.
+        let stale_ts = now - 600;
+        let mut msg_to_sign = Vec::new();
+        msg_to_sign.extend_from_slice(&shard_hash);
+        msg_to_sign.extend_from_slice(&stale_ts.to_be_bytes());
+        let stale_token = ShardToken {
+            owner_node_id: identity.node_id(),
+            timestamp: stale_ts,
+            signature: identity.sign(&msg_to_sign).to_vec(),
+        };
+        assert!(!verify_shard_token(&stale_token, &shard_hash, Some(&identity.node_id())));
+
+        // Token signed 10 minutes in the future (clock skew abuse) must also be rejected.
+        let future_ts = now + 600;
+        let mut msg_to_sign = Vec::new();
+        msg_to_sign.extend_from_slice(&shard_hash);
+        msg_to_sign.extend_from_slice(&future_ts.to_be_bytes());
+        let future_token = ShardToken {
+            owner_node_id: identity.node_id(),
+            timestamp: future_ts,
+            signature: identity.sign(&msg_to_sign).to_vec(),
+        };
+        assert!(!verify_shard_token(&future_token, &shard_hash, Some(&identity.node_id())));
     }
 }
 

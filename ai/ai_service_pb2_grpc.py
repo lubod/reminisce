@@ -54,6 +54,16 @@ class AIServiceStub:
                 request_serializer=ai__service__pb2.DetectFacesRequest.SerializeToString,
                 response_deserializer=ai__service__pb2.DetectFacesResponse.FromString,
                 _registered_method=True)
+        self.QualityScore = channel.unary_unary(
+                '/ai_service.AIService/QualityScore',
+                request_serializer=ai__service__pb2.QualityScoreRequest.SerializeToString,
+                response_deserializer=ai__service__pb2.QualityScoreResponse.FromString,
+                _registered_method=True)
+        self.EnhanceImage = channel.unary_unary(
+                '/ai_service.AIService/EnhanceImage',
+                request_serializer=ai__service__pb2.EnhanceImageRequest.SerializeToString,
+                response_deserializer=ai__service__pb2.EnhanceImageResponse.FromString,
+                _registered_method=True)
         self.HealthCheck = channel.unary_unary(
                 '/ai_service.AIService/HealthCheck',
                 request_serializer=ai__service__pb2.HealthCheckRequest.SerializeToString,
@@ -88,6 +98,18 @@ class AIServiceServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def QualityScore(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def EnhanceImage(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def HealthCheck(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
@@ -116,6 +138,16 @@ def add_AIServiceServicer_to_server(servicer, server):
                     servicer.DetectFaces,
                     request_deserializer=ai__service__pb2.DetectFacesRequest.FromString,
                     response_serializer=ai__service__pb2.DetectFacesResponse.SerializeToString,
+            ),
+            'QualityScore': grpc.unary_unary_rpc_method_handler(
+                    servicer.QualityScore,
+                    request_deserializer=ai__service__pb2.QualityScoreRequest.FromString,
+                    response_serializer=ai__service__pb2.QualityScoreResponse.SerializeToString,
+            ),
+            'EnhanceImage': grpc.unary_unary_rpc_method_handler(
+                    servicer.EnhanceImage,
+                    request_deserializer=ai__service__pb2.EnhanceImageRequest.FromString,
+                    response_serializer=ai__service__pb2.EnhanceImageResponse.SerializeToString,
             ),
             'HealthCheck': grpc.unary_unary_rpc_method_handler(
                     servicer.HealthCheck,
@@ -231,6 +263,60 @@ class AIService:
             '/ai_service.AIService/DetectFaces',
             ai__service__pb2.DetectFacesRequest.SerializeToString,
             ai__service__pb2.DetectFacesResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def QualityScore(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/ai_service.AIService/QualityScore',
+            ai__service__pb2.QualityScoreRequest.SerializeToString,
+            ai__service__pb2.QualityScoreResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def EnhanceImage(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/ai_service.AIService/EnhanceImage',
+            ai__service__pb2.EnhanceImageRequest.SerializeToString,
+            ai__service__pb2.EnhanceImageResponse.FromString,
             options,
             channel_credentials,
             insecure,

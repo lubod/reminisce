@@ -37,7 +37,8 @@ export default defineConfig({
         target: 'http://localhost:8080',  // Local dev: direct to reminisce (no nginx)
         changeOrigin: true,
         secure: false,
-        rewrite: (path) => path.replace(/^\/api/, ''),  // Strip /api prefix
+        // NOTE: no rewrite — the backend mounts everything under the /api scope, so
+        // requests must reach it with the /api prefix intact (matches nginx routing).
       },
     },
   },
