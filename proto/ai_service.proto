@@ -9,6 +9,7 @@ service AIService {
   rpc DetectFaces (DetectFacesRequest) returns (DetectFacesResponse);
   rpc QualityScore (QualityScoreRequest) returns (QualityScoreResponse);
   rpc EnhanceImage (EnhanceImageRequest) returns (EnhanceImageResponse);
+  rpc DetectOrientation (DetectOrientationRequest) returns (DetectOrientationResponse);
   rpc HealthCheck (HealthCheckRequest) returns (HealthCheckResponse);
 }
 
@@ -77,6 +78,22 @@ message EnhanceImageResponse {
   repeated string operations = 2;
 }
 
+// Detect how many degrees a photo is rotated and return the equivalent EXIF
+// orientation value so the thumbnail/serving pipeline can right it.
+message DetectOrientationRequest {
+  bytes image_data = 1;
+}
+
+message DetectOrientationResponse {
+  // EXIF orientation value: 1 (0°), 3 (180°), 6 (90° CW), 8 (90° CCW / 270° CW).
+  // 0 means detection failed / inconclusive.
+  int32 orientation_value = 1;
+  // Model's raw label, one of "0", "90", "180", "270" (rotation applied to input).
+  string label = 2;
+  // Softmax confidence of the predicted label, 0.0..1.0.
+  float confidence = 3;
+}
+
 message HealthCheckRequest {}
 
 message HealthCheckResponse {
@@ -86,4 +103,5 @@ message HealthCheckResponse {
   bool vlm_loaded = 4;
   bool smolvlm_loaded = 5;
   bool face_loaded = 6;
+  bool orientation_loaded = 7;
 }

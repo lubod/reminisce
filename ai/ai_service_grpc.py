@@ -9,6 +9,7 @@ Serves gRPC endpoints defined in proto/ai_service.proto:
 - DetectFaces
 - QualityScore
 - EnhanceImage
+- DetectOrientation
 - HealthCheck
 """
 
@@ -388,6 +389,56 @@ class AIServiceServicer(ai_service_pb2_grpc.AIServiceServicer):
             logger.error(f"Error in gRPC EnhanceImage: {e}", exc_info=True)
             context.abort(grpc.StatusCode.INTERNAL, str(e))
 
+    def DetectOrientation(self, request, context):
+        check_api_key(context)
+        svc = get_ai_service()
+        if svc.orientation_model is None:
+            context.abort(grpc.StatusCode.UNAVAILABLE, "Orientation model not loaded")
+
+        image = _validate_image_input(request.image_data, context)
+        if image.mode != 'RGB':
+            image = image.convert('RGB')
+        if image.width < 3 or image.height < 3:
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, f"Image too small ({image.width}x{image.height})")
+
+        try:
+            with _MODEL_LOCK:
+                inputs = svc.orientation_processor(images=image, return_tensors="pt").to(svc.device)
+                model_dtype = next(svc.orientation_model.parameters()).dtype
+                inputs = {k: v.to(model_dtype) if v.is_floating_point() else v for k, v in inputs.items()}
+
+                with torch.no_grad():
+                    logits = svc.orientation_model(**inputs).logits
+            probs = torch.softmax(logits, dim=-1).squeeze(0)
+            top_idx = int(probs.argmax().item())
+            confidence = float(probs[top_idx].item())
+            # id2label keys may be int or str depending on transformers version;
+            # fall back to the raw index. Returns one of "0"/"90"/"180"/"270".
+            i2l = svc.orientation_model.config.id2label
+            label = str(i2l.get(top_idx, i2l.get(str(top_idx), str(top_idx))))
+
+            # Map the classifier's rotation label to the equivalent EXIF orientation value.
+            # The classifier's label = "rotation applied to the input to tilt it" — the
+            # fix is the opposite direction. Empirically verified on real photos:
+            # a photo stored 90° CW (needs 90° CCW = EXIF 8 to display) predicts label
+            # "270", so the pairing is:
+            #   "0"   -> EXIF 1 (normal)
+            #   "90"  -> EXIF 6 (rotate 90° CW to display)
+            #   "180" -> EXIF 3 (rotate 180°)
+            #   "270" -> EXIF 8 (rotate 270° CW / 90° CCW to display)
+            exif_by_label = {"0": 1, "90": 6, "180": 3, "270": 8}
+            orientation_value = exif_by_label.get(label, 0)
+
+            logger.info(f"DetectOrientation label={label} confidence={confidence:.3f} -> EXIF {orientation_value}")
+            return ai_service_pb2.DetectOrientationResponse(
+                orientation_value=orientation_value,
+                label=str(label),
+                confidence=confidence,
+            )
+        except Exception as e:
+            logger.error(f"Error in gRPC DetectOrientation: {e}", exc_info=True)
+            context.abort(grpc.StatusCode.INTERNAL, str(e))
+
     def HealthCheck(self, request, context):
         device_str = str(get_ai_service().device) if get_ai_service().device else "unknown"
         return ai_service_pb2.HealthCheckResponse(
@@ -397,6 +448,7 @@ class AIServiceServicer(ai_service_pb2_grpc.AIServiceServicer):
             vlm_loaded=get_ai_service().vlm_model is not None,
             smolvlm_loaded=get_ai_service().smolvlm_model is not None,
             face_loaded=get_ai_service().face_app is not None,
+            orientation_loaded=get_ai_service().orientation_model is not None,
         )
 
 

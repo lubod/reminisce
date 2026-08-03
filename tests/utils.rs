@@ -27,6 +27,8 @@ pub fn create_test_config() -> config::Config {
         embedding_parallel_count: Arc::new(AtomicUsize::new(10)),
         enable_face_detection: Arc::new(AtomicBool::new(true)),
         face_detection_parallel_count: Arc::new(AtomicUsize::new(3)),
+        enable_orientation_detection: Arc::new(AtomicBool::new(true)),
+        orientation_detection_parallel_count: Arc::new(AtomicUsize::new(3)),
         otlp_endpoint: None,
         environment: None,
         port: 8080,

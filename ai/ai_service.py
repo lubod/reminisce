@@ -22,6 +22,7 @@ import sys
 import torch
 from flask import Flask, jsonify
 from transformers import AutoModel, AutoProcessor, SmolVLMForConditionalGeneration
+from transformers import AutoImageProcessor, AutoModelForImageClassification
 from insightface.app import FaceAnalysis
 
 # Configure logging
@@ -44,6 +45,8 @@ vlm_processor = None
 smolvlm_model = None
 smolvlm_processor = None
 face_app = None
+orientation_model = None
+orientation_processor = None
 device = None
 
 
@@ -77,6 +80,7 @@ models_loaded = False
 def load_models():
     """Load all AI models on startup"""
     global models_loaded, siglip_model, siglip_processor, vlm_model, vlm_processor, smolvlm_model, smolvlm_processor, face_app, device
+    global orientation_model, orientation_processor
     if models_loaded:
         return
     models_loaded = True
@@ -172,6 +176,24 @@ def load_models():
         logger.error(f"Failed to initialize InsightFace: {e}", exc_info=True)
         # Continue without face detection - other features will work
 
+    # Load BEiT-Base orientation classifier for photos without EXIF orientation data.
+    # Dedicated 4-way classifier (0/90/180/270) — deterministic and far faster than
+    # prompting a VLM. Output is mapped to the equivalent EXIF orientation value.
+    logger.info("Loading BEiT-Base image orientation classifier...")
+    orientation_model_name = os.environ.get("ORIENTATION_MODEL_NAME", "amaye15/Beit-Base-Image-Orientation-Fixer")
+    try:
+        orientation_dtype = torch.float16 if device == "cuda" else torch.float32
+        orientation_model = AutoModelForImageClassification.from_pretrained(
+            orientation_model_name,
+            torch_dtype=orientation_dtype,
+        ).to(device)
+        orientation_processor = AutoImageProcessor.from_pretrained(orientation_model_name)
+        orientation_model.eval()
+        logger.info(f"BEiT-Base orientation classifier loaded successfully on {device} (dtype={orientation_dtype})")
+    except Exception as e:
+        logger.error(f"Failed to load orientation classifier: {e}", exc_info=True)
+        # Continue without orientation detection - photos without EXIF won't be auto-healed
+
 
 QUALITY_TEXTS = [
     "a high quality, beautiful, sharp, well-exposed photograph",
@@ -188,6 +210,7 @@ def health():
         'embedding_model': 'google/siglip2-so400m-patch14-384',
         'vlm_model': 'Qwen/Qwen2.5-VL-3B-Instruct',
         'face_model': 'insightface/buffalo_l',
+        'orientation_model': 'amaye15/Beit-Base-Image-Orientation-Fixer',
         'device': device,
         'embedding_dimension': 1152,
         'face_embedding_dimension': 512,
@@ -195,7 +218,8 @@ def health():
             'siglip2': siglip_model is not None,
             'qwen25_vl': vlm_model is not None,
             'smolvlm': smolvlm_model is not None,
-            'insightface': face_app is not None
+            'insightface': face_app is not None,
+            'orientation': orientation_model is not None
         }
     })
 
@@ -217,6 +241,7 @@ def index():
             'DetectFaces': 'Face detection + embeddings (512-dim)',
             'QualityScore': 'Aesthetic + sharpness scoring',
             'EnhanceImage': 'Fix exposure, denoise, restore old photos',
+            'DetectOrientation': 'Photo rotation detection -> EXIF orientation (BEiT-Base)',
             'HealthCheck': 'Model-load & device status',
         }
     })

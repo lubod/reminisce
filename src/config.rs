@@ -50,6 +50,11 @@ pub struct Config {
     pub enable_face_detection: Arc<AtomicBool>,
     #[serde(skip)]
     pub face_detection_parallel_count: Arc<AtomicUsize>,
+    // Orientation detection settings (runtime configurable)
+    #[serde(skip)]
+    pub enable_orientation_detection: Arc<AtomicBool>,
+    #[serde(skip)]
+    pub orientation_detection_parallel_count: Arc<AtomicUsize>,
 
     // Observability configuration
     #[serde(default)]
@@ -287,6 +292,8 @@ impl Config {
         config.embedding_parallel_count = Arc::new(AtomicUsize::new(10));
         config.enable_face_detection = Arc::new(AtomicBool::new(true));
         config.face_detection_parallel_count = Arc::new(AtomicUsize::new(10));
+        config.enable_orientation_detection = Arc::new(AtomicBool::new(true));
+        config.orientation_detection_parallel_count = Arc::new(AtomicUsize::new(10));
         config.enable_media_backup = Arc::new(AtomicBool::new(false));
         Ok(config)
     }

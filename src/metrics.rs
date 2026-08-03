@@ -622,6 +622,44 @@ pub static FACE_DETECTION_PROCESSING_DELAY: Lazy<Histogram> = Lazy::new(|| {
     ).expect("Failed to register face_detection_processing_delay_seconds metric")
 });
 
+/// AI orientation detection duration histogram
+pub static ORIENTATION_DURATION: Lazy<Histogram> = Lazy::new(|| {
+    register_histogram!(
+        HistogramOpts::new(
+            "orientation_detection_duration_seconds",
+            "AI orientation detection duration in seconds"
+        )
+        .buckets(vec![0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0])
+    ).expect("Failed to register orientation_detection_duration_seconds metric")
+});
+
+/// Total successful AI orientation detections
+pub static ORIENTATION_SUCCESS_TOTAL: Lazy<IntCounter> = Lazy::new(|| {
+    register_int_counter!(
+        "orientation_detection_success_total",
+        "Total number of successful AI orientation detection runs"
+    ).expect("Failed to register orientation_detection_success_total metric")
+});
+
+/// Total failed AI orientation detections
+pub static ORIENTATION_FAILURES_TOTAL: Lazy<IntCounter> = Lazy::new(|| {
+    register_int_counter!(
+        "orientation_detection_failures_total",
+        "Total number of failed AI orientation detection runs"
+    ).expect("Failed to register orientation_detection_failures_total metric")
+});
+
+/// Orientation detection processing delay (time from upload to detection ready)
+pub static ORIENTATION_PROCESSING_DELAY: Lazy<Histogram> = Lazy::new(|| {
+    register_histogram!(
+        HistogramOpts::new(
+            "orientation_detection_processing_delay_seconds",
+            "Time from image upload to AI orientation detection completion in seconds"
+        )
+        .buckets(vec![5.0, 10.0, 30.0, 60.0, 120.0, 300.0, 600.0, 1800.0, 3600.0])
+    ).expect("Failed to register orientation_detection_processing_delay_seconds metric")
+});
+
 
 // ============================================================================
 // Duplicate Detection Metrics
@@ -736,6 +774,10 @@ pub fn init_metrics() {
     Lazy::force(&AI_DESCRIPTION_PROCESSING_DELAY);
     Lazy::force(&EMBEDDING_PROCESSING_DELAY);
     Lazy::force(&FACE_DETECTION_PROCESSING_DELAY);
+    Lazy::force(&ORIENTATION_DURATION);
+    Lazy::force(&ORIENTATION_SUCCESS_TOTAL);
+    Lazy::force(&ORIENTATION_FAILURES_TOTAL);
+    Lazy::force(&ORIENTATION_PROCESSING_DELAY);
     Lazy::force(&DUPLICATE_PAIRS_TOTAL);
     Lazy::force(&DUPLICATE_CHECKED_IMAGES);
     Lazy::force(&P2P_SHARDS_AUDITED_TOTAL);

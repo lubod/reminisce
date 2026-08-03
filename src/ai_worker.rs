@@ -7,6 +7,8 @@ use crate::metrics::{
     FACE_DETECTION_DURATION, FACE_DETECTION_SUCCESS_TOTAL, FACE_DETECTION_FAILURES_TOTAL,
     FACES_DETECTED_TOTAL, FACE_CLUSTERING_DURATION,
     AI_DESCRIPTION_PROCESSING_DELAY, EMBEDDING_PROCESSING_DELAY, FACE_DETECTION_PROCESSING_DELAY,
+    ORIENTATION_DURATION, ORIENTATION_SUCCESS_TOTAL, ORIENTATION_FAILURES_TOTAL,
+    ORIENTATION_PROCESSING_DELAY,
     TOTAL_IMAGES, IMAGES_WITH_EMBEDDING, IMAGES_WITH_DESCRIPTION, IMAGES_FACE_PROCESSED,
 };
 use actix_web::web;
@@ -33,6 +35,7 @@ struct AiTask {
     process_embedding: bool,
     process_faces: bool,
     process_quality: bool,
+    process_orientation: bool,
     created_at: DateTime<Utc>,
     orientation: Option<i16>,
 }
@@ -109,9 +112,11 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
     let config_embedding_limit = config.embedding_parallel_count.load(std::sync::atomic::Ordering::Relaxed);
     let enable_face_detection = config.enable_face_detection.load(std::sync::atomic::Ordering::Relaxed);
     let config_face_limit = config.face_detection_parallel_count.load(std::sync::atomic::Ordering::Relaxed);
+    let enable_orientation_detection = config.enable_orientation_detection.load(std::sync::atomic::Ordering::Relaxed);
+    let config_orientation_limit = config.orientation_detection_parallel_count.load(std::sync::atomic::Ordering::Relaxed);
 
-    if !enable_ai_descriptions && !enable_embeddings && !enable_face_detection {
-        info!("AI descriptions, embeddings, and face detection are all disabled, skipping this cycle.");
+    if !enable_ai_descriptions && !enable_embeddings && !enable_face_detection && !enable_orientation_detection {
+        info!("AI descriptions, embeddings, face detection, and orientation detection are all disabled, skipping this cycle.");
         return Ok(false);
     }
 
@@ -137,10 +142,11 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
     // Use weighted concurrency limits based on priority: embedding > face > description
     let embedding_concurrency = limits.embedding.min(config_embedding_limit);
     let face_concurrency = limits.face_detection.min(config_face_limit);
+    let orientation_concurrency = limits.embedding.min(config_orientation_limit);
     let description_concurrency = limits.description;
 
     // We use a total task limit to prevent fetching too many tasks at once
-    let total_batch_limit = (embedding_concurrency + face_concurrency + description_concurrency) * 2;
+    let total_batch_limit = (embedding_concurrency + orientation_concurrency + face_concurrency + description_concurrency) * 2;
     let mut all_tasks_to_process = std::collections::HashMap::new();
 
     // --- STRICT PRIORITY FETCHING ---
@@ -175,6 +181,7 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
                 process_embedding: true,
                 process_faces: false,
                 process_quality: false,
+                process_orientation: false,
                 created_at,
                 orientation: None,
             });
@@ -209,6 +216,7 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
                     process_embedding: true,
                     process_faces: false,
                     process_quality: false,
+                    process_orientation: false,
                     created_at,
                     orientation: None,
                 });
@@ -258,6 +266,58 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
                     process_embedding: false,
                     process_faces: true,
                     process_quality: false,
+                    process_orientation: false,
+                    created_at,
+                    orientation,
+                });
+        }
+    }
+
+    // 2.5. HIGH-MEDIUM PRIORITY: AI-fallback orientation detection
+    // Only for images with NO EXIF (exif column NULL means the file carries no EXIF to
+    // read orientation from) that have not yet been detected. The classifier result is
+    // stored as an EXIF orientation value so the serving/thumbnail pipeline right the
+    // photo (see media.rs inject_exif_orientation).
+    if enable_orientation_detection && all_tasks_to_process.len() < total_batch_limit {
+        let room_left = total_batch_limit - all_tasks_to_process.len();
+        let orientation_rows = client
+            .query(
+                "SELECT hash, ext, name, user_id, 'image' as file_type, created_at, orientation
+                 FROM images
+                 WHERE verification_status = 1
+                   AND deleted_at IS NULL
+                   AND exif IS NULL
+                   AND orientation IS NULL
+                   AND orientation_detected_at IS NULL
+                   AND lower(ext) != 'svg'
+                 LIMIT $1",
+                &[&(room_left as i64)],
+            )
+            .await
+            .map_err(|e| format!("Failed to query for orientation detection tasks: {}", e))?;
+
+        for row in orientation_rows {
+            let hash: String = row.get(0);
+            let ext: String = row.get(1);
+            let name: String = row.get(2);
+            let user_id: uuid::Uuid = row.get(3);
+            let file_type: String = row.get(4);
+            let created_at: DateTime<Utc> = row.get(5);
+            let orientation: Option<i16> = row.try_get(6).unwrap_or(None);
+
+            all_tasks_to_process.entry(hash.clone())
+                .and_modify(|e| e.process_orientation = orientation.is_none())
+                .or_insert(AiTask {
+                    hash: hash.clone(),
+                    ext,
+                    name,
+                    user_id,
+                    file_type,
+                    process_description: false,
+                    process_embedding: false,
+                    process_faces: false,
+                    process_quality: false,
+                    process_orientation: true,
                     created_at,
                     orientation,
                 });
@@ -299,6 +359,7 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
                     process_embedding: false,
                     process_faces: false,
                     process_quality: false,
+                    process_orientation: false,
                     created_at,
                     orientation: None,
                 });
@@ -343,6 +404,7 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
                     process_embedding: false,
                     process_faces: false,
                     process_quality: true,
+                    process_orientation: false,
                     created_at,
                     orientation: None,
                 });
@@ -358,7 +420,7 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
 
     // Concurrency limit for the parallel stream
     let quality_concurrency = description_concurrency; // Same as description: lowest priority
-    let concurrent_limit = (description_concurrency + embedding_concurrency + face_concurrency + quality_concurrency) * 2;
+    let concurrent_limit = (description_concurrency + embedding_concurrency + orientation_concurrency + face_concurrency + quality_concurrency) * 2;
 
     info!("AI cycle: Processing {} files [CPU Load: {:.1}, GPU Load: {}%]",
           total_files, load_average, gpu_load);
@@ -366,6 +428,7 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
     // Semaphores enforce priority through weighted concurrency:
     let description_semaphore = Arc::new(Semaphore::new(description_concurrency));
     let embedding_semaphore = Arc::new(Semaphore::new(embedding_concurrency));
+    let orientation_semaphore = Arc::new(Semaphore::new(orientation_concurrency));
     let face_semaphore = Arc::new(Semaphore::new(face_concurrency));
     let quality_semaphore = Arc::new(Semaphore::new(quality_concurrency));
 
@@ -383,6 +446,7 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
             let process_embedding = task.process_embedding;
             let process_faces = task.process_faces;
             let process_quality = task.process_quality;
+            let process_orientation = task.process_orientation;
             let created_at = task.created_at;
             let db_orientation = task.orientation;
 
@@ -394,6 +458,7 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
             let config_clone = config.clone();
             let desc_sem_clone = description_semaphore.clone();
             let emb_sem_clone = embedding_semaphore.clone();
+            let orient_sem_clone = orientation_semaphore.clone();
             let face_sem_clone = face_semaphore.clone();
             let quality_sem_clone = quality_semaphore.clone();
             let users_set_clone = users_with_new_faces_clone.clone();
@@ -512,6 +577,46 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
                         }
                     }
                     // _emb_permit automatically dropped here
+                }
+
+                if file_type == "image" && process_orientation {
+                    // Acquire permit in scope to auto-release when done
+                    let _orient_permit = match orient_sem_clone.acquire().await {
+                        Ok(p) => p,
+                        Err(e) => {
+                            warn!("Orientation detection semaphore closed for {}: {}", hash, e);
+                            return;
+                        }
+                    };
+                    info!("Starting AI orientation detection for image: {}", hash);
+                    let start_time = Instant::now();
+                    match process_orientation_detection(&file_path, &hash, &user_id, &config_clone, &client).await {
+                        Ok(()) => {
+                            let duration = start_time.elapsed();
+                            ORIENTATION_DURATION.observe(duration.as_secs_f64());
+                            ORIENTATION_SUCCESS_TOTAL.inc();
+                            ORIENTATION_PROCESSING_DELAY.observe(delay_secs);
+                            info!("AI orientation detected for image {} (took {:.2}s)", hash, duration.as_secs_f64());
+                        }
+                        Err(e) => {
+                            let duration = start_time.elapsed();
+                            ORIENTATION_DURATION.observe(duration.as_secs_f64());
+                            ORIENTATION_FAILURES_TOTAL.inc();
+                            error!("Failed AI orientation detection for image {} (took {:.2}s): {}", hash, duration.as_secs_f64(), e);
+                            // Mark as detected ONLY on permanent failures (invalid/missing
+                            // input, auth errors). A transient gRPC outage must not burn the
+                            // image forever — it is retried on the next cycle.
+                            if crate::ai_client::is_permanent_failure(&e) {
+                                if let Err(err) = client.execute(
+                                    "UPDATE images SET orientation_detected_at = NOW() WHERE hash = $1 AND user_id = $2",
+                                    &[&hash, &user_id]
+                                ).await {
+                                    error!("Failed to mark orientation detected for image {}: {}", hash, err);
+                                }
+                            }
+                        }
+                    }
+                    // _orient_permit automatically dropped here
                 }
 
                 if file_type == "image" && process_faces {
@@ -755,6 +860,60 @@ async fn process_face_detection(
     let faces = scale_bboxes_to_original(faces, orig_w, orig_h, FACE_DET_MAX_DIM);
 
     crate::services::face_detection::store_faces(hash, user_id, faces, client).await
+}
+
+/// Minimum softmax confidence for an AI orientation prediction to be trusted.
+/// The BEiT classifier is photo-trained — on screenshots/graphics its top-1 score is
+/// near-random (~0.4), so gating prevents wrongly rotating non-photos.
+const ORIENTATION_MIN_CONFIDENCE: f32 = 0.5;
+
+/// Detect the rotation of an image that carries no EXIF orientation, using the AI
+/// image-classifier fallback, and store the equivalent EXIF orientation value
+/// (1/3/6/8) so `get_image`/thumbnail generation right the photo. Race-safe: the
+/// UPDATE only writes when `orientation IS NULL` (ingest may have set it meanwhile).
+async fn process_orientation_detection(
+    file_path: &PathBuf,
+    hash: &str,
+    user_id: &uuid::Uuid,
+    config: &Config,
+    client: &tokio_postgres::Client,
+) -> Result<(), String> {
+    let image_data = tokio::fs::read(file_path).await
+        .map_err(|e| format!("Failed to read image: {}", e))?;
+
+    // Pre-resize to the classifier's 384px input — also keeps the gRPC payload small.
+    let resized = resize_image_for_ai(image_data, 384).await?;
+
+    let ai_client = crate::ai_client::AiClient::shared(config);
+    let detection = ai_client.detect_orientation(resized).await?;
+
+    let stored = match detection.orientation_value {
+        v @ (1 | 3 | 6 | 8) if detection.confidence >= ORIENTATION_MIN_CONFIDENCE => Some(v as i16),
+        _ => None,
+    };
+
+    // Mark the attempt complete regardless (below-min-confidence results are treated
+    // as "checked, nothing to fix") so EXIF-less images aren't re-sent every cycle.
+    if let Some(o) = stored {
+        client.execute(
+            "UPDATE images SET orientation = $1, orientation_detected_at = NOW() \
+             WHERE hash = $2 AND user_id = $3 AND orientation IS NULL",
+            &[&o, &hash, user_id],
+        ).await
+            .map_err(|e| format!("Failed to store orientation: {}", e))?;
+        info!("Stored AI-detected orientation {} for image {} (label={}, conf={:.3})",
+              o, hash, detection.label, detection.confidence);
+    } else {
+        client.execute(
+            "UPDATE images SET orientation_detected_at = NOW() WHERE hash = $1 AND user_id = $2",
+            &[&hash, user_id],
+        ).await
+            .map_err(|e| format!("Failed to mark orientation detection attempt: {}", e))?;
+        info!("Orientation detection inconclusive for {} (label={}, conf={:.3}) — leaving unrotated",
+              hash, detection.label, detection.confidence);
+    }
+
+    Ok(())
 }
 
 /// Scale face bbox coordinates from detection-image space back to original image space.

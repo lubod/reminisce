@@ -9,6 +9,18 @@ use tonic::Request;
 
 const MAX_MESSAGE_SIZE: usize = 64 * 1024 * 1024;
 
+/// Result of an AI orientation detection call.
+#[derive(Debug, Clone)]
+pub struct DetectedOrientation {
+    /// EXIF orientation value (1 = normal, 3 = 180°, 6 = 90° CW, 8 = 90° CCW).
+    /// 0 means the service could not determine a rotation.
+    pub orientation_value: i32,
+    /// Raw classifier label, one of "0", "90", "180", "270".
+    pub label: String,
+    /// Softmax confidence of the predicted label, 0.0..1.0.
+    pub confidence: f32,
+}
+
 /// True if a gRPC error string (from `tonic::Status`) represents a permanent, non-retryable
 /// failure. The AI server returns `INVALID_ARGUMENT` for malformed/oversized inputs and
 /// `UNAUTHENTICATED`/`PERMISSION_DENIED` for auth problems — these will never succeed on
@@ -111,6 +123,23 @@ impl AiClient {
 
         let response = client.detect_faces(request).await.map_err(|e| format!("DetectFaces gRPC call failed: {}", e))?;
         Ok(response.into_inner().faces)
+    }
+
+    /// Ask the AI service to detect a photo's rotation using its orientation
+    /// classifier, returning the equivalent EXIF orientation value (1/3/6/8),
+    /// the model's raw label, and the softmax confidence. The service sets
+    /// `orientation_value` to 0 when it cannot determine a rotation.
+    pub async fn detect_orientation(&self, image_data: Vec<u8>) -> Result<DetectedOrientation, String> {
+        let mut client = self.client().await?;
+        let request = self.make_request(DetectOrientationRequest { image_data });
+
+        let response = client.detect_orientation(request).await.map_err(|e| format!("DetectOrientation gRPC call failed: {}", e))?;
+        let res = response.into_inner();
+        Ok(DetectedOrientation {
+            orientation_value: res.orientation_value,
+            label: res.label,
+            confidence: res.confidence,
+        })
     }
 
     pub async fn quality_score(&self, image_data: Vec<u8>) -> Result<QualityScoreResponse, String> {

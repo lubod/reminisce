@@ -64,6 +64,11 @@ class AIServiceStub:
                 request_serializer=ai__service__pb2.EnhanceImageRequest.SerializeToString,
                 response_deserializer=ai__service__pb2.EnhanceImageResponse.FromString,
                 _registered_method=True)
+        self.DetectOrientation = channel.unary_unary(
+                '/ai_service.AIService/DetectOrientation',
+                request_serializer=ai__service__pb2.DetectOrientationRequest.SerializeToString,
+                response_deserializer=ai__service__pb2.DetectOrientationResponse.FromString,
+                _registered_method=True)
         self.HealthCheck = channel.unary_unary(
                 '/ai_service.AIService/HealthCheck',
                 request_serializer=ai__service__pb2.HealthCheckRequest.SerializeToString,
@@ -110,6 +115,12 @@ class AIServiceServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def DetectOrientation(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def HealthCheck(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
@@ -148,6 +159,11 @@ def add_AIServiceServicer_to_server(servicer, server):
                     servicer.EnhanceImage,
                     request_deserializer=ai__service__pb2.EnhanceImageRequest.FromString,
                     response_serializer=ai__service__pb2.EnhanceImageResponse.SerializeToString,
+            ),
+            'DetectOrientation': grpc.unary_unary_rpc_method_handler(
+                    servicer.DetectOrientation,
+                    request_deserializer=ai__service__pb2.DetectOrientationRequest.FromString,
+                    response_serializer=ai__service__pb2.DetectOrientationResponse.SerializeToString,
             ),
             'HealthCheck': grpc.unary_unary_rpc_method_handler(
                     servicer.HealthCheck,
@@ -317,6 +333,33 @@ class AIService:
             '/ai_service.AIService/EnhanceImage',
             ai__service__pb2.EnhanceImageRequest.SerializeToString,
             ai__service__pb2.EnhanceImageResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def DetectOrientation(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/ai_service.AIService/DetectOrientation',
+            ai__service__pb2.DetectOrientationRequest.SerializeToString,
+            ai__service__pb2.DetectOrientationResponse.FromString,
             options,
             channel_credentials,
             insecure,
