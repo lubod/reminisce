@@ -92,6 +92,14 @@ def _validate_image_input(request_image_data, context):
             grpc.StatusCode.INVALID_ARGUMENT,
             f"Image too large ({image.width}x{image.height} pixels > {MAX_IMAGE_PIXELS})",
         )
+    # Force a full decode (offset/pixel data), not just the header. Pillow's
+    # Image.open() is lazy, so truncated/corrupt pixel data is only caught here —
+    # abort with INVALID_ARGUMENT instead of letting an unhandled OSError bubble
+    # up as INTERNAL. Bounded: the pixel cap above is enforced before this load.
+    try:
+        image.load()
+    except Exception:
+        context.abort(grpc.StatusCode.INVALID_ARGUMENT, "Invalid or undecodable image data")
     return image
 
 
