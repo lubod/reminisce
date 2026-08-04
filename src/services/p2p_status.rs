@@ -4,6 +4,7 @@ use utoipa::ToSchema;
 use crate::config::Config;
 use crate::utils;
 use crate::db::MainDbPool;
+use crate::metrics::BACKUP_PEERS_AVAILABLE;
 use np2p::network::P2PService;
 use std::sync::Arc;
 use hex;
@@ -77,6 +78,10 @@ pub async fn get_p2p_backup_status(
     // Prefer the live in-memory registry (nodes actually connected this process); fall back to the DB
     // so the count doesn't collapse to 0 right after a restart before discovery re-fires.
     let active_peers = if active_nodes.is_empty() { recent_peer_count as usize } else { active_nodes.len() };
+
+    // Keep the peers-available metric fresh here too (the UI polls this endpoint every 30s), so the
+    // BackupPeersUnavailable alert never fires on a stale value left by an idle replication cycle.
+    BACKUP_PEERS_AVAILABLE.set(active_peers as i64);
 
     // Reconstruction breakdown across all synced media. Only shards whose owning node is currently
     // reachable count as available, so stale/dead node assignments don't falsely inflate the numbers.
