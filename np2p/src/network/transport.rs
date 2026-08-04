@@ -25,10 +25,14 @@ impl Node {
     pub fn from_socket(socket: std::net::UdpSocket, identity: NodeIdentity) -> Result<Self> {
         let (server_config, mut client_config) = identity.generate_tls_config()?;
 
-        // Keep long-lived connections (e.g. tunnel) alive with QUIC PING frames
+        // Keep long-lived connections (e.g. tunnel) alive with QUIC PING frames.
+        // idle timeout 300s so large segmented uploads (encrypt/erasure-code of each
+        // 256MB segment can pause streaming >60s under CPU/disk load) don't get
+        // silently dropped mid-stream — previously caused "0/5 shards stored" for
+        // big files even though the sender reported success.
         let mut transport = quinn::TransportConfig::default();
         transport.keep_alive_interval(Some(Duration::from_secs(15)));
-        transport.max_idle_timeout(Some(Duration::from_secs(60).try_into().unwrap()));
+        transport.max_idle_timeout(Some(Duration::from_secs(300).try_into().unwrap()));
         client_config.transport_config(Arc::new(transport));
 
         let mut endpoint = Endpoint::new(

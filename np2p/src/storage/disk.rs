@@ -13,7 +13,10 @@ pub struct DiskStorage {
 
 /// Hard cap on the size of a single shard accepted via streaming upload.
 /// Bounds disk usage per shard stream (defense against disk-exhaustion DoS).
-pub const MAX_SHARD_BYTES: u64 = 1 << 30; // 1 GiB
+/// 8 GiB accommodates very large videos (e.g. 11 GB DJI/phone footage produces
+/// ~file_size/3 ≈ 3.8 GB shards under 3/5 EC). Shards are streamed to disk, not
+/// held in RAM, so a larger bound only limits worst-case per-shard disk usage.
+pub const MAX_SHARD_BYTES: u64 = 8 << 30; // 8 GiB
 
 #[cfg(unix)]
 fn get_available_space(path: &Path) -> std::io::Result<u64> {

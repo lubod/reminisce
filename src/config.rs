@@ -128,6 +128,9 @@ pub struct WorkerConfig {
     pub replication_min_secs: u64,
     #[serde(default = "default_replication_max")]
     pub replication_max_secs: u64,
+    /// How many media files to shard+replicate per worker cycle.
+    #[serde(default = "default_replication_batch_size")]
+    pub replication_batch_size: i64,
 
     #[serde(default = "default_audit_min")]
     pub audit_min_secs: u64,
@@ -161,6 +164,7 @@ impl Default for WorkerConfig {
             duplicate_max_secs: default_duplicate_max(),
             replication_min_secs: default_replication_min(),
             replication_max_secs: default_replication_max(),
+            replication_batch_size: default_replication_batch_size(),
             audit_min_secs: default_audit_min(),
             audit_max_secs: default_audit_max(),
             rebalance_min_secs: default_rebalance_min(),
@@ -180,8 +184,9 @@ fn default_ai_max() -> u64 { 30 }
 fn default_duplicate_min() -> u64 { 200 }
 fn default_duplicate_max() -> u64 { 300 }
 
-fn default_replication_min() -> u64 { 10 }
-fn default_replication_max() -> u64 { 60 }
+fn default_replication_min() -> u64 { 5 }
+fn default_replication_max() -> u64 { 20 }
+fn default_replication_batch_size() -> i64 { 50 }
 
 fn default_audit_min() -> u64 { 60 }
 fn default_audit_max() -> u64 { 3600 }

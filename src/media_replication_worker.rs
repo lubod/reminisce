@@ -22,7 +22,7 @@ use np2p::network::P2PService;
 use np2p::storage::StorageEngine;
 
 // Constants
-const BATCH_SIZE: i64 = 10; // Smaller batches for sharding as it is more CPU intensive
+// Batch size is now configurable via workers.replication_batch_size (default 50).
 
 struct MediaToReplicate {
     hash: String,
@@ -117,7 +117,8 @@ async fn replicate_batch(
     );
 
     let client = pool.get().await?;
-    let rows = client.query(&query, &[&BATCH_SIZE]).await?;
+    let batch_size = config.workers.replication_batch_size.max(1);
+    let rows = client.query(&query, &[&batch_size]).await?;
 
     let files: Vec<MediaToReplicate> = rows.iter().map(|row| {
         MediaToReplicate {

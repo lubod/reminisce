@@ -37,11 +37,17 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 # Stage 4: Runtime
 FROM debian:bookworm-slim
 
-RUN apt-get update && apt-get install -y \
-    ca-certificates \
-    ffmpeg \
-    postgresql-client \
-    curl \
+# PostgreSQL 16 client (matches the server; Debian bookworm ships v15 which cannot
+# pg_dump a v16 server). PGDG repo provides postgresql-client-16.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl gnupg \
+    && install -d /usr/share/postgresql-common/pgdg \
+    && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+    && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" > /etc/apt/sources.list.d/pgdg.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ffmpeg \
+        postgresql-client-16 \
     && rm -rf /var/lib/apt/lists/*
 
 # Create a non-privileged user and group
