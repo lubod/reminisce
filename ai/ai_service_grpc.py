@@ -177,8 +177,16 @@ class AIServiceServicer(ai_service_pb2_grpc.AIServiceServicer):
             image = image.convert('RGB')
 
         use_qwen = request.use_qwen
+        _ai = get_ai_service()
+        if not use_qwen and _ai.smolvlm_model is None:
+            # Fast-description model unavailable (e.g. its startup load failed).
+            # Transparently fall back to Qwen2.5-VL rather than failing the request.
+            if _ai.vlm_model is None:
+                context.abort(grpc.StatusCode.UNAVAILABLE, "SmolVLM model not loaded")
+            logger.warning("SmolVLM unavailable — falling back to Qwen2.5-VL for this description")
+            use_qwen = True
         if use_qwen:
-            if get_ai_service().vlm_model is None:
+            if _ai.vlm_model is None:
                 context.abort(grpc.StatusCode.UNAVAILABLE, "Qwen VLM model not loaded")
         else:
             if get_ai_service().smolvlm_model is None:

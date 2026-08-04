@@ -19,6 +19,16 @@ def rocm_metrics():
     except Exception:
         return []
 
+    # VRAM byte usage is only reported by --showmeminfo vram on most ROCm builds.
+    try:
+        mem_out = subprocess.check_output(
+            ["/opt/rocm/bin/rocm-smi", "--json", "--showmeminfo", "vram"],
+            timeout=10, stderr=subprocess.DEVNULL,
+        )
+        mem_data = json.loads(mem_out)
+    except Exception:
+        mem_data = {}
+
     lines = []
     for card, info in data.items():
         if not card.startswith("card"):
@@ -30,6 +40,10 @@ def rocm_metrics():
         if util is not None:
             lines.append(f"gpu_utilization_percent{{{labels}}} {float(util)}")
 
+        mem_pct = info.get("GPU Memory Allocated (VRAM%)", None)
+        if mem_pct is not None:
+            lines.append(f"gpu_memory_usage_percent{{{labels}}} {float(mem_pct)}")
+
         mem_used = info.get("GTT Memory Used (B)", info.get("VRAM Memory Used (B)", None))
         if mem_used is not None:
             lines.append(f"gpu_memory_used_bytes{{{labels}}} {float(mem_used)}")
@@ -37,6 +51,15 @@ def rocm_metrics():
         mem_total = info.get("GTT Memory Total (B)", info.get("VRAM Memory Total (B)", None))
         if mem_total is not None:
             lines.append(f"gpu_memory_total_bytes{{{labels}}} {float(mem_total)}")
+
+        # Authoritative byte figures from --showmeminfo vram.
+        mem = mem_data.get(card, {})
+        used = mem.get("VRAM Total Used Memory (B)")
+        total = mem.get("VRAM Total Memory (B)")
+        if used is not None:
+            lines.append(f"gpu_memory_used_bytes{{{labels}}} {float(used)}")
+        if total is not None:
+            lines.append(f"gpu_memory_total_bytes{{{labels}}} {float(total)}")
 
         temp = info.get("Temperature (Sensor edge) (C)", info.get("Temperature (C)", None))
         if temp is not None:
@@ -48,6 +71,8 @@ def rocm_metrics():
 HELP = """\
 # HELP gpu_utilization_percent GPU compute utilization percentage
 # TYPE gpu_utilization_percent gauge
+# HELP gpu_memory_usage_percent GPU VRAM allocated as a percentage
+# TYPE gpu_memory_usage_percent gauge
 # HELP gpu_memory_used_bytes GPU memory used in bytes
 # TYPE gpu_memory_used_bytes gauge
 # HELP gpu_memory_total_bytes GPU memory total in bytes
