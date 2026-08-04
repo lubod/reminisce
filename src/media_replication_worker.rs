@@ -83,13 +83,67 @@ async fn replicate_all(
         warn!("Only {} P2P nodes discovered. 3+ nodes recommended for 3/5 EC redundancy.", nodes.len());
     }
 
+    // Re-queue files that lost shard redundancy (fewer than the full data+parity complement
+    // reachable) so the batches below re-replicate them to a full set. Bounded per cycle so a
+    // node outage can't trigger a 50k+ file burst in one pass.
+    let target_shards = (config.p2p_data_shards + config.p2p_parity_shards) as i64;
+    let requeued = match requeue_under_replicated(pool, config.workers.replication_batch_size.max(1), target_shards).await {
+        Ok(n) => n,
+        Err(e) => {
+            log::error!("Failed to re-queue under-replicated files: {}", e);
+            0
+        }
+    };
+    if requeued > 0 {
+        info!("Re-queued {} under-replicated file(s) for re-replication", requeued);
+    }
+
     let images_done = replicate_batch(pool, config, p2p_service, &nodes, "images").await
         .map_err(|e| format!("Failed to replicate image batch: {}", e))?;
 
     let videos_done = replicate_batch(pool, config, p2p_service, &nodes, "videos").await
         .map_err(|e| format!("Failed to replicate video batch: {}", e))?;
 
-    Ok(images_done || videos_done)
+    Ok(images_done || videos_done || requeued > 0)
+}
+
+/// Resets `p2p_synced_at` for synced media files whose currently-reachable shard count is below
+/// `target_shards`, so the next replication batch re-shards them from their local originals.
+/// Only shards on recently-active nodes count, mirroring the status/verify queries. Capped to
+/// `limit` files per table per cycle to keep self-healing bounded.
+async fn requeue_under_replicated(
+    pool: &Pool,
+    limit: i64,
+    target_shards: i64,
+) -> Result<u64, String> {
+    let client = pool.get().await.map_err(|e| e.to_string())?;
+
+    let mut total: u64 = 0;
+    for table in ["images", "videos"] {
+        crate::utils::validate_table_name(table)?;
+        let query = format!(
+            "UPDATE {} SET p2p_synced_at = NULL
+             WHERE deleted_at IS NULL AND p2p_synced_at IS NOT NULL
+               AND hash IN (
+                 SELECT i.hash FROM {} i
+                 LEFT JOIN (
+                   SELECT s.file_hash, COUNT(s.id) FILTER (WHERE n.node_id IS NOT NULL) AS sc
+                   FROM p2p_shards s
+                   LEFT JOIN p2p_nodes n ON n.node_id = s.node_id
+                     AND n.is_active = TRUE AND n.last_seen > NOW() - INTERVAL '10 minutes'
+                   GROUP BY s.file_hash
+                 ) t ON t.file_hash = i.hash
+                 WHERE COALESCE(t.sc, 0) < $1
+                 ORDER BY i.created_at ASC
+                 LIMIT $2
+               )",
+            table, table
+        );
+        let n = client.execute(&query, &[&target_shards, &limit])
+            .await.map_err(|e| e.to_string())?;
+        total += n as u64;
+    }
+    Ok(total)
 }
 
 async fn replicate_batch(
