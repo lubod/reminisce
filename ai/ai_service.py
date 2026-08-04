@@ -133,7 +133,7 @@ def load_models():
         from transformers import Qwen2_5_VLForConditionalGeneration
         vlm_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
             vlm_model_name,
-            torch_dtype=torch.bfloat16 if device == "cuda" else torch.float32,
+            torch_dtype=torch.float16 if device == "cuda" else torch.float32,
             attn_implementation="sdpa",
         ).to(device)
         # Cap visual tokens aggressively: 256 tokens max (~200K pixels)
@@ -177,7 +177,7 @@ def load_models():
                 smolvlm_model = SmolVLMForConditionalGeneration.from_pretrained(
                     smolvlm_model_name,
                     config=smolvlm_config,
-                    torch_dtype=torch.bfloat16 if device == "cuda" else torch.float32,
+                    torch_dtype=torch.float16 if device == "cuda" else torch.float32,
                 ).to(device)
                 last_exc = None
                 break

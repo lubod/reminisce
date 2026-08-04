@@ -53,7 +53,9 @@ RUN python -m grpc_tools.protoc -I/app/proto --python_out=/app --grpc_python_out
 # Create a non-privileged user and group, change ownership
 RUN groupadd -g 10002 ai_user && \
     useradd -u 10002 -g ai_user -m -s /sbin/nologin ai_user && \
-    chown -R ai_user:ai_user /app
+    chown -R ai_user:ai_user /app && \
+    mkdir -p /home/ai_user/.cache /home/ai_user/.config && \
+    chown -R ai_user:ai_user /home/ai_user/.cache /home/ai_user/.config
 
 # Switch to the non-privileged user
 USER ai_user:ai_user
