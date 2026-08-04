@@ -221,6 +221,26 @@ groups:
           summary: "P2P backup failures detected"
           description: "{{ $value | humanize }} backup failures/sec in the last hour"
 
+      - alert: DatabaseBackupsStalled
+        expr: db_backup_snapshots_kept == 0
+        for: 30m
+        labels:
+          severity: warning
+          component: backup
+        annotations:
+          summary: "No database backup snapshots stored"
+          description: "db_backups manifest is empty — pg_dump snapshots are not being created (or were pruned to zero)"
+
+      - alert: DatabaseBackupFailing
+        expr: rate(db_backup_failures_total[1h]) > 0
+        for: 10m
+        labels:
+          severity: warning
+          component: backup
+        annotations:
+          summary: "Database backup failures detected"
+          description: "{{ $value | humanize }} db-backup failures/sec in the last hour"
+
       - alert: DiskFillRateHigh
         expr: |
           predict_linear(
