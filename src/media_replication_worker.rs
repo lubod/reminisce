@@ -141,7 +141,7 @@ async fn requeue_under_replicated(
         );
         let n = client.execute(&query, &[&target_shards, &limit])
             .await.map_err(|e| e.to_string())?;
-        total += n as u64;
+        total += n;
     }
     Ok(total)
 }

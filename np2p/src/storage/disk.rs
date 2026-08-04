@@ -27,7 +27,7 @@ fn get_available_space(path: &Path) -> std::io::Result<u64> {
     unsafe {
         let mut stats: libc::statvfs = std::mem::zeroed();
         if libc::statvfs(c_path.as_ptr(), &mut stats) == 0 {
-            Ok(stats.f_frsize as u64 * stats.f_bavail as u64)
+            Ok(stats.f_frsize * stats.f_bavail)
         } else {
             Err(std::io::Error::last_os_error())
         }

@@ -114,7 +114,7 @@ export class PersonStore {
         this.isLoading = true;
         try {
             const response = await axios.get<PersonResponse>(`/persons/${id}`);
-            let person = {
+            const person = {
                 ...response.data.person,
                 thumbnailUrl: response.data.person.representative_face_url 
                     ? this.getAuthenticatedUrl(response.data.person.representative_face_url) 

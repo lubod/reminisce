@@ -25,29 +25,33 @@ export function DuplicatesLightbox({ group, initialIdx, isAdmin, onClose, onDele
     // Authenticated by the httpOnly session cookie — no token in the URL.
     const getAuthUrl = (hash: string) => `/api/image/${hash}`;
 
-    // Close or clamp indices when images are deleted from the group
+    // Close when the group shrinks below the minimum size to render.
     useEffect(() => {
         if (group.images.length < 2) {
             onClose();
-            return;
         }
-        const maxIdx = group.images.length - 1;
-        const newLeft = Math.min(leftIdx, maxIdx);
-        let newRight = Math.min(rightIdx, maxIdx);
-        if (newRight === newLeft) {
-            newRight = newLeft === 0 ? 1 : 0;
-        }
-        if (newLeft !== leftIdx) setLeftIdx(newLeft);
-        if (newRight !== rightIdx) setRightIdx(newRight);
-    }, [group.images.length]); // eslint-disable-line react-hooks/exhaustive-deps
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [group.images.length]);
 
-    // Reset zoom when displayed images change
+    // Clamp selection when the group shrinks. Uses the render-phase adjustment pattern
+    // (setState during render, only when the value actually changes) instead of an effect.
+    const maxIdx = group.images.length - 1;
+    const clampedLeft = Math.min(leftIdx, maxIdx);
+    let clampedRight = Math.min(rightIdx, maxIdx);
+    if (clampedRight === clampedLeft) {
+        clampedRight = clampedLeft === 0 ? 1 : 0;
+    }
+    if (clampedLeft !== leftIdx) setLeftIdx(clampedLeft);
+    if (clampedRight !== rightIdx) setRightIdx(clampedRight);
+
+    // Reset zoom when displayed images change (render-phase adjustment keyed on the pair).
     const leftHash = group.images[leftIdx]?.hash;
     const rightHash = group.images[rightIdx]?.hash;
-
-    useEffect(() => {
+    const prevPair = useRef<{ l?: string; r?: string }>({ l: undefined, r: undefined });
+    if (prevPair.current.l !== leftHash || prevPair.current.r !== rightHash) {
+        prevPair.current = { l: leftHash, r: rightHash };
         setTransform({ scale: 1, tx: 0, ty: 0 });
-    }, [leftHash, rightHash]);
+    }
 
     // Non-passive wheel zoom (synced)
     useEffect(() => {

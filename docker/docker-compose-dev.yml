@@ -58,8 +58,8 @@ services:
   # === AI SERVICE ===
   ai-server:
     build:
-      context: ./ai
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: ai/Dockerfile
     image: lubod/reminisce-ai-server:local
     container_name: reminisce-dev-ai-server
     ports:
