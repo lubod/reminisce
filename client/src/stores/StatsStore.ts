@@ -94,8 +94,18 @@ export interface P2PDaemonStatus {
 export interface P2PBackupStatus {
     local_peer_id: string;
     is_healthy: boolean;
+    health_status: "healthy" | "degraded" | "critical";
     active_peers: number;
     total_shards_stored: number;
+    ok_files: number;
+    degraded_files: number;
+    failed_files: number;
+    missing_files: number;
+    pending_images: number;
+    pending_videos: number;
+    db_backups_count: number;
+    db_backups_total_bytes: number;
+    db_backups_latest_at: string | null;
 }
 
 export interface DiscoveredPeer {
@@ -103,6 +113,7 @@ export interface DiscoveredPeer {
     last_seen: string;
     is_active: boolean;
     shard_count: number;
+    public_addr: string | null;
 }
 
 export interface DiscoveredPeersResponse {
@@ -122,6 +133,7 @@ export interface FileVerifyResult {
 export interface VerificationResult {
     total_files: number;
     verified_files: number;
+    degraded_files: number;
     failed_files: number;
     missing_files: number;
     files: FileVerifyResult[];
@@ -321,6 +333,10 @@ export class StatsStore {
             if (response.data.failed_files > 0 || response.data.missing_files > 0) {
                 this.rootStore.uiStore.setError(
                     `Verification found issues: ${response.data.failed_files} failed, ${response.data.missing_files} missing`
+                );
+            } else if (response.data.degraded_files > 0) {
+                this.rootStore.uiStore.setSuccess(
+                    `Verify OK: ${response.data.verified_files} full, ${response.data.degraded_files} degraded (${response.data.degraded_files} files reconstructable with 3/5 shards)`
                 );
             } else if (response.data.verified_files > 0) {
                 this.rootStore.uiStore.setSuccess(

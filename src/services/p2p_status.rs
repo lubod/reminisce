@@ -12,8 +12,25 @@ use hex;
 pub struct P2PBackupStatusResponse {
     pub local_peer_id: String,
     pub is_healthy: bool,
+    /// "healthy" = 5+ active nodes (full 3/5 parity), "degraded" = 3-4 (reconstructable), "critical" = <3 (cannot tolerate node loss)
+    pub health_status: String,
     pub active_peers: usize,
     pub total_shards_stored: i64,
+    /// Synced media files with all 5 shards available on currently-reachable nodes.
+    pub ok_files: i64,
+    /// 3-4 shards available (reconstructable, but no parity redundancy).
+    pub degraded_files: i64,
+    /// 1-2 shards available (not reconstructable).
+    pub failed_files: i64,
+    /// 0 shards available on reachable nodes.
+    pub missing_files: i64,
+    /// Media files not yet replicated (p2p_synced_at IS NULL).
+    pub pending_images: i64,
+    pub pending_videos: i64,
+    /// Rolling pg_dump snapshots distributed over the mesh (database backups).
+    pub db_backups_count: i64,
+    pub db_backups_total_bytes: i64,
+    pub db_backups_latest_at: Option<String>,
 }
 
 #[utoipa::path(
@@ -51,16 +68,93 @@ pub async fn get_p2p_backup_status(
     let shard_count: i64 = client.query_one("SELECT COUNT(*) FROM p2p_shards", &[]).await
         .map(|row| row.get(0)).unwrap_or(0);
 
-    let db_peer_count: i64 = client.query_one("SELECT COUNT(*) FROM p2p_nodes WHERE is_active = TRUE AND last_seen > NOW() - INTERVAL '1 hour'", &[]).await
-        .map(|row| row.get(0)).unwrap_or(0);
+    // Recent peers (last 10 min) — an honest proxy for "currently reachable" that survives a restart.
+    let recent_peer_count: i64 = client.query_one(
+        "SELECT COUNT(*) FROM p2p_nodes WHERE is_active = TRUE AND last_seen > NOW() - INTERVAL '10 minutes'",
+        &[],
+    ).await.map(|row| row.get(0)).unwrap_or(0);
 
-    let active_peers = std::cmp::max(db_peer_count as usize, active_nodes.len());
+    // Prefer the live in-memory registry (nodes actually connected this process); fall back to the DB
+    // so the count doesn't collapse to 0 right after a restart before discovery re-fires.
+    let active_peers = if active_nodes.is_empty() { recent_peer_count as usize } else { active_nodes.len() };
+
+    // Reconstruction breakdown across all synced media. Only shards whose owning node is currently
+    // reachable count as available, so stale/dead node assignments don't falsely inflate the numbers.
+    // Needs at least DATA_SHARDS (3) shards on distinct nodes to rebuild a file, 5 for full parity.
+    let breakdown_row = client.query_one(
+        "SELECT
+            COUNT(*) FILTER (WHERE sc >= 5) AS ok_files,
+            COUNT(*) FILTER (WHERE sc >= 3 AND sc < 5) AS degraded_files,
+            COUNT(*) FILTER (WHERE sc > 0 AND sc < 3) AS failed_files,
+            COUNT(*) FILTER (WHERE sc = 0) AS missing_files
+         FROM (
+            SELECT i.hash, COUNT(s.id) FILTER (WHERE n.node_id IS NOT NULL) AS sc
+            FROM images i
+            LEFT JOIN p2p_shards s ON s.file_hash = i.hash
+            LEFT JOIN p2p_nodes n ON n.node_id = s.node_id
+                AND n.is_active = TRUE AND n.last_seen > NOW() - INTERVAL '10 minutes'
+            WHERE i.p2p_synced_at IS NOT NULL AND i.deleted_at IS NULL
+            GROUP BY i.hash
+            UNION ALL
+            SELECT v.hash, COUNT(s.id) FILTER (WHERE n.node_id IS NOT NULL) AS sc
+            FROM videos v
+            LEFT JOIN p2p_shards s ON s.file_hash = v.hash
+            LEFT JOIN p2p_nodes n ON n.node_id = s.node_id
+                AND n.is_active = TRUE AND n.last_seen > NOW() - INTERVAL '10 minutes'
+            WHERE v.p2p_synced_at IS NOT NULL AND v.deleted_at IS NULL
+            GROUP BY v.hash
+         ) AS combined",
+        &[],
+    ).await.map_err(|_| actix_web::error::ErrorInternalServerError("DB query error"))?;
+
+    let ok_files: i64 = breakdown_row.get(0);
+    let degraded_files: i64 = breakdown_row.get(1);
+    let failed_files: i64 = breakdown_row.get(2);
+    let missing_files: i64 = breakdown_row.get(3);
+
+    let pending_images: i64 = client.query_one(
+        "SELECT COUNT(*) FROM images WHERE p2p_synced_at IS NULL AND deleted_at IS NULL",
+        &[],
+    ).await.map(|row| row.get(0)).unwrap_or(0);
+
+    let pending_videos: i64 = client.query_one(
+        "SELECT COUNT(*) FROM videos WHERE p2p_synced_at IS NULL AND deleted_at IS NULL",
+        &[],
+    ).await.map(|row| row.get(0)).unwrap_or(0);
+
+    let db_backup_row = client.query_one(
+        "SELECT COUNT(*), COALESCE(SUM(size_bytes), 0)::BIGINT, MAX(created_at) FROM db_backups",
+        &[],
+    ).await.map_err(|_| actix_web::error::ErrorInternalServerError("DB query error"))?;
+    let db_backups_count: i64 = db_backup_row.get(0);
+    let db_backups_total_bytes: i64 = db_backup_row.get(1);
+    let db_backups_latest_at: Option<chrono::DateTime<chrono::Utc>> = db_backup_row.get(2);
+    let db_backups_latest_at = db_backups_latest_at.map(|t| t.to_rfc3339());
+
+    // 3/5 Reed-Solomon: >=5 nodes = full parity, 3-4 = reconstructable only, <3 = cannot tolerate a loss.
+    let (is_healthy, health_status) = if active_peers >= 5 {
+        (true, "healthy")
+    } else if active_peers >= 3 {
+        (true, "degraded")
+    } else {
+        (false, "critical")
+    };
 
     let response = P2PBackupStatusResponse {
         local_peer_id: hex::encode(p2p_service.identity().node_id()),
-        is_healthy: true,
+        is_healthy,
+        health_status: health_status.to_string(),
         active_peers,
         total_shards_stored: shard_count,
+        ok_files,
+        degraded_files,
+        failed_files,
+        missing_files,
+        pending_images,
+        pending_videos,
+        db_backups_count,
+        db_backups_total_bytes,
+        db_backups_latest_at,
     };
 
     Ok(HttpResponse::Ok().json(response))
@@ -117,6 +211,8 @@ pub struct DiscoveredPeer {
     pub last_seen: String,
     pub is_active: bool,
     pub shard_count: i64,
+    /// Host:port this node is reachable at (LAN IP or VPS address).
+    pub public_addr: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
@@ -148,10 +244,10 @@ pub async fn get_discovered_peers(
 
     let client = utils::get_db_client(&pool.0).await?;
     let rows = client.query(
-        "SELECT n.node_id, n.last_seen, n.is_active, COUNT(s.id) as shard_count
+        "SELECT n.node_id, n.last_seen, n.is_active, n.public_addr, COUNT(s.id) as shard_count
          FROM p2p_nodes n
          LEFT JOIN p2p_shards s ON s.node_id = n.node_id
-         GROUP BY n.node_id, n.last_seen, n.is_active
+         GROUP BY n.node_id, n.last_seen, n.is_active, n.public_addr
          ORDER BY n.last_seen DESC
          LIMIT 50",
         &[]
@@ -164,7 +260,8 @@ pub async fn get_discovered_peers(
             peer_id: row.get(0),
             last_seen: last_seen.to_rfc3339(),
             is_active: row.get(2),
-            shard_count: row.get(3),
+            public_addr: row.get(3),
+            shard_count: row.get(4),
         }
     }).collect();
 
@@ -177,6 +274,7 @@ pub async fn get_discovered_peers(
                 peer_id: registry_peer.node_id,
                 last_seen: now.clone(),
                 is_active: true,
+                public_addr: Some(registry_peer.addr.to_string()),
                 shard_count: 0,
             });
         }
@@ -202,7 +300,10 @@ pub struct FileVerifyResult {
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct VerificationResult {
     pub total_files: i64,
+    /// Files with all 5 shards available (full complement).
     pub verified_files: i64,
+    /// Files with 3-4 shards available (recoverable, no parity redundancy).
+    pub degraded_files: i64,
     pub failed_files: i64,
     pub missing_files: i64,
     pub files: Vec<FileVerifyResult>,
@@ -231,25 +332,25 @@ pub async fn verify_p2p_backup(
     let client = utils::get_db_client(&pool.0).await?;
 
     // Query all synced files from both images and videos with their shard counts.
-    // Only count shards whose node is currently active (last_seen within 1h and is_active),
+    // Only count shards whose owning node is currently reachable (last_seen within 10 min and is_active),
     // so dead/stale node assignments don't falsely inflate the count.
     let rows = client.query(
         "SELECT hash, COALESCE(shard_count, 0) as shard_count FROM (
-            SELECT i.hash, COUNT(s.id) as shard_count
+            SELECT i.hash, COUNT(s.id) FILTER (WHERE n.node_id IS NOT NULL) as shard_count
             FROM images i
             LEFT JOIN p2p_shards s ON s.file_hash = i.hash
             LEFT JOIN p2p_nodes n ON n.node_id = s.node_id
                 AND n.is_active = TRUE
-                AND n.last_seen > NOW() - INTERVAL '1 hour'
+                AND n.last_seen > NOW() - INTERVAL '10 minutes'
             WHERE i.p2p_synced_at IS NOT NULL AND i.deleted_at IS NULL
             GROUP BY i.hash
             UNION ALL
-            SELECT v.hash, COUNT(s.id) as shard_count
+            SELECT v.hash, COUNT(s.id) FILTER (WHERE n.node_id IS NOT NULL) as shard_count
             FROM videos v
             LEFT JOIN p2p_shards s ON s.file_hash = v.hash
             LEFT JOIN p2p_nodes n ON n.node_id = s.node_id
                 AND n.is_active = TRUE
-                AND n.last_seen > NOW() - INTERVAL '1 hour'
+                AND n.last_seen > NOW() - INTERVAL '10 minutes'
             WHERE v.p2p_synced_at IS NOT NULL AND v.deleted_at IS NULL
             GROUP BY v.hash
         ) AS combined
@@ -262,6 +363,7 @@ pub async fn verify_p2p_backup(
 
     let mut files = Vec::with_capacity(rows.len());
     let mut verified_files: i64 = 0;
+    let mut degraded_files: i64 = 0;
     let mut failed_files: i64 = 0;
     let mut missing_files: i64 = 0;
 
@@ -280,7 +382,8 @@ pub async fn verify_p2p_backup(
         };
 
         match status {
-            "ok" | "degraded" => verified_files += 1,
+            "ok" => verified_files += 1,
+            "degraded" => degraded_files += 1,
             "failed" => failed_files += 1,
             _ => missing_files += 1,
         }
@@ -298,6 +401,7 @@ pub async fn verify_p2p_backup(
     Ok(HttpResponse::Ok().json(VerificationResult {
         total_files: rows.len() as i64,
         verified_files,
+        degraded_files,
         failed_files,
         missing_files,
         files,
@@ -332,13 +436,83 @@ pub struct MembershipInfo {
     pub node_id: String,
 }
 
-#[utoipa::path(get, path = "/api/p2p/backup/list", responses((status = 200, description = "List of backups", body = BackupListResponse)), tag = "P2P")]
+#[utoipa::path(
+    get,
+    path = "/api/p2p/backup/list",
+    responses(
+        (status = 200, description = "List of database backup snapshots", body = BackupListResponse),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Admin required")
+    ),
+    tag = "P2P"
+)]
 #[get("/p2p/backup/list")]
-pub async fn list_p2p_backups() -> HttpResponse { HttpResponse::Ok().json(BackupListResponse { backups: vec![] }) }
+pub async fn list_p2p_backups(
+    req: HttpRequest,
+    config: web::Data<Config>,
+    pool: web::Data<MainDbPool>,
+) -> Result<HttpResponse, actix_web::Error> {
+    let claims = match utils::authenticate_request(&req, "list_p2p_backups", config.get_api_key()).await {
+        Ok(c) => c,
+        Err(r) => return Ok(r),
+    };
+    if claims.role != "admin" {
+        return Ok(HttpResponse::Forbidden().json(serde_json::json!({"error": "admin required"})));
+    }
 
-#[utoipa::path(get, path = "/api/p2p/backup/timestamps", responses((status = 200, description = "List of timestamps", body = BackupTimestampsResponse)), tag = "P2P")]
+    let client = utils::get_db_client(&pool.0).await?;
+    let rows = client.query(
+        "SELECT backup_hash, created_at, size_bytes FROM db_backups ORDER BY created_at DESC",
+        &[],
+    ).await.map_err(|_| actix_web::error::ErrorInternalServerError("DB query error"))?;
+
+    let backups: Vec<BackupEntry> = rows.iter().map(|row| {
+        let backup_hash: String = row.get(0);
+        let created_at: chrono::DateTime<chrono::Utc> = row.get(1);
+        BackupEntry {
+            filename: format!("{}.pgdump", &backup_hash[..backup_hash.len().min(24)]),
+            size: row.get::<_, i64>(2).max(0) as u64,
+            created_at: created_at.to_rfc3339(),
+        }
+    }).collect();
+
+    Ok(HttpResponse::Ok().json(BackupListResponse { backups }))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/p2p/backup/timestamps",
+    responses(
+        (status = 200, description = "List of database backup timestamps", body = BackupTimestampsResponse),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Admin required")
+    ),
+    tag = "P2P"
+)]
 #[get("/p2p/backup/timestamps")]
-pub async fn list_backup_timestamps() -> HttpResponse { HttpResponse::Ok().json(BackupTimestampsResponse { timestamps: vec![] }) }
+pub async fn list_backup_timestamps(
+    req: HttpRequest,
+    config: web::Data<Config>,
+    pool: web::Data<MainDbPool>,
+) -> Result<HttpResponse, actix_web::Error> {
+    let claims = match utils::authenticate_request(&req, "list_backup_timestamps", config.get_api_key()).await {
+        Ok(c) => c,
+        Err(r) => return Ok(r),
+    };
+    if claims.role != "admin" {
+        return Ok(HttpResponse::Forbidden().json(serde_json::json!({"error": "admin required"})));
+    }
+
+    let client = utils::get_db_client(&pool.0).await?;
+    let rows = client.query(
+        "SELECT EXTRACT(EPOCH FROM created_at)::BIGINT FROM db_backups ORDER BY created_at DESC",
+        &[],
+    ).await.map_err(|_| actix_web::error::ErrorInternalServerError("DB query error"))?;
+
+    let timestamps: Vec<u64> = rows.iter().map(|row| row.get::<_, i64>(0).max(0) as u64).collect();
+
+    Ok(HttpResponse::Ok().json(BackupTimestampsResponse { timestamps }))
+}
 
 #[utoipa::path(get, path = "/api/p2p-invite-status", responses((status = 200, description = "Invite status", body = InviteStatusResponse)), tag = "P2P")]
 #[get("/p2p-invite-status")]
