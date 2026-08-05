@@ -271,7 +271,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "thumbnail_success_total / total_images",
+          "expr": "thumbnail_coverage_ratio",
           "legendFormat": "Thumbnail Coverage",
           "refId": "A"
         }

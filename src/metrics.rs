@@ -4,8 +4,8 @@
 // events and behaviors beyond standard HTTP metrics.
 
 use prometheus::{
-    IntCounter, IntGauge, Histogram, HistogramOpts,
-    register_int_counter, register_int_gauge, register_histogram,
+    IntCounter, IntGauge, Gauge, Histogram, HistogramOpts,
+    register_int_counter, register_int_gauge, register_gauge, register_histogram,
 };
 use std::sync::LazyLock as Lazy;
 
@@ -396,6 +396,22 @@ pub static TOTAL_IMAGES: Lazy<IntGauge> = Lazy::new(|| {
     ).expect("Failed to register total_images metric")
 });
 
+/// Number of media items (images + videos) that have a thumbnail stored.
+pub static THUMBNAIL_COUNT: Lazy<IntGauge> = Lazy::new(|| {
+    register_int_gauge!(
+        "thumbnail_count",
+        "Number of media items that have a thumbnail"
+    ).expect("Failed to register thumbnail_count metric")
+});
+
+/// Fraction (0..1) of media items that have a thumbnail.
+pub static THUMBNAIL_COVERAGE: Lazy<Gauge> = Lazy::new(|| {
+    register_gauge!(
+        "thumbnail_coverage_ratio",
+        "Fraction of media items that have a thumbnail (0..1)"
+    ).expect("Failed to register thumbnail_coverage_ratio metric")
+});
+
 /// Total number of images with embeddings
 pub static IMAGES_WITH_EMBEDDING: Lazy<IntGauge> = Lazy::new(|| {
     register_int_gauge!(
@@ -769,6 +785,8 @@ pub fn init_metrics() {
     Lazy::force(&FACE_CLUSTERING_DURATION);
     Lazy::force(&THUMBNAIL_DURATION);
     Lazy::force(&THUMBNAIL_SUCCESS_TOTAL);
+    Lazy::force(&THUMBNAIL_COUNT);
+    Lazy::force(&THUMBNAIL_COVERAGE);
     Lazy::force(&THUMBNAIL_FAILURES_TOTAL);
     Lazy::force(&THUMBNAIL_PROCESSING_DELAY);
     Lazy::force(&AI_DESCRIPTION_PROCESSING_DELAY);

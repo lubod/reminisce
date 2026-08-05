@@ -10,6 +10,7 @@ use crate::metrics::{
     ORIENTATION_DURATION, ORIENTATION_SUCCESS_TOTAL, ORIENTATION_FAILURES_TOTAL,
     ORIENTATION_PROCESSING_DELAY,
     TOTAL_IMAGES, IMAGES_WITH_EMBEDDING, IMAGES_WITH_DESCRIPTION, IMAGES_FACE_PROCESSED,
+    THUMBNAIL_COUNT, THUMBNAIL_COVERAGE,
 };
 use actix_web::web;
 use log::{error, info, warn};
@@ -1021,13 +1022,26 @@ async fn generate_and_store_video_embedding(
 }
 
 async fn update_status_metrics(client: &tokio_postgres::Client) -> Result<(), tokio_postgres::Error> {
+    // Thumbnail coverage is derived from the DB (has_thumbnail flag), not from the
+    // thumbnail_success_total event counter, which resets on every server restart and
+    // would otherwise massively under-report coverage.
     let row = client.query_one(
-        "SELECT 
-            COUNT(*) as total, 
-            COUNT(embedding) as with_embedding, 
-            COUNT(description) as with_description,
-            COUNT(face_detection_completed_at) as face_processed
-        FROM images",
+        "WITH img AS (
+            SELECT COUNT(*) AS total,
+                   COUNT(embedding) AS with_embedding,
+                   COUNT(description) AS with_description,
+                   COUNT(face_detection_completed_at) AS face_processed,
+                   COUNT(*) FILTER (WHERE has_thumbnail = true) AS with_thumbnail
+            FROM images
+         ), vid AS (
+            SELECT COUNT(*) AS total,
+                   COUNT(*) FILTER (WHERE has_thumbnail = true) AS with_thumbnail
+            FROM videos
+         )
+         SELECT img.total, img.with_embedding, img.with_description, img.face_processed,
+                img.with_thumbnail + vid.with_thumbnail,
+                img.total + vid.total
+         FROM img, vid",
         &[]
     ).await?;
 
@@ -1035,11 +1049,18 @@ async fn update_status_metrics(client: &tokio_postgres::Client) -> Result<(), to
     let with_embedding: i64 = row.get(1);
     let with_description: i64 = row.get(2);
     let face_processed: i64 = row.get(3);
+    let thumbnail_count: i64 = row.get(4);
+    let total_media: i64 = row.get(5);
 
     TOTAL_IMAGES.set(total);
     IMAGES_WITH_EMBEDDING.set(with_embedding);
     IMAGES_WITH_DESCRIPTION.set(with_description);
     IMAGES_FACE_PROCESSED.set(face_processed);
+
+    THUMBNAIL_COUNT.set(thumbnail_count);
+    if total_media > 0 {
+        THUMBNAIL_COVERAGE.set(thumbnail_count as f64 / total_media as f64);
+    }
 
     Ok(())
 }
