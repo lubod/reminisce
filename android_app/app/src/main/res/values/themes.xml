@@ -15,6 +15,13 @@
         <!-- Customize your theme here. -->
     </style>
 
+    <!-- NoActionBar variant: host the app menu in an in-layout toolbar so the
+         window action bar can never overlay the tab header. -->
+    <style name="Theme.Reminisce.NoActionBar" parent="Theme.Reminisce">
+        <item name="windowActionBar">false</item>
+        <item name="windowNoTitle">true</item>
+    </style>
+
     <!-- Tab text appearance with larger, bold text. Fully self-contained
          (no Design.Tab parent) so no library font/color cascade can hide it. -->
     <style name="TabTextAppearance">

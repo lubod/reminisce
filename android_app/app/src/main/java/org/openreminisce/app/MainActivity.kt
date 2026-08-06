@@ -66,7 +66,8 @@ class MainActivity : AppCompatActivity() {
         
         setContentView(R.layout.activity_main)
 
-        supportActionBar?.hide()
+        setSupportActionBar(findViewById<androidx.appcompat.widget.Toolbar>(R.id.toolbar))
+        supportActionBar?.title = getString(R.string.app_name)
 
         tabLocal = findViewById(R.id.tabLocal)
         tabRemote = findViewById(R.id.tabRemote)

@@ -61,7 +61,7 @@
         <activity
             android:name=".MainActivity"
             android:exported="false"
-            android:theme="@style/Theme.Reminisce" />
+            android:theme="@style/Theme.Reminisce.NoActionBar" />
 
         <activity
             android:name=".ImagePreviewActivity"
