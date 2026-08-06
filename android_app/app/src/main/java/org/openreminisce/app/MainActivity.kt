@@ -110,11 +110,16 @@ class MainActivity : AppCompatActivity() {
         viewPager.isUserInputEnabled = false
 
         TabLayoutMediator(tabLayout, viewPager) { tab, position ->
-            when (position) {
-                0 -> tab.text = getString(R.string.local_server)
-                1 -> tab.text = getString(R.string.remote_server)
-            }
+            tab.text = if (position == 0) getString(R.string.local_server) else getString(R.string.remote_server)
         }.attach()
+
+        // Safety net: if the mediator did not populate names on some OEM builds,
+        // assign them explicitly. Logs "Tabs configured" for in-app Share Logs.
+        if (tabLayout.tabCount < 2 || tabLayout.getTabAt(0)?.text.isNullOrBlank()) {
+            tabLayout.getTabAt(0)?.text = getString(R.string.local_server)
+            tabLayout.getTabAt(1)?.text = getString(R.string.remote_server)
+        }
+        Log.d(TAG, "Tabs configured: ${tabLayout.tabCount} tab(s) labeled '${tabLayout.getTabAt(0)?.text}' / '${tabLayout.getTabAt(1)?.text}'")
     }
 
     private inner class ViewPagerAdapter(activity: AppCompatActivity) : FragmentStateAdapter(activity) {
