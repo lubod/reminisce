@@ -15,10 +15,16 @@
         <!-- Customize your theme here. -->
     </style>
 
-    <!-- Tab text appearance with larger, bold text -->
-    <style name="TabTextAppearance" parent="TextAppearance.Design.Tab">
+    <!-- Tab text appearance with larger, bold text. Fully self-contained
+         (no Design.Tab parent) so no library font/color cascade can hide it. -->
+    <style name="TabTextAppearance">
+        <item name="android:fontFamily">sans-serif-medium</item>
         <item name="android:textSize">16sp</item>
-        <item name="android:textStyle">bold</item>
-        <item name="textAllCaps">false</item>
+        <item name="android:textColor">#FFFFFFFF</item>
+        <item name="android:textStyle">normal</item>
+        <item name="android:letterSpacing">0.02</item>
+        <item name="android:includeFontPadding">true</item>
+        <item name="android:textAllCaps">false</item>
+        <item name="android:textFontWeight">500</item>
     </style>
 </resources>

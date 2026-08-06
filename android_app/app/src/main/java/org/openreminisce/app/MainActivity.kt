@@ -119,7 +119,9 @@ class MainActivity : AppCompatActivity() {
             tabLayout.getTabAt(0)?.text = getString(R.string.local_server)
             tabLayout.getTabAt(1)?.text = getString(R.string.remote_server)
         }
-        Log.d(TAG, "Tabs configured: ${tabLayout.tabCount} tab(s) labeled '${tabLayout.getTabAt(0)?.text}' / '${tabLayout.getTabAt(1)?.text}'")
+        // Force the label color imperatively - bypasses any theme/text appearance chain.
+        tabLayout.setTabTextColors(0xFFFFFFFF.toInt(), 0xFFFFFFFF.toInt())
+        Log.d(TAG, "Tabs configured: ${tabLayout.tabCount} tab(s) labeled '${tabLayout.getTabAt(0)?.text}' / '${tabLayout.getTabAt(1)?.text}' with color=${String.format("%#08x", 0xFFFFFFFF)}")
     }
 
     private inner class ViewPagerAdapter(activity: AppCompatActivity) : FragmentStateAdapter(activity) {
