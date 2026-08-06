@@ -224,6 +224,40 @@ export const Dashboard = observer(() => {
                                         </div>
                                     );
                                 })()}
+                                {/* AI Description In Progress */}
+                                {stats && stats.images_description_pending > 0 && (() => {
+                                    const total = stats.total_images;
+                                    const done = total - stats.images_description_pending;
+                                    const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+                                    const etaSec = Math.round(stats.images_description_pending * 12);
+                                    const etaStr = etaSec < 60 ? `~${etaSec}s`
+                                        : etaSec < 3600 ? `~${Math.round(etaSec / 60)}m`
+                                        : `~${(etaSec / 3600).toFixed(1)}h`;
+                                    return (
+                                        <div className="bg-gray-800 border border-blue-700/50 rounded-xl p-5">
+                                            <div className="flex items-center justify-between mb-3">
+                                                <div className="flex items-center gap-2 text-blue-300 font-semibold text-sm">
+                                                    <Brain className="w-4 h-4" />
+                                                    AI Description In Progress
+                                                </div>
+                                                <span className="text-xs text-gray-400">
+                                                    {stats.images_description_pending.toLocaleString()} pending · ETA {etaStr}
+                                                </span>
+                                            </div>
+                                            <div className="w-full bg-gray-700 rounded-full h-2.5 mb-2">
+                                                <div
+                                                    className="bg-blue-500 h-2.5 rounded-full transition-all duration-500"
+                                                    style={{ width: `${pct}%` }}
+                                                />
+                                            </div>
+                                            <div className="flex justify-between text-xs text-gray-500">
+                                                <span>{done.toLocaleString()} processed</span>
+                                                <span>{pct}%</span>
+                                                <span>{total.toLocaleString()} total</span>
+                                            </div>
+                                        </div>
+                                    );
+                                })()}
                             </div>
                         )}
 

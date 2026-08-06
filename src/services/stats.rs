@@ -24,6 +24,7 @@ pub struct StatsResponse {
     pub total_persons: i64,
     pub images_with_faces: i64,
     pub images_face_pending: i64,
+    pub images_description_pending: i64,
     pub total_p2p_synced_images: i64,
     pub total_p2p_synced_videos: i64,
     pub thumbnail_count: i64,
@@ -66,6 +67,7 @@ pub async fn get_stats(
                 COUNT(*) FILTER (WHERE embedding_generated_at IS NOT NULL AND deleted_at IS NULL)           AS images_with_embedding,
                 COUNT(*) FILTER (WHERE verification_status = 1 AND deleted_at IS NULL)                     AS verified_images,
                 COUNT(*) FILTER (WHERE face_detection_completed_at IS NULL AND deleted_at IS NULL)          AS images_face_pending,
+                COUNT(*) FILTER (WHERE (description IS NULL OR description = '') AND deleted_at IS NULL)    AS images_description_pending,
                 COUNT(*) FILTER (WHERE p2p_synced_at IS NOT NULL AND deleted_at IS NULL)                   AS p2p_synced,
                 COUNT(*) FILTER (WHERE has_thumbnail = true AND deleted_at IS NULL)                         AS with_thumbnail
             FROM images
@@ -102,6 +104,7 @@ pub async fn get_stats(
             (SELECT COUNT(*) FROM persons),
             face_stats.images_with_faces,
             img.images_face_pending,
+            img.images_description_pending,
             img.p2p_synced,
             vid.p2p_synced,
             img.with_thumbnail + vid.with_thumbnail
@@ -130,9 +133,10 @@ pub async fn get_stats(
         total_persons: row.get(10),
         images_with_faces: row.get(11),
         images_face_pending: row.get(12),
-        total_p2p_synced_images: row.get(13),
-        total_p2p_synced_videos: row.get(14),
-        thumbnail_count: row.get(15),
+        images_description_pending: row.get(13),
+        total_p2p_synced_images: row.get(14),
+        total_p2p_synced_videos: row.get(15),
+        thumbnail_count: row.get(16),
     };
 
     Ok(HttpResponse::Ok().json(stats))
