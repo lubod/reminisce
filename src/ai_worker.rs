@@ -486,6 +486,24 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
                     };
                     info!("Starting AI description for {} : {}", file_type, hash);
                     let start_time = Instant::now();
+                    // Persist an in-progress marker BEFORE calling the AI service. A ROCm
+                    // fault (e.g. HSA_STATUS_ERROR_EXCEPTION 0x1016 on the AMD iGPU) aborts
+                    // the process hard in the gRPC call, so the Ok/Err handling below never
+                    // runs. Without this marker the row stays description IS NULL and the
+                    // same poison image is re-selected every restart, crash-looping the
+                    // whole AI service (and taking semantic search down with it). The marker
+                    // parks the image instead so the process survives.
+                    let table_name = if file_type == "image" { "images" } else { "videos" };
+                    if let Err(e) = crate::utils::validate_table_name(table_name) {
+                        error!("Table name validation failed for {}: {}", table_name, e);
+                        return;
+                    }
+                    let _ = client
+                        .execute(
+                            &format!("UPDATE {} SET description = $1 WHERE hash = $2 AND user_id = $3", table_name),
+                            &[&"[__processing__]", &hash, &user_id],
+                        )
+                        .await;
                     match get_image_description(&file_path, &hash, &file_type, &config_clone).await {
                         Ok(desc) if !desc.is_empty() => {
                             let duration = start_time.elapsed();
@@ -521,15 +539,20 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
                             AI_DESCRIPTION_FAILURES_TOTAL.inc();
                             error!("Failed to get AI description for {} {} (took {:.2}s): {}", file_type, hash, duration.as_secs_f64(), e);
                             // Mark permanent failures (invalid input / auth errors) so
-                            // they aren't retried forever.
+                            // they aren't retried forever, and reset the in-progress
+                            // marker to NULL for recoverable ones so they are retried.
                             if crate::ai_client::is_permanent_failure(&e) {
-                                let table_name = if file_type == "image" { "images" } else { "videos" };
                                 if let Err(e) = crate::utils::validate_table_name(table_name) {
                                     error!("Table name validation failed for {}: {}", table_name, e);
                                     return;
                                 }
                                 let query = format!("UPDATE {} SET description = $1 WHERE hash = $2 AND user_id = $3", table_name);
                                 let _ = client.execute(&query, &[&"[skipped]", &hash, &user_id]).await;
+                            } else if let Err(e) = crate::utils::validate_table_name(table_name) {
+                                error!("Table name validation failed for {}: {}", table_name, e);
+                            } else {
+                                let query = format!("UPDATE {} SET description = NULL WHERE hash = $2 AND user_id = $3", table_name);
+                                let _ = client.execute(&query, &[&hash, &user_id]).await;
                             }
                         }
                     }
