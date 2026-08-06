@@ -49,7 +49,8 @@
                 android:hint="Server URL"
                 app:helperText="e.g. http://100.x.x.x:8080"
                 app:startIconDrawable="@android:drawable/ic_menu_compass"
-                app:endIconMode="dropdown_menu">
+                app:endIconMode="dropdown_menu"
+                style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox">
 
                 <com.google.android.material.textfield.MaterialAutoCompleteTextView
                     android:id="@+id/serverUrlInput"
