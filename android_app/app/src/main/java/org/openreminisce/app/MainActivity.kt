@@ -124,6 +124,28 @@ class MainActivity : AppCompatActivity() {
         })
         selectTab(0)
         Log.d(TAG, "Tabs header active: local='${tabLocal.text}' remote='${tabRemote.text}'")
+
+        // PIXEL PROBE: render the header into a bitmap and count what is actually painted.
+        viewPager.post {
+            try {
+                val bmp = android.graphics.Bitmap.createBitmap(tabBar.width, tabBar.height, android.graphics.Bitmap.Config.ARGB_8888)
+                tabBar.draw(android.graphics.Canvas(bmp))
+                val centerY = tabLocal.top + (tabLocal.height / 2)
+                var white = 0; var purple = 0; var other = 0
+                for (x in tabLocal.left until tabLocal.right step 4) {
+                    val c = bmp.getPixel(x, centerY)
+                    when {
+                        c == 0xFF6200EE.toInt() -> purple++
+                        ((c shr 16) and 0xFF) > 200 && ((c shr 8) and 0xFF) > 200 && (c and 0xFF) > 200 -> white++
+                        else -> other++
+                    }
+                }
+                Log.d(TAG, "PixelProbe tabLocal strip@y=${centerY}: purple=$purple white=$white other=$other (white=glyphs painted)")
+                Log.d(TAG, "PixelProbe tabBar bg@(10,10)=${String.format("#%08X", bmp.getPixel(10, 10))} tabBar=${tabBar.width}x${tabBar.height}")
+            } catch (e: Exception) {
+                Log.d(TAG, "PixelProbe failed: ${e.message}")
+            }
+        }
     }
 
     private inner class ViewPagerAdapter(activity: AppCompatActivity) : FragmentStateAdapter(activity) {
