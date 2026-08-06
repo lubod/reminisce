@@ -31,6 +31,7 @@ class MainActivity : AppCompatActivity() {
         private const val TAG = "MainActivity"
     }
 
+    private lateinit var tabBar: android.view.View
     private lateinit var tabLocal: TextView
     private lateinit var tabRemote: TextView
     private lateinit var viewPager: ViewPager2
@@ -66,6 +67,7 @@ class MainActivity : AppCompatActivity() {
 
         supportActionBar?.title = "Reminisce"
 
+        tabBar = findViewById(R.id.tabBar)
         tabLocal = findViewById(R.id.tabLocal)
         tabRemote = findViewById(R.id.tabRemote)
         viewPager = findViewById(R.id.viewPager)
