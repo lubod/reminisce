@@ -67,8 +67,9 @@
                 android:layout_height="wrap_content"
                 android:text="Scan QR"
                 android:layout_marginBottom="16dp"
-                android:drawableLeft="@android:drawable/ic_menu_camera"
-                android:drawablePadding="4dp"
+                app:icon="@android:drawable/ic_menu_camera"
+                app:iconGravity="textStart"
+                app:iconPadding="4dp"
                 style="@style/Widget.MaterialComponents.Button.OutlinedButton" />
 
             <!-- Continue to login -->

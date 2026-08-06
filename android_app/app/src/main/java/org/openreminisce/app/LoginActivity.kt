@@ -47,7 +47,7 @@ class LoginActivity : AppCompatActivity() {
     // Server phase
     private lateinit var serverUrlLayout: TextInputLayout
     private lateinit var serverUrlInput: MaterialAutoCompleteTextView
-    private lateinit var scanQrButton: Button
+    private lateinit var scanQrButton: MaterialButton
 
     // Setup phase
     private lateinit var setupUsernameLayout: TextInputLayout
@@ -111,6 +111,7 @@ class LoginActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_login)
+        supportActionBar?.hide()
         initializeViews()
         setupListeners()
         if (intent.getBooleanExtra("session_expired", false)) {
