@@ -372,6 +372,9 @@ pub struct PaginationQuery {
     /// Optional label ID filter
     #[serde(default)]
     pub label_id: Option<i32>,
+    /// Optional device ID filter (device-scoped listing)
+    #[serde(default)]
+    pub device_id: Option<String>,
     /// Optional start date filter (YYYY-MM-DD format)
     #[serde(default)]
     start_date: Option<String>,
@@ -467,7 +470,7 @@ async fn list_media_thumbnails(
     };
 
     // For admin users, show all media across all devices; for regular users, filter by user_id
-    let device_id_filter: Option<String> = None; // Access control is now via user_id in the query
+    let device_id_filter = query.device_id.clone();
 
     let page = query.page.max(1);
     let limit = query.limit;

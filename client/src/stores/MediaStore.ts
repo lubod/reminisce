@@ -392,6 +392,7 @@ export class MediaStore {
             if (this.filters.startDate) params.append('start_date', this.filters.startDate);
             if (this.filters.endDate) params.append('end_date', this.filters.endDate);
             if (this.filters.selectedLabelId !== null) params.append('label_id', this.filters.selectedLabelId.toString());
+            if (this.filters.selectedDeviceId !== 'all') params.append('device_id', this.filters.selectedDeviceId);
             if (this.filters.location) {
                 params.append('location_lat', this.filters.location.latitude.toString());
                 params.append('location_lon', this.filters.location.longitude.toString());
@@ -435,6 +436,7 @@ export class MediaStore {
             if (this.filters.startDate) params.append('start_date', this.filters.startDate);
             if (this.filters.endDate) params.append('end_date', this.filters.endDate);
             if (this.filters.selectedLabelId !== null) params.append('label_id', this.filters.selectedLabelId.toString());
+            if (this.filters.selectedDeviceId !== 'all') params.append('device_id', this.filters.selectedDeviceId);
             if (this.filters.location) {
                 params.append('location_lat', this.filters.location.latitude.toString());
                 params.append('location_lon', this.filters.location.longitude.toString());
@@ -478,6 +480,7 @@ export class MediaStore {
             if (this.filters.startDate) params.append('start_date', this.filters.startDate);
             if (this.filters.endDate) params.append('end_date', this.filters.endDate);
             if (this.filters.selectedLabelId !== null) params.append('label_id', this.filters.selectedLabelId.toString());
+            if (this.filters.selectedDeviceId !== 'all') params.append('device_id', this.filters.selectedDeviceId);
             if (this.filters.location) {
                 params.append('location_lat', this.filters.location.latitude.toString());
                 params.append('location_lon', this.filters.location.longitude.toString());

@@ -543,3 +543,151 @@ async fn test_list_all_media_thumbnails_invalid_token() {
     let response = test::call_service(&app, req).await;
     assert_eq!(response.status(), http::StatusCode::UNAUTHORIZED);
 }
+
+// Regression: /media_thumbnails must honor the device_id filter (was silently
+// ignored because the endpoint never read it — device filtering is now supported).
+#[actix_web::test]
+#[serial]
+async fn test_media_thumbnails_device_filter() {
+    let (pool, _test_db) = setup_test_database_with_instance().await;
+    let client = pool.get().await.expect("Failed to get client from pool");
+    let config = common::utils::create_test_config();
+    let user_id = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+
+    for (hash, device) in [("dev_a_hash", "device_one"), ("dev_b_hash", "device_two")] {
+        client
+            .execute(
+                "INSERT INTO images (user_id, hash, name, exif, created_at, type, deviceid, ext, has_thumbnail) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+",
+                &[
+                    &user_id,
+                    &hash,
+                    &format!("{}.jpg", hash),
+                    &None::<&str>,
+                    &chrono::Utc::now(),
+                    &"camera",
+                    &device,
+                    &"jpg",
+                    &true,
+                ],
+            )
+            .await
+            .expect("Failed to insert test data");
+    }
+
+    let main_pool = common::utils::wrap_main_pool(pool.clone());
+    let geotagging_pool = common::utils::create_geotagging_pool().await;
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(main_pool.clone()))
+            .app_data(web::Data::new(geotagging_pool.clone()))
+            .app_data(web::Data::new(config.clone()))
+            .service(list_all_media_thumbnails)
+    ).await;
+    let token = common::utils::create_test_jwt_token().await;
+
+    let req = test::TestRequest::get()
+        .uri("/media_thumbnails?page=1&limit=50")
+        .insert_header(("Authorization", format!("Bearer {}", token)))
+        .to_request();
+    let response = test::call_service(&app, req).await;
+    assert_eq!(response.status(), http::StatusCode::OK);
+    let body: serde_json::Value = test::read_body_json(response).await;
+    assert_eq!(body["total"].as_i64().unwrap_or(-1), 2, "no filter should return both devices");
+
+    let req = test::TestRequest::get()
+        .uri("/media_thumbnails?page=1&limit=50&device_id=device_one")
+        .insert_header(("Authorization", format!("Bearer {}", token)))
+        .to_request();
+    let response = test::call_service(&app, req).await;
+    assert_eq!(response.status(), http::StatusCode::OK);
+    let body: serde_json::Value = test::read_body_json(response).await;
+    let hashes_a: Vec<String> = body["thumbnails"].as_array().unwrap()
+        .iter().filter_map(|t| t["hash"].as_str().map(|h| h.to_string())).collect();
+    assert_eq!(body["total"].as_i64().unwrap_or(-1), 1, "device_id filter must narrow results: {:?}", hashes_a);
+    assert_eq!(hashes_a, vec!["dev_a_hash".to_string()], "device_id filter must return only that device's media");
+
+    let req = test::TestRequest::get()
+        .uri("/media_thumbnails?page=1&limit=50&device_id=device_two")
+        .insert_header(("Authorization", format!("Bearer {}", token)))
+        .to_request();
+    let response = test::call_service(&app, req).await;
+    assert_eq!(response.status(), http::StatusCode::OK);
+    let body: serde_json::Value = test::read_body_json(response).await;
+    let hashes_b: Vec<String> = body["thumbnails"].as_array().unwrap()
+        .iter().filter_map(|t| t["hash"].as_str().map(|h| h.to_string())).collect();
+    assert_eq!(body["total"].as_i64().unwrap_or(-1), 1, "device_id filter for second device must yield its media");
+    assert_eq!(hashes_b, vec!["dev_b_hash".to_string()]);
+}
+
+// Regression: /media_thumbnails star filter contract.
+// - "starred_only=true" must restrict to starred media.
+// - The legacy "starred=true" name is ignored by the server (returns everything);
+//   this documents why the Android browse client previously appeared broken.
+#[actix_web::test]
+#[serial]
+async fn test_media_thumbnails_starred_filter_params() {
+    let (pool, _test_db) = setup_test_database_with_instance().await;
+    let client = pool.get().await.expect("Failed to get client from pool");
+    let config = common::utils::create_test_config();
+    let user_id = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+
+    for (hash, device) in [("star_a_hash", "device_one"), ("star_b_hash", "device_two")] {
+        client
+            .execute(
+                "INSERT INTO images (user_id, hash, name, exif, created_at, type, deviceid, ext, has_thumbnail) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+",
+                &[
+                    &user_id,
+                    &hash,
+                    &format!("{}.jpg", hash),
+                    &None::<&str>,
+                    &chrono::Utc::now(),
+                    &"camera",
+                    &device,
+                    &"jpg",
+                    &true,
+                ],
+            )
+            .await
+            .expect("Failed to insert test data");
+    }
+    client
+        .execute("INSERT INTO starred_images (user_id, hash) VALUES ($1, $2) ON CONFLICT DO NOTHING", &[&user_id, &"star_a_hash"])
+        .await
+        .expect("Failed to star test image");
+
+    let main_pool = common::utils::wrap_main_pool(pool.clone());
+    let geotagging_pool = common::utils::create_geotagging_pool().await;
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(main_pool.clone()))
+            .app_data(web::Data::new(geotagging_pool.clone()))
+            .app_data(web::Data::new(config.clone()))
+            .service(list_all_media_thumbnails)
+    ).await;
+    let token = common::utils::create_test_jwt_token().await;
+
+    let req = test::TestRequest::get()
+        .uri("/media_thumbnails?page=1&limit=50&starred_only=true")
+        .insert_header(("Authorization", format!("Bearer {}", token)))
+        .to_request();
+    let response = test::call_service(&app, req).await;
+    assert_eq!(response.status(), http::StatusCode::OK);
+    let body: serde_json::Value = test::read_body_json(response).await;
+    let hashes: Vec<String> = body["thumbnails"].as_array().unwrap()
+        .iter().filter_map(|t| t["hash"].as_str().map(|h| h.to_string())).collect();
+    assert_eq!(body["total"].as_i64().unwrap_or(-1), 1, "starred_only=true must return only starred media: {:?}", hashes);
+    assert_eq!(hashes, vec!["star_a_hash".to_string()]);
+
+    let req = test::TestRequest::get()
+        .uri("/media_thumbnails?page=1&limit=50&starred=true")
+        .insert_header(("Authorization", format!("Bearer {}", token)))
+        .to_request();
+    let response = test::call_service(&app, req).await;
+    assert_eq!(response.status(), http::StatusCode::OK);
+    let body: serde_json::Value = test::read_body_json(response).await;
+    assert_eq!(body["total"].as_i64().unwrap_or(-1), 2, "legacy key 'starred' is ignored by the server (documented Android bug)");
+}

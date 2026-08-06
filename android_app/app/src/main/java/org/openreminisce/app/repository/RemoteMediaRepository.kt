@@ -51,14 +51,14 @@ class RemoteMediaRepository(private val context: Context) {
                 MediaTypeFilter.VIDEO -> urlBuilder.append("&media_type=video")
                 MediaTypeFilter.ALL -> { /* no param */ }
             }
-            if (filter.starredOnly) urlBuilder.append("&starred=true")
+            if (filter.starredOnly) urlBuilder.append("&starred_only=true")
             filter.startDate?.let { urlBuilder.append("&start_date=${formatDate(it)}") }
             filter.endDate?.let { urlBuilder.append("&end_date=${formatDate(it)}") }
             filter.labelId?.let { urlBuilder.append("&label_id=$it") }
             filter.deviceId?.takeIf { it.isNotEmpty() && it != "null" }?.let { urlBuilder.append("&device_id=$it") }
             filter.locationLat?.let { lat ->
                 filter.locationLon?.let { lon ->
-                    urlBuilder.append("&lat=$lat&lon=$lon&radius_km=${filter.locationRadiusKm}")
+                    urlBuilder.append("&location_lat=$lat&location_lon=$lon&location_radius_km=${filter.locationRadiusKm}")
                 }
             }
 
