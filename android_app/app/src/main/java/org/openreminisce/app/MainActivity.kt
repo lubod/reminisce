@@ -31,9 +31,10 @@ class MainActivity : AppCompatActivity() {
         private const val TAG = "MainActivity"
     }
 
-    private lateinit var tabBar: android.view.View
     private lateinit var tabLocal: TextView
     private lateinit var tabRemote: TextView
+    private lateinit var tabLocalUnderline: android.view.View
+    private lateinit var tabRemoteUnderline: android.view.View
     private lateinit var viewPager: ViewPager2
     private lateinit var databaseHelper: DatabaseHelper
     private lateinit var progressDialogHelper: BackupProgressDialogHelper
@@ -65,11 +66,12 @@ class MainActivity : AppCompatActivity() {
         
         setContentView(R.layout.activity_main)
 
-        supportActionBar?.title = "Reminisce"
+        supportActionBar?.hide()
 
-        tabBar = findViewById(R.id.tabBar)
         tabLocal = findViewById(R.id.tabLocal)
         tabRemote = findViewById(R.id.tabRemote)
+        tabLocalUnderline = findViewById(R.id.tabLocalUnderline)
+        tabRemoteUnderline = findViewById(R.id.tabRemoteUnderline)
         viewPager = findViewById(R.id.viewPager)
 
         databaseHelper = DatabaseHelper(this)
@@ -112,13 +114,18 @@ class MainActivity : AppCompatActivity() {
         viewPager.adapter = adapter
         viewPager.isUserInputEnabled = false
 
-        // Plain-language tab header (no Material TabLayout) - renders reliably on all devices.
+        // Simple button-style tabs (no Material TabLayout). Selected tab is
+        // highlighted by a white underline + full-white text.
         val selectTab: (Int) -> Unit = { pos ->
-            tabLocal.setTextColor(if (pos == 0) 0xFFFFFFFF.toInt() else 0xAAFFFFFF.toInt())
-            tabRemote.setTextColor(if (pos == 1) 0xFFFFFFFF.toInt() else 0xAAFFFFFF.toInt())
+            val localActive = pos == 0
+            val remoteActive = pos == 1
+            tabLocal.setTextColor(if (localActive) 0xFFFFFFFF.toInt() else 0xAAFFFFFF.toInt())
+            tabRemote.setTextColor(if (remoteActive) 0xFFFFFFFF.toInt() else 0xAAFFFFFF.toInt())
+            tabLocalUnderline.visibility = if (localActive) android.view.View.VISIBLE else android.view.View.INVISIBLE
+            tabRemoteUnderline.visibility = if (remoteActive) android.view.View.VISIBLE else android.view.View.INVISIBLE
         }
-        tabLocal.setOnClickListener { viewPager.currentItem = 0 }
-        tabRemote.setOnClickListener { viewPager.currentItem = 1 }
+        findViewById<android.view.View>(R.id.tabLocalContainer).setOnClickListener { viewPager.currentItem = 0 }
+        findViewById<android.view.View>(R.id.tabRemoteContainer).setOnClickListener { viewPager.currentItem = 1 }
         viewPager.registerOnPageChangeCallback(object : ViewPager2.OnPageChangeCallback() {
             override fun onPageSelected(position: Int) {
                 selectTab(position)
@@ -126,28 +133,6 @@ class MainActivity : AppCompatActivity() {
         })
         selectTab(0)
         Log.d(TAG, "Tabs header active: local='${tabLocal.text}' remote='${tabRemote.text}'")
-
-        // PIXEL PROBE: render the header into a bitmap and count what is actually painted.
-        viewPager.post {
-            try {
-                val bmp = android.graphics.Bitmap.createBitmap(tabBar.width, tabBar.height, android.graphics.Bitmap.Config.ARGB_8888)
-                tabBar.draw(android.graphics.Canvas(bmp))
-                val centerY = tabLocal.top + (tabLocal.height / 2)
-                var white = 0; var purple = 0; var other = 0
-                for (x in tabLocal.left until tabLocal.right step 4) {
-                    val c = bmp.getPixel(x, centerY)
-                    when {
-                        c == 0xFF6200EE.toInt() -> purple++
-                        ((c shr 16) and 0xFF) > 200 && ((c shr 8) and 0xFF) > 200 && (c and 0xFF) > 200 -> white++
-                        else -> other++
-                    }
-                }
-                Log.d(TAG, "PixelProbe tabLocal strip@y=${centerY}: purple=$purple white=$white other=$other (white=glyphs painted)")
-                Log.d(TAG, "PixelProbe tabBar bg@(10,10)=${String.format("#%08X", bmp.getPixel(10, 10))} tabBar=${tabBar.width}x${tabBar.height}")
-            } catch (e: Exception) {
-                Log.d(TAG, "PixelProbe failed: ${e.message}")
-            }
-        }
     }
 
     private inner class ViewPagerAdapter(activity: AppCompatActivity) : FragmentStateAdapter(activity) {
