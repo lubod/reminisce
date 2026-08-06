@@ -22,8 +22,6 @@ import org.openreminisce.app.util.PreferenceHelper
 import org.openreminisce.app.util.SecureStorageHelper
 import android.widget.TextView
 import android.widget.Toast
-import com.google.android.material.tabs.TabLayout
-import com.google.android.material.tabs.TabLayoutMediator
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -33,7 +31,8 @@ class MainActivity : AppCompatActivity() {
         private const val TAG = "MainActivity"
     }
 
-    private lateinit var tabLayout: TabLayout
+    private lateinit var tabLocal: TextView
+    private lateinit var tabRemote: TextView
     private lateinit var viewPager: ViewPager2
     private lateinit var databaseHelper: DatabaseHelper
     private lateinit var progressDialogHelper: BackupProgressDialogHelper
@@ -67,7 +66,8 @@ class MainActivity : AppCompatActivity() {
 
         supportActionBar?.title = "Reminisce"
 
-        tabLayout = findViewById(R.id.tabLayout)
+        tabLocal = findViewById(R.id.tabLocal)
+        tabRemote = findViewById(R.id.tabRemote)
         viewPager = findViewById(R.id.viewPager)
 
         databaseHelper = DatabaseHelper(this)
@@ -110,48 +110,20 @@ class MainActivity : AppCompatActivity() {
         viewPager.adapter = adapter
         viewPager.isUserInputEnabled = false
 
-        TabLayoutMediator(tabLayout, viewPager) { tab, position ->
-            tab.text = if (position == 0) getString(R.string.local_server) else getString(R.string.remote_server)
-        }.attach()
-
-        // Safety net: if the mediator did not populate names on some OEM builds,
-        // assign them explicitly. Logs "Tabs configured" for in-app Share Logs.
-        if (tabLayout.tabCount < 2 || tabLayout.getTabAt(0)?.text.isNullOrBlank()) {
-            tabLayout.getTabAt(0)?.text = getString(R.string.local_server)
-            tabLayout.getTabAt(1)?.text = getString(R.string.remote_server)
+        // Plain-language tab header (no Material TabLayout) - renders reliably on all devices.
+        val selectTab: (Int) -> Unit = { pos ->
+            tabLocal.setTextColor(if (pos == 0) 0xFFFFFFFF.toInt() else 0xAAFFFFFF.toInt())
+            tabRemote.setTextColor(if (pos == 1) 0xFFFFFFFF.toInt() else 0xAAFFFFFF.toInt())
         }
-        // Force the label color imperatively - bypasses any theme/text appearance chain.
-        tabLayout.setTabTextColors(0xFFFFFFFF.toInt(), 0xFFFFFFFF.toInt())
-        Log.d(TAG, "Tabs configured: ${tabLayout.tabCount} tab(s) labeled '${tabLayout.getTabAt(0)?.text}' / '${tabLayout.getTabAt(1)?.text}' with color=${String.format("%#08x", 0xFFFFFFFF)}")
-
-        // DIAGNOSTIC: dump the actual on-screen state of the tab bar and its TextViews
-        viewPager.post {
-            try {
-                val loc = IntArray(2)
-                tabLayout.getLocationOnScreen(loc)
-                Log.d(TAG, "TabLayout onScreen=(${loc[0]},${loc[1]}) size=${tabLayout.width}x${tabLayout.height} isShown=${tabLayout.isShown} visible=${tabLayout.visibility} alpha=${tabLayout.alpha}")
-                val tvs = mutableListOf<TextView>()
-                collectTextViews(tabLayout, tvs)
-                Log.d(TAG, "TabLayout found ${tvs.size} TextView(s)")
-                tvs.forEachIndexed { i, tv ->
-                    val tl = IntArray(2)
-                    tv.getLocationOnScreen(tl)
-                    android.util.Log.d(
-                        TAG,
-                        "TabText[$i] '${tv.text}' rel=(${tv.left},${tv.top}) onScreen=(${tl[0]},${tl[1]}) size=${tv.width}x${tv.height} textColor=0x${String.format("%08x", tv.currentTextColor)} paintColor=0x${String.format("%08x", tv.paint.color)} textSizePx=${tv.textSize} vis=${tv.visibility} alpha=${tv.alpha} shown=${tv.isShown}"
-                    )
-                }
-            } catch (e: Exception) {
-                Log.d(TAG, "Tab diagnostics failed: ${e.message}")
+        tabLocal.setOnClickListener { viewPager.currentItem = 0 }
+        tabRemote.setOnClickListener { viewPager.currentItem = 1 }
+        viewPager.registerOnPageChangeCallback(object : ViewPager2.OnPageChangeCallback() {
+            override fun onPageSelected(position: Int) {
+                selectTab(position)
             }
-        }
-    }
-
-    private fun collectTextViews(v: android.view.View, out: MutableList<TextView>) {
-        if (v is TextView) out.add(v)
-        if (v is android.view.ViewGroup) {
-            for (i in 0 until v.childCount) collectTextViews(v.getChildAt(i), out)
-        }
+        })
+        selectTab(0)
+        Log.d(TAG, "Tabs header active: local='${tabLocal.text}' remote='${tabRemote.text}'")
     }
 
     private inner class ViewPagerAdapter(activity: AppCompatActivity) : FragmentStateAdapter(activity) {
