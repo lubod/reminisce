@@ -258,3 +258,107 @@ async fn test_user_login_minimal_body() {
     assert!(body["access_token"].is_string());
     assert!(body["user"].is_object());
 }
+
+/// get_me returns the current authenticated user (extracted from the JWT).
+#[actix_web::test]
+#[serial]
+async fn test_get_me_returns_current_user() {
+    common::init_log();
+    let (pool, _test_db) = setup_test_database_with_instance().await;
+    let config = common::utils::create_test_config();
+    let main_pool = common::utils::wrap_main_pool(pool.clone());
+
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(main_pool))
+            .app_data(web::Data::new(config.clone()))
+            .service(reminisce::services::auth::get_me)
+    ).await;
+    let token = common::utils::create_test_jwt_token().await;
+
+    let req = test::TestRequest::get()
+        .uri("/auth/me")
+        .insert_header(("Authorization", format!("Bearer {}", token)))
+        .to_request();
+    let response = test::call_service(&app, req).await;
+    assert_eq!(response.status(), http::StatusCode::OK);
+    let body: serde_json::Value = test::read_body_json(response).await;
+    assert_eq!(body["username"], "test-user");
+    assert_eq!(body["role"], "admin");
+    assert!(body["access_token"].is_string(), "access_token echo");
+    assert!(body["image_token"].is_string(), "image_token issued for media_read");
+
+    // No token -> 401 (the Claims extractor rejects the request).
+    let req_anon = test::TestRequest::get().uri("/auth/me").to_request();
+    let response_anon = test::call_service(&app, req_anon).await;
+    assert_eq!(response_anon.status(), http::StatusCode::UNAUTHORIZED);
+}
+
+/// user_logout clears the session cookie.
+#[actix_web::test]
+#[serial]
+async fn test_user_logout_clears_cookie() {
+    common::init_log();
+    let (pool, _test_db) = setup_test_database_with_instance().await;
+    let config = common::utils::create_test_config();
+    let main_pool = common::utils::wrap_main_pool(pool.clone());
+
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(main_pool))
+            .app_data(web::Data::new(config.clone()))
+            .service(reminisce::services::auth::user_logout)
+    ).await;
+
+    let req = test::TestRequest::post().uri("/auth/logout").to_request();
+    let response = test::call_service(&app, req).await;
+    assert_eq!(response.status(), http::StatusCode::OK);
+    let set_cookie = response.headers().get("set-cookie").and_then(|v| v.to_str().ok()).unwrap_or("");
+    assert!(set_cookie.contains("access_token="), "logout must clear access_token cookie: {}", set_cookie);
+    assert!(set_cookie.contains("Max-Age=0"), "cookie must be expired immediately");
+}
+
+/// user_login_form redirects on success and failure (native form login).
+#[actix_web::test]
+#[serial]
+async fn test_user_login_form_redirects() {
+    common::init_log();
+    let (pool, _test_db) = setup_test_database_with_instance().await;
+    let config = common::utils::create_test_config();
+    let main_pool = common::utils::wrap_main_pool(pool.clone());
+
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(main_pool))
+            .app_data(web::Data::new(config.clone()))
+            .service(reminisce::services::auth::user_login_form)
+    ).await;
+
+    // Correct credentials -> 303 to / with a session cookie (seed password admin123).
+    let ok_form = std::collections::HashMap::from([
+        ("username".to_string(), "test-user".to_string()),
+        ("password".to_string(), "admin123".to_string()),
+    ]);
+    let req = test::TestRequest::post()
+        .uri("/auth/user-login-form")
+        .set_form(&ok_form)
+        .to_request();
+    let response = test::call_service(&app, req).await;
+    assert_eq!(response.status(), http::StatusCode::FOUND);
+    assert!(response.headers().get("set-cookie").is_some(), "successful login issues a cookie");
+    assert_eq!(response.headers().get("location").and_then(|v| v.to_str().ok()), Some("/"));
+
+    // Wrong password -> 303 to /login?error=1 and no session cookie.
+    let bad_form = std::collections::HashMap::from([
+        ("username".to_string(), "test-user".to_string()),
+        ("password".to_string(), "wrongpass".to_string()),
+    ]);
+    let req = test::TestRequest::post()
+        .uri("/auth/user-login-form")
+        .set_form(&bad_form)
+        .to_request();
+    let response = test::call_service(&app, req).await;
+    assert_eq!(response.status(), http::StatusCode::FOUND);
+    assert_eq!(response.headers().get("location").and_then(|v| v.to_str().ok()), Some("/login?error=1"));
+    assert!(response.headers().get("set-cookie").is_none(), "failed login must not issue a cookie");
+}
