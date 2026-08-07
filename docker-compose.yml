@@ -2,9 +2,16 @@
 # Usage: docker compose up -d
 # For development, use: docker compose -f docker-compose-dev.yml up -d
 
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "20m"
+    max-file: "3"
+
 services:
   postgres:
     image: lubod/reminisce-postgres:latest
+    logging: *default-logging
     container_name: reminisce-postgres
     environment:
       POSTGRES_DB: reminisce_db
@@ -22,6 +29,7 @@ services:
 
   geotagging-db:
     image: lubod/reminisce-geodb:latest
+    logging: *default-logging
     container_name: reminisce-geotagging
     environment:
       POSTGRES_DB: geotagging_db
@@ -39,6 +47,7 @@ services:
 
   ai-server:
     image: lubod/reminisce-ai-server:latest
+    logging: *default-logging
     container_name: reminisce-ai-server
     expose:
       - "8081"
@@ -64,6 +73,7 @@ services:
 
   reminisce:
     image: lubod/reminisce:latest
+    logging: *default-logging
     container_name: reminisce
     expose:
       - "8080"
@@ -91,6 +101,7 @@ services:
 
   client:
     image: lubod/reminisce-client:latest
+    logging: *default-logging
     container_name: reminisce-client
     ports:
       - "28080:80"
