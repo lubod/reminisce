@@ -9,7 +9,7 @@ test.describe("presentation mode", () => {
         await present.click();
 
         // Fullscreen slideshow route; tolerate either an image or a friendly empty state.
-        await expect(page).toHaveURL(/presentation/);
+        await expect(page).toHaveURL(/present/);
         await expect(page.locator("body")).toBeVisible({ timeout: 5000 });
 
         // It should not crash: at least one control should be present (pause/close).

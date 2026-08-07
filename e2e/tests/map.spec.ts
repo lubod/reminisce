@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 
 test.describe("map view", () => {
     test("map/grid toggle shows an interactive leaflet map", async ({ page }) => {
-        await page.goto("/");
+        await page.goto("/media");
 
         const toggle = page.getByRole("button", { name: /map/i });
         await expect(toggle).toBeVisible({ timeout: 10000 });
@@ -18,7 +18,7 @@ test.describe("map view", () => {
     });
 
     test("map toggle is disabled while searching", async ({ page }) => {
-        await page.goto("/");
+        await page.goto("/media");
         const toggle = page.getByRole("button", { name: /map/i });
         // Not trivially guaranteed to be disabled without a search; at minimum the
         // page loads and the toggle exists (a regression smoke).
