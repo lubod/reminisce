@@ -13,5 +13,20 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     globals: true,
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'json', 'json-summary', 'html'],
+      reportsDirectory: 'coverage',
+      include: ['src/**/*.{ts,tsx}'],
+      exclude: [
+        '**/*.test.ts',
+        '**/*.test.tsx',
+        'src/stores/RootStore.ts',
+        'src/stubs/**',
+        'src/types/**',
+        'src/telemetry.ts',
+        'src/main.tsx',
+      ],
+    },
   },
 })
