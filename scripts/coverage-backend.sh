@@ -19,9 +19,14 @@ cd "$(dirname "$0")/.."
 
 export PGHOST=localhost PGPORT=25432 PGUSER=postgres PGPASSWORD=postgres
 
+# Measure the library/unit + integration suites only. --all-targets also
+# builds and runs the server/coordinator BIN targets, which try to open the
+# websocket relay connection and can fail with close 1006 when the dev relay
+# is already serving the running dev server. Bins are excluded from the metric
+# below anyway, so --tests is both correct and avoids that failure mode.
 exec cargo llvm-cov \
   --workspace \
-  --all-targets \
+  --tests \
   --fail-under-lines "${THRESHOLD}" \
   --ignore-filename-regex '(src/(lib|telemetry)\.rs)|(src/bin/)|(src/main\.rs)' \
   -- \
