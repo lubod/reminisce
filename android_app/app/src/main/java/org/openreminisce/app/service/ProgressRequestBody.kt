@@ -63,7 +63,7 @@ class ProgressRequestBody private constructor(
             )
         }
 
-        private fun guessMimeType(path: String): String {
+        fun guessMimeType(path: String): String {
             return when {
                 path.endsWith(".jpg", true) || path.endsWith(".jpeg", true) -> "image/jpeg"
                 path.endsWith(".png", true) -> "image/png"

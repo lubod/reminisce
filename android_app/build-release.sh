@@ -44,17 +44,21 @@ if [ -z "$APKSIGNER" ]; then
     exit 1
 fi
 
-echo -e "${BLUE}Step 1/3: Cleaning previous build...${NC}"
+echo -e "${BLUE}Step 1/4: Cleaning previous build...${NC}"
 ./gradlew clean
 
 echo ""
-echo -e "${BLUE}Step 2/3: Building release APK...${NC}"
+echo -e "${BLUE}Step 2/4: Running unit tests...${NC}"
+./gradlew :app:testDebugUnitTest
+
+echo ""
+echo -e "${BLUE}Step 3/4: Building release APK...${NC}"
 # Gradle signs the release build via `signingConfig signingConfigs.release`
 # (keystore.properties) — no separate apksigner step needed.
 ./gradlew assembleRelease
 
 echo ""
-echo -e "${BLUE}Step 3/3: Verifying signature...${NC}"
+echo -e "${BLUE}Step 4/4: Verifying signature...${NC}"
 SIGNED_APK="app/build/outputs/apk/release/app-release.apk"
 "$APKSIGNER" verify --verbose "$SIGNED_APK" 2>&1 | grep -E "Verifies|Verified using" | head -5
 

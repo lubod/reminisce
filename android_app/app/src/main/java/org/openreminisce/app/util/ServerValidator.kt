@@ -92,7 +92,7 @@ object ServerValidator {
     /**
      * Validates if the URL has a proper format (starts with http:// or https://).
      */
-    private fun isValidUrl(url: String): Boolean {
+    fun isValidUrl(url: String): Boolean {
         val trimmedUrl = url.trim()
         if (!trimmedUrl.startsWith("http://") && !trimmedUrl.startsWith("https://")) {
             return false
