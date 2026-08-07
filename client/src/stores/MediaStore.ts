@@ -265,7 +265,7 @@ export class MediaStore {
             this.filters.selectedLabelId = null;
             this.filters.allMediaTypeFilter = 'all';
             this.filters.selectedDeviceId = 'all';
-            this.minSimilarity = 0.2;
+            this.minSimilarity = 0.08;
             this.filters.locationRadiusKm = 10;
             this.sortBy = 'date';
             this.sortOrder = 'desc';
@@ -298,12 +298,14 @@ export class MediaStore {
                 offset: offset.toString(),
                 min_similarity: this.minSimilarity.toString(),
                 mode: this.searchType,
+                media_type: this.filters.allMediaTypeFilter,
             });
 
             if (this.filters.selectedDeviceId !== 'all') params.append('device_id', this.filters.selectedDeviceId);
             if (this.filters.starredOnly) params.append('starred_only', 'true');
             if (this.filters.startDate) params.append('start_date', this.filters.startDate);
             if (this.filters.endDate) params.append('end_date', this.filters.endDate);
+            if (this.filters.selectedLabelId !== null) params.append('label_id', this.filters.selectedLabelId.toString());
             if (this.filters.location) {
                 params.append('location_lat', this.filters.location.latitude.toString());
                 params.append('location_lon', this.filters.location.longitude.toString());
@@ -322,11 +324,11 @@ export class MediaStore {
 
             runInAction(() => {
                 if (append) {
-                    this.allMedia = [...this.allMedia, ...itemsWithThumbnails.map(item => ({ ...item, media_type: 'image' }))];
+                    this.allMedia = [...this.allMedia, ...itemsWithThumbnails];
                     this.images = [...this.images, ...itemsWithThumbnails];
                 } else {
                     this.images = itemsWithThumbnails;
-                    this.allMedia = itemsWithThumbnails.map(item => ({ ...item, media_type: 'image' }));
+                    this.allMedia = itemsWithThumbnails;
                 }
                 this.totalImages = response.data.total;
                 this.totalAllMedia = response.data.total;

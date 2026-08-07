@@ -59,6 +59,11 @@ class RemoteMediaFragmentNative : Fragment(), FilterBottomSheetFragment.OnFilter
     private lateinit var similaritySeekBar: SeekBar
     private lateinit var similarityValueText: TextView
     private lateinit var groupByChip: Chip
+    private lateinit var sortDate: TextView
+    private lateinit var sortSize: TextView
+    private lateinit var sortQuality: TextView
+    private lateinit var sortDesc: TextView
+    private lateinit var sortAsc: TextView
 
     private lateinit var repository: RemoteMediaRepository
 
@@ -127,6 +132,11 @@ class RemoteMediaFragmentNative : Fragment(), FilterBottomSheetFragment.OnFilter
         similaritySeekBar = view.findViewById(R.id.similaritySeekBar)
         similarityValueText = view.findViewById(R.id.similarityValueText)
         groupByChip = view.findViewById(R.id.groupByChip)
+        sortDate = view.findViewById(R.id.sortDate)
+        sortSize = view.findViewById(R.id.sortSize)
+        sortQuality = view.findViewById(R.id.sortQuality)
+        sortDesc = view.findViewById(R.id.sortDesc)
+        sortAsc = view.findViewById(R.id.sortAsc)
 
         repository = RemoteMediaRepository(requireContext())
 
@@ -139,6 +149,7 @@ class RemoteMediaFragmentNative : Fragment(), FilterBottomSheetFragment.OnFilter
         setupFilterButton()
         setupSimilaritySlider()
         setupGroupByChip()
+        setupSort()
         autoSelectSingleDevice()
 
         loadMedia()
@@ -147,7 +158,12 @@ class RemoteMediaFragmentNative : Fragment(), FilterBottomSheetFragment.OnFilter
     // ── FilterBottomSheetFragment.OnFiltersApplied ────────────────────────
 
     override fun onFiltersApplied(filter: MediaFilter) {
-        currentFilter = filter.copy(searchMode = currentSearchMode())
+        // The inline chips remain the single source of truth for media type and
+        // search mode; the bottom sheet only carries dates/star/device/label/location.
+        currentFilter = filter.copy(
+            mediaType = currentMediaTypeFilter(),
+            searchMode = currentSearchMode()
+        )
         updateFilterBadge()
         resetAndReload()
     }
@@ -489,10 +505,45 @@ class RemoteMediaFragmentNative : Fragment(), FilterBottomSheetFragment.OnFilter
         filterButton.alpha = if (hasActiveFilters) 1f else 0.6f
     }
 
+    private fun setupSort() {
+        sortDate.setOnClickListener { applySort("date") }
+        sortSize.setOnClickListener { applySort("size") }
+        sortQuality.setOnClickListener { applySort("quality") }
+        sortDesc.setOnClickListener { applySort(currentFilter.sortBy, "desc") }
+        sortAsc.setOnClickListener { applySort(currentFilter.sortBy, "asc") }
+        updateSortHighlight()
+    }
+
+    private fun applySort(by: String, order: String? = null) {
+        var next = currentFilter.copy(sortBy = by)
+        if (order != null) next = next.copy(sortOrder = order)
+        if (currentFilter != next) {
+            currentFilter = next
+            updateSortHighlight()
+            resetAndReload()
+        }
+    }
+
+    private fun updateSortHighlight() {
+        val by = currentFilter.sortBy
+        val asc = currentFilter.sortOrder == "asc"
+        sortDate.setTextColor(if (by == "date") 0xFFFFFFFF.toInt() else 0xB3FFFFFF.toInt())
+        sortSize.setTextColor(if (by == "size") 0xFFFFFFFF.toInt() else 0xB3FFFFFF.toInt())
+        sortQuality.setTextColor(if (by == "quality") 0xFFFFFFFF.toInt() else 0xB3FFFFFF.toInt())
+        sortDesc.setTextColor(if (!asc) 0xFFFFFFFF.toInt() else 0xB3FFFFFF.toInt())
+        sortAsc.setTextColor(if (asc) 0xFFFFFFFF.toInt() else 0xB3FFFFFF.toInt())
+    }
+
     private fun currentSearchMode(): SearchMode = when (searchModeChipGroup.checkedChipId) {
         R.id.chipText -> SearchMode.TEXT
         R.id.chipHybrid -> SearchMode.HYBRID
         else -> SearchMode.SEMANTIC
+    }
+
+    private fun currentMediaTypeFilter(): MediaTypeFilter = when (filterChipGroup.checkedChipId) {
+        R.id.chipImages -> MediaTypeFilter.IMAGE
+        R.id.chipVideos -> MediaTypeFilter.VIDEO
+        else -> MediaTypeFilter.ALL
     }
 
     companion object {

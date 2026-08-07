@@ -9,9 +9,11 @@ data class MediaFilter(
     val deviceId: String? = null,
     val locationLat: Double? = null,
     val locationLon: Double? = null,
-    val locationRadiusKm: Float = 50f,
+    val locationRadiusKm: Float = 10f,
     val searchMode: SearchMode = SearchMode.SEMANTIC,
-    val minSimilarity: Float = 0.08f
+    val minSimilarity: Float = 0.08f,
+    val sortBy: String = "date",   // "date" | "size" | "quality"
+    val sortOrder: String = "desc" // "desc" | "asc"
 ) {
     fun isDefault(): Boolean = this == MediaFilter()
 }

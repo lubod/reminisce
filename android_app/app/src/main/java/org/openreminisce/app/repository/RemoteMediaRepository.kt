@@ -61,6 +61,8 @@ class RemoteMediaRepository(private val context: Context) {
                     urlBuilder.append("&location_lat=$lat&location_lon=$lon&location_radius_km=${filter.locationRadiusKm}")
                 }
             }
+            if (filter.sortBy != "date") urlBuilder.append("&sort_by=${filter.sortBy}")
+            if (filter.sortOrder == "asc") urlBuilder.append("&sort_order=asc")
 
             val apiUrl = urlBuilder.toString()
             Log.d(TAG, "Fetching thumbnails from: $apiUrl")
@@ -120,6 +122,13 @@ class RemoteMediaRepository(private val context: Context) {
             urlBuilder.append("&offset=$offset&limit=$limit")
             urlBuilder.append("&mode=$searchMode")
             urlBuilder.append("&min_similarity=${filter.minSimilarity}")
+            val searchMediaType = when (filter.mediaType) {
+                MediaTypeFilter.IMAGE -> "image"
+                MediaTypeFilter.VIDEO -> "video"
+                MediaTypeFilter.ALL -> "all"
+            }
+            urlBuilder.append("&media_type=$searchMediaType")
+            filter.labelId?.let { urlBuilder.append("&label_id=$it") }
 
             if (filter.starredOnly) urlBuilder.append("&starred_only=true")
             filter.startDate?.let { urlBuilder.append("&start_date=${formatDate(it)}") }

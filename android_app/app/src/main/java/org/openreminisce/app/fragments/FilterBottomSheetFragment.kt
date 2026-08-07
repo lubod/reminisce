@@ -9,8 +9,6 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.ArrayAdapter
 import android.widget.Filter
-import android.widget.RadioButton
-import android.widget.RadioGroup
 import android.widget.TextView
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment
 import com.google.android.material.chip.Chip
@@ -20,6 +18,7 @@ import com.google.android.material.slider.Slider
 import com.google.android.material.switchmaterial.SwitchMaterial
 import com.google.android.material.textfield.MaterialAutoCompleteTextView
 import com.google.android.material.textfield.TextInputEditText
+import com.google.android.material.button.MaterialButton
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -28,7 +27,6 @@ import org.openreminisce.app.R
 import org.openreminisce.app.model.Label
 import org.openreminisce.app.model.LocationResult
 import org.openreminisce.app.model.MediaFilter
-import org.openreminisce.app.model.MediaTypeFilter
 import org.openreminisce.app.model.SearchMode
 import org.openreminisce.app.repository.LabelRepository
 import org.openreminisce.app.repository.RemoteMediaRepository
@@ -43,8 +41,8 @@ class FilterBottomSheetFragment : BottomSheetDialogFragment() {
     }
 
     companion object {
+        // Kept for backwards compatibility; search mode is owned by the inline chips.
         private const val ARG_SHOW_SEARCH_MODE = "show_search_mode"
-        private const val ARG_CURRENT_SEARCH_MODE = "current_search_mode"
 
         fun newInstance(
             currentFilter: MediaFilter = MediaFilter(),
@@ -52,12 +50,10 @@ class FilterBottomSheetFragment : BottomSheetDialogFragment() {
         ) = FilterBottomSheetFragment().apply {
             arguments = Bundle().apply {
                 putBoolean(ARG_SHOW_SEARCH_MODE, showSearchMode)
-                putString(ARG_CURRENT_SEARCH_MODE, currentFilter.searchMode.name)
                 // Pass current filter values for pre-population
                 putLong("start_date", currentFilter.startDate ?: -1L)
                 putLong("end_date", currentFilter.endDate ?: -1L)
                 putBoolean("starred_only", currentFilter.starredOnly)
-                putString("media_type", currentFilter.mediaType.name)
                 putString("device_id", currentFilter.deviceId ?: "")
                 putInt("label_id", currentFilter.labelId ?: -1)
                 putDouble("lat", currentFilter.locationLat ?: Double.NaN)
@@ -87,14 +83,14 @@ class FilterBottomSheetFragment : BottomSheetDialogFragment() {
 
         val startDateField = view.findViewById<TextInputEditText>(R.id.startDateField)
         val endDateField = view.findViewById<TextInputEditText>(R.id.endDateField)
+        val clearDatesButton = view.findViewById<MaterialButton>(R.id.clearDatesButton)
         val starredSwitch = view.findViewById<SwitchMaterial>(R.id.starredSwitch)
-        val mediaTypeChipGroup = view.findViewById<ChipGroup>(R.id.mediaTypeChipGroup)
         val deviceDropdown = view.findViewById<MaterialAutoCompleteTextView>(R.id.deviceDropdown)
         val labelChipGroup = view.findViewById<ChipGroup>(R.id.labelChipGroup)
         val locationField = view.findViewById<MaterialAutoCompleteTextView>(R.id.locationSearchField)
+        val clearLocationButton = view.findViewById<MaterialButton>(R.id.clearLocationButton)
+        val radiusSection = view.findViewById<View>(R.id.radiusSection)
         val radiusSlider = view.findViewById<Slider>(R.id.locationRadiusSlider)
-        val searchModeLabel = view.findViewById<TextView>(R.id.searchModeLabel)
-        val searchModeGroup = view.findViewById<RadioGroup>(R.id.searchModeGroup)
         val applyButton = view.findViewById<View>(R.id.applyButton)
         val clearButton = view.findViewById<View>(R.id.clearButton)
 
@@ -106,32 +102,26 @@ class FilterBottomSheetFragment : BottomSheetDialogFragment() {
         endDateMs = savedEndDate
         savedStartDate?.let { startDateField.setText(displayDateFormat.format(Date(it))) }
         savedEndDate?.let { endDateField.setText(displayDateFormat.format(Date(it))) }
+        clearDatesButton.visibility = if (startDateMs != null || endDateMs != null) View.VISIBLE else View.GONE
 
         starredSwitch.isChecked = args.getBoolean("starred_only", false)
 
-        // Media type chips
-        val savedMediaType = MediaTypeFilter.valueOf(args.getString("media_type", "ALL"))
-        when (savedMediaType) {
-            MediaTypeFilter.IMAGE -> mediaTypeChipGroup.check(R.id.filterChipImages)
-            MediaTypeFilter.VIDEO -> mediaTypeChipGroup.check(R.id.filterChipVideos)
-            else -> mediaTypeChipGroup.check(R.id.filterChipAll)
-        }
-
-        // Radius slider
-        val savedRadius = args.getFloat("radius_km", 50f)
+        // Radius slider (hidden until a location is picked, like the web GUI)
+        val savedRadius = args.getFloat("radius_km", 10f)
         radiusSlider.value = savedRadius.coerceIn(1f, 500f)
-
-        // Search mode visibility
-        val showSearchMode = args.getBoolean(ARG_SHOW_SEARCH_MODE, false)
-        if (showSearchMode) {
-            searchModeLabel.visibility = View.VISIBLE
-            searchModeGroup.visibility = View.VISIBLE
-            val savedMode = SearchMode.valueOf(args.getString(ARG_CURRENT_SEARCH_MODE, "SEMANTIC"))
-            when (savedMode) {
-                SearchMode.TEXT -> searchModeGroup.check(R.id.radioText)
-                SearchMode.HYBRID -> searchModeGroup.check(R.id.radioHybrid)
-                else -> searchModeGroup.check(R.id.radioSemantic)
-            }
+        val savedLat = args.getDouble("lat", Double.NaN)
+        val savedLon = args.getDouble("lon", Double.NaN)
+        if (!savedLat.isNaN() && !savedLon.isNaN()) {
+            selectedLocationResult = LocationResult(
+                name = "Selected place",
+                latitude = savedLat,
+                longitude = savedLon,
+                admin_level = "",
+                country_code = null,
+                display_name = ""
+            )
+            radiusSection.visibility = View.VISIBLE
+            clearLocationButton.visibility = View.VISIBLE
         }
 
         // Selected label id
@@ -146,6 +136,7 @@ class FilterBottomSheetFragment : BottomSheetDialogFragment() {
                     picker.addOnPositiveButtonClickListener { sel ->
                         startDateMs = sel
                         startDateField.setText(displayDateFormat.format(Date(sel)))
+                        clearDatesButton.visibility = View.VISIBLE
                     }
                     picker.show(parentFragmentManager, "start_date")
                 }
@@ -159,9 +150,18 @@ class FilterBottomSheetFragment : BottomSheetDialogFragment() {
                     picker.addOnPositiveButtonClickListener { sel ->
                         endDateMs = sel
                         endDateField.setText(displayDateFormat.format(Date(sel)))
+                        clearDatesButton.visibility = View.VISIBLE
                     }
                     picker.show(parentFragmentManager, "end_date")
                 }
+        }
+
+        clearDatesButton.setOnClickListener {
+            startDateMs = null
+            endDateMs = null
+            startDateField.text?.clear()
+            endDateField.text?.clear()
+            clearDatesButton.visibility = View.GONE
         }
 
         // Load devices and labels from API
@@ -207,6 +207,12 @@ class FilterBottomSheetFragment : BottomSheetDialogFragment() {
                 } else {
                     locationSuggestions.clear()
                     locationAdapter?.notifyDataSetChanged()
+                    if (query.isEmpty()) {
+                        // Clearing the field also clears the selected location.
+                        selectedLocationResult = null
+                        radiusSection.visibility = View.GONE
+                        clearLocationButton.visibility = View.GONE
+                    }
                 }
             }
             override fun afterTextChanged(s: Editable?) {}
@@ -217,23 +223,21 @@ class FilterBottomSheetFragment : BottomSheetDialogFragment() {
             if (selected != null) {
                 selectedLocationResult = selected
                 locationField.setText(selected.display_name, false)
+                radiusSection.visibility = View.VISIBLE
+                clearLocationButton.visibility = View.VISIBLE
             }
         }
 
+        clearLocationButton.setOnClickListener {
+            selectedLocationResult = null
+            locationField.text?.clear()
+            radiusSection.visibility = View.GONE
+            clearLocationButton.visibility = View.GONE
+        }
+
         applyButton.setOnClickListener {
-            val mediaType = when (mediaTypeChipGroup.checkedChipId) {
-                R.id.filterChipImages -> MediaTypeFilter.IMAGE
-                R.id.filterChipVideos -> MediaTypeFilter.VIDEO
-                else -> MediaTypeFilter.ALL
-            }
-            val searchMode = when (searchModeGroup.checkedRadioButtonId) {
-                R.id.radioText -> SearchMode.TEXT
-                R.id.radioHybrid -> SearchMode.HYBRID
-                else -> SearchMode.SEMANTIC
-            }
             val deviceId = deviceDropdown.text.toString().trim().takeIf { it.isNotEmpty() }
             val filter = MediaFilter(
-                mediaType = mediaType,
                 starredOnly = starredSwitch.isChecked,
                 startDate = startDateMs,
                 endDate = endDateMs,
@@ -242,7 +246,6 @@ class FilterBottomSheetFragment : BottomSheetDialogFragment() {
                 locationLat = selectedLocationResult?.latitude,
                 locationLon = selectedLocationResult?.longitude,
                 locationRadiusKm = radiusSlider.value,
-                searchMode = searchMode,
                 minSimilarity = args.getFloat("min_similarity", 0.08f)
             )
             (parentFragment as? OnFiltersApplied)?.onFiltersApplied(filter)

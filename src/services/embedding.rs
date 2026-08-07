@@ -29,8 +29,15 @@ pub struct SearchQuery {
     // Date filtering parameters
     pub start_date: Option<String>,
     pub end_date: Option<String>,
+    /// Optional label ID filter (applies to all modes)
+    #[serde(default)]
+    pub label_id: Option<i32>,
+    /// Media type filter: "all" (default), "image", or "video"
+    #[serde(default = "default_media_type")]
+    pub media_type: String,
 }
 
+fn default_media_type() -> String { "all".to_string() }
 fn default_location_radius_km() -> Option<f64> { Some(10.0) }
 
 fn default_limit() -> usize { 20 }
@@ -118,13 +125,31 @@ pub async fn search_images(
 
     let user_uuid = utils::parse_user_uuid(&claims.user_id)?;
 
-    let device_filter: Option<&String> = query.device_id.as_ref();
+    // Guard: reversed date range would (correctly) return nothing; reject it early.
+    if let (Some(sd), Some(ed)) = (query.start_date.as_deref(), query.end_date.as_deref()) {
+        if sd > ed {
+            info!("Rejected search: start_date {} > end_date {}", sd, ed);
+            return Ok(HttpResponse::Ok().json(SearchResponse {
+                results: vec![],
+                total: 0,
+                query: query.query.clone(),
+                min_similarity: query.min_similarity,
+                search_mode: query.mode.clone(),
+            }));
+        }
+    }
 
-    let limit_i64 = query.limit as i64;
+    let device_filter: Option<&String> = query.device_id.as_ref();
+    let label_id = query.label_id;
+    let media_type = query.media_type.clone();
+    let media_type_str = media_type.as_str();
+
+    let limit_i64 = (query.limit as i64) + 1; // +1 probe so total reflects "has more"
     let offset_i64 = query.offset as i64;
 
-    // Route to appropriate search based on mode
-    let results = match query.mode.as_str() {
+    // Route to appropriate search based on mode. Each returns (results, raw_fetched)
+    // where raw_fetched may be limit+1, letting the caller report a correct total.
+    let (results, fetched) = match query.mode.as_str() {
         "text" => {
             // Full-text search only
             info!("Using text-based search");
@@ -140,6 +165,8 @@ pub async fn search_images(
                 query.location_radius_km,
                 query.start_date.as_ref(),
                 query.end_date.as_ref(),
+                label_id,
+                media_type_str,
                 &pool,
             ).await?
         },
@@ -175,6 +202,8 @@ pub async fn search_images(
                 query.location_radius_km,
                 query.start_date.as_ref(),
                 query.end_date.as_ref(),
+                label_id,
+                media_type_str,
                 &pool,
             ).await?
         },
@@ -210,14 +239,19 @@ pub async fn search_images(
                 query.location_radius_km,
                 query.start_date.as_ref(),
                 query.end_date.as_ref(),
+                label_id,
+                media_type_str,
                 &pool,
             ).await?
         }
     };
 
-    let total = results.len();
+    // The +1 probe above means raw_fetched == limit+1 exactly when a further
+    // page exists; total = offset + fetched gives clients a correct "has more".
+    let results: Vec<SearchResult> = results.into_iter().take(query.limit).collect();
+    let total = query.offset + fetched;
 
-    info!("Search completed: found {} results for query: '{}' (mode: {})", total, query.query, query.mode);
+    info!("Search completed: found {} results for query: '{}' (mode: {})", results.len(), query.query, query.mode);
 
     Ok(HttpResponse::Ok().json(SearchResponse {
         results,
@@ -414,12 +448,15 @@ pub async fn perform_semantic_search(
     location_radius_km: Option<f64>,
     start_date: Option<&String>,
     end_date: Option<&String>,
+    label_id: Option<i32>,
+    media_type: &str,
     pool: &web::Data<MainDbPool>,
-) -> Result<Vec<SearchResult>, actix_web::Error> {
+) -> Result<(Vec<SearchResult>, usize), actix_web::Error> {
     let client = utils::get_db_client(&pool.0).await?;
 
-    // Build query with optional filters
-    // Add similarity threshold to filter out irrelevant results
+    let include_image = media_type != "video";
+    let include_video = media_type != "image";
+
     info!("Using minimum similarity threshold: {:.2}", min_similarity);
 
     // Reserved params: $1=user_id, $2=embedding, $3=per_branch_limit, $4=final_limit, $5=offset
@@ -427,6 +464,13 @@ pub async fn perform_semantic_search(
     let mut param_count = 5;
 
     let device_param = if device_filter.is_some() {
+        param_count += 1;
+        Some(param_count)
+    } else {
+        None
+    };
+
+    let label_param = if label_id.is_some() {
         param_count += 1;
         Some(param_count)
     } else {
@@ -466,7 +510,7 @@ pub async fn perform_semantic_search(
 
     // Build a WHERE clause for a given table alias. Param placeholders are
     // shared across both branches (same bound params), only the alias differs.
-    let build_where = |alias: &str| -> String {
+    let build_where = |alias: &str, label_table: &str, label_hash: &str, label_user: &str| -> String {
         let mut conds: Vec<String> = vec![
             format!("{}.embedding IS NOT NULL", alias),
             format!("{}.user_id = $1", alias),
@@ -478,6 +522,12 @@ pub async fn perform_semantic_search(
         }
         if starred_only {
             conds.push("s.hash IS NOT NULL".to_string());
+        }
+        if let Some(p) = label_param {
+            conds.push(format!(
+                "EXISTS (SELECT 1 FROM {} l WHERE l.{} = {}.hash AND l.{} = {}.user_id AND l.label_id = ${})",
+                label_table, label_hash, alias, label_user, alias, p
+            ));
         }
         if let Some(p) = start_param {
             conds.push(format!("{}.created_at >= ${}", alias, p));
@@ -506,66 +556,50 @@ pub async fn perform_semantic_search(
         }
     };
 
-    let img_where = build_where("i");
-    let vid_where = build_where("v");
+    let img_where = build_where("i", "image_labels", "image_hash", "image_user_id");
+    let vid_where = build_where("v", "video_labels", "video_hash", "video_user_id");
     let img_distance = build_distance("i");
     let vid_distance = build_distance("v");
 
     info!("Image WHERE clause: {}", img_where);
     info!("Video WHERE clause: {}", vid_where);
 
-    // Each branch performs its own KNN (ORDER BY embedding <=> $2 LIMIT $3) so
-    // pgvector's HNSW index is used. The outer query then merges and applies
-    // the final LIMIT/OFFSET. Wrapping each arm in parentheses guarantees the
-    // per-arm ORDER BY/LIMIT is respected by the planner.
+    let img_arm = if include_image {
+        format!(
+            "(\n                SELECT i.hash, i.name, i.description, i.place, i.created_at,\n                       1 - (i.embedding <=> $2) as similarity,\n                       CASE WHEN s.hash IS NOT NULL THEN true ELSE false END as starred,\n                       i.deviceid,\n                       {} as distance_km,\n                       'image' as media_type,\n                       i.embedding <=> $2 as dist\n                FROM images i\n                LEFT JOIN starred_images s ON i.hash = s.hash AND s.user_id = $1\n                WHERE {}\n                ORDER BY i.embedding <=> $2\n                LIMIT $3\n            )",
+            img_distance, img_where
+        )
+    } else {
+        String::new()
+    };
+    let vid_arm = if include_video {
+        format!(
+            "(\n                SELECT v.hash, v.name, v.description, NULL::text as place, v.created_at,\n                       1 - (v.embedding <=> $2) as similarity,\n                       CASE WHEN s.hash IS NOT NULL THEN true ELSE false END as starred,\n                       v.deviceid,\n                       {} as distance_km,\n                       'video' as media_type,\n                       v.embedding <=> $2 as dist\n                FROM videos v\n                LEFT JOIN starred_videos s ON v.hash = s.hash AND s.user_id = $1\n                WHERE {}\n                ORDER BY v.embedding <=> $2\n                LIMIT $3\n            )",
+            vid_distance, vid_where
+        )
+    } else {
+        String::new()
+    };
+
+    let union_body = match (include_image, include_video) {
+        (true, true) => format!("{} UNION ALL {}", img_arm, vid_arm),
+        (true, false) => img_arm,
+        (false, true) => vid_arm,
+        (false, false) => unreachable!(),
+    };
+
     let sql = format!(
-        "SELECT hash, name, description, place, created_at, similarity, starred, deviceid, distance_km, media_type FROM (
-            (
-                SELECT i.hash, i.name, i.description, i.place, i.created_at,
-                       1 - (i.embedding <=> $2) as similarity,
-                       CASE WHEN s.hash IS NOT NULL THEN true ELSE false END as starred,
-                       i.deviceid,
-                       {} as distance_km,
-                       'image' as media_type,
-                       i.embedding <=> $2 as dist
-                FROM images i
-                LEFT JOIN starred_images s ON i.hash = s.hash AND s.user_id = $1
-                WHERE {}
-                ORDER BY i.embedding <=> $2
-                LIMIT $3
-            )
-            UNION ALL
-            (
-                SELECT v.hash, v.name, v.description, NULL::text as place, v.created_at,
-                       1 - (v.embedding <=> $2) as similarity,
-                       CASE WHEN s.hash IS NOT NULL THEN true ELSE false END as starred,
-                       v.deviceid,
-                       {} as distance_km,
-                       'video' as media_type,
-                       v.embedding <=> $2 as dist
-                FROM videos v
-                LEFT JOIN starred_videos s ON v.hash = s.hash AND s.user_id = $1
-                WHERE {}
-                ORDER BY v.embedding <=> $2
-                LIMIT $3
-            )
-        ) combined
-        ORDER BY dist ASC
-        LIMIT $4 OFFSET $5",
-        img_distance,
-        img_where,
-        vid_distance,
-        vid_where
+        "SELECT hash, name, description, place, created_at, similarity, starred, deviceid, distance_km, media_type FROM (\n            {}\n        ) combined\n        ORDER BY dist ASC\n        LIMIT $4 OFFSET $5",
+        union_body
     );
 
     // hnsw.ef_search controls how many candidates HNSW considers at query time.
     // Default is 40 — must be >= per_branch_limit so each arm returns enough rows.
-    // Use per_branch_limit * 2 as a buffer, minimum 100.
     let ef_search = std::cmp::max(per_branch_limit * 2, 100);
     client.execute(&format!("SET hnsw.ef_search = {}", ef_search), &[]).await
         .unwrap_or(0);
 
-    info!("Executing semantic search query across images & videos (ef_search={})", ef_search);
+    info!("Executing semantic search query across {} (ef_search={})", media_type, ef_search);
     info!("Query params: user_id={}, limit={}, offset={}, device_filter={:?}",
           user_uuid, limit, offset, device_filter);
 
@@ -591,6 +625,12 @@ pub async fn perform_semantic_search(
         params.push(device);
     }
 
+    let label_id_val;
+    if let Some(lbl) = label_id {
+        label_id_val = lbl;
+        params.push(&label_id_val);
+    }
+
     if let Some(ref sd) = start_datetime {
         params.push(sd);
     }
@@ -601,7 +641,6 @@ pub async fn perform_semantic_search(
     // Variables to hold location values
     let lat_val;
     let lon_val;
-
     if has_location_filter {
         lat_val = location_lat.unwrap();
         lon_val = location_lon.unwrap();
@@ -637,7 +676,8 @@ pub async fn perform_semantic_search(
         })
         .collect();
 
-    info!("Found {} semantic search results", results.len());
+    let fetched = results.len();
+    info!("Found {} semantic search results (raw fetched={})", results.len(), fetched);
 
     // Log top 5 results with similarity scores
     for (i, result) in results.iter().take(5).enumerate() {
@@ -645,11 +685,7 @@ pub async fn perform_semantic_search(
               i + 1, &result.hash[..16], result.similarity, result.name);
     }
 
-    if results.is_empty() {
-        info!("No results found with similarity > {:.2}", min_similarity);
-    }
-
-    Ok(results)
+    Ok((results, fetched))
 }
 
 /// Get text embedding from AI gRPC service
