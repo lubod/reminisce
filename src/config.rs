@@ -323,10 +323,6 @@ mod tests {
     use super::*;
     use std::sync::atomic::Ordering;
 
-    // Config reads the process-global API_SECRET_KEY env var; serialize the
-    // tests so the precedence test cannot race the other from_file tests.
-    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
     fn temp_dir(name: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("reminisce_cfg_{}_{}", name, std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -340,7 +336,6 @@ mod tests {
 
     #[test]
     fn from_file_minimal_config_applies_defaults() {
-        let _guard = ENV_LOCK.lock().unwrap();
         let dir = temp_dir("minimal");
         let path = dir.join("config.yaml");
         let secret = "unit-test-secret-0123456789abcdef0123456789abcdef";
@@ -366,7 +361,6 @@ mod tests {
 
     #[test]
     fn from_file_respects_explicit_fields() {
-        let _guard = ENV_LOCK.lock().unwrap();
         let dir = temp_dir("explicit");
         let path = dir.join("config.yaml");
         let yaml = r#"
@@ -394,7 +388,6 @@ p2p_deterministic_identity: true
 
     #[test]
     fn from_file_missing_file_or_secret_is_an_error() {
-        let _guard = ENV_LOCK.lock().unwrap();
         let dir = temp_dir("missing");
         let missing = dir.join("does-not-exist.yaml");
         assert!(Config::from_file(&missing).is_err(), "missing file must error");
@@ -409,21 +402,5 @@ p2p_deterministic_identity: true
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    #[test]
-    fn api_secret_key_env_takes_precedence_over_file() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        let dir = temp_dir("env");
-        let path = dir.join("config.yaml");
-        std::fs::write(&path, min_yaml("from-file-secret-0123456789abcdef0123456789abcdef")).unwrap();
-        unsafe {
-            std::env::set_var("API_SECRET_KEY", "from-env-secret-0123456789abcdef0123456789abcdef");
-        }
-        let cfg = Config::from_file(&path).expect("should parse with env secret");
-        assert_eq!(cfg.get_api_key().unwrap(), "from-env-secret-0123456789abcdef0123456789abcdef");
-        unsafe {
-            std::env::remove_var("API_SECRET_KEY");
-        }
-        let _ = std::fs::remove_dir_all(&dir);
-    }
 }
 

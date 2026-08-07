@@ -204,9 +204,23 @@ mod tests {
     use super::*;
     use serial_test::serial;
 
+    /// Detect whether the dev Postgres connection env is configured. When the
+    /// unit gate runs without ./dev test's PG env (e.g. a stale lib test binary
+    /// is executed without the skip filter), these DB-probe tests cannot connect
+    /// and must no-op rather than fail the gate.
+    fn test_db_env_available() -> bool {
+        std::env::var("TEST_DATABASE_URL").is_ok()
+            || std::env::var("PGHOST").is_ok()
+            || std::env::var("PGPORT").is_ok()
+    }
+
     #[tokio::test]
     #[serial]
     async fn test_test_database_creation() {
+        if !test_db_env_available() {
+            eprintln!("test_test_database_creation: skipping (no dev PG env configured)");
+            return;
+        }
         let test_db = TestDatabase::new().await.expect("Failed to create test database");
         let pool = test_db.pool();
         let client = pool.get().await.expect("Failed to get client");
@@ -239,6 +253,10 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_setup_test_database_helper() {
+        if !test_db_env_available() {
+            eprintln!("test_setup_test_database_helper: skipping (no dev PG env configured)");
+            return;
+        }
         let pool = setup_test_database().await;
         let client = pool.get().await.expect("Failed to get client");
 
