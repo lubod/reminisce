@@ -333,6 +333,82 @@ mod tests {
         let query = builder.build_count_query(true);
 
         assert!(query.contains("INNER JOIN starred_images"));
+
+
         assert!(query.contains("WHERE t.deleted_at IS NULL AND t.has_thumbnail = true"));
+    }
+
+    #[test]
+    fn test_user_id_and_access_control_filter() {
+        let mut builder = MediaQueryBuilder::new(tables::IMAGES);
+        let user = builder.with_user_id();
+        assert_eq!(user.position, 1);
+        builder.with_user_id_filter();
+        let query = builder.build_select_query(2, 3, None, None, None, None);
+        assert!(query.contains("LEFT JOIN starred_images s ON t.hash = s.hash AND s.user_id = $1"));
+        assert!(query.contains("t.user_id = $1"));
+        assert!(query.contains("LIMIT $2 OFFSET $3"));
+    }
+
+    #[test]
+    fn test_user_id_videos_uses_starred_videos() {
+        let mut builder = MediaQueryBuilder::new(tables::VIDEOS);
+        builder.with_user_id();
+        builder.with_user_id_filter();
+        let query = builder.build_select_query(2, 3, None, None, None, None);
+        assert!(query.contains("LEFT JOIN starred_videos"));
+        assert!(query.contains("t.user_id = $1"));
+        assert!(query.contains("'video' as media_type"));
+    }
+
+    #[test]
+    fn test_label_id_join_and_count() {
+        let mut builder = MediaQueryBuilder::new(tables::IMAGES);
+        assert_eq!(builder.with_user_id().position, 1);
+        assert_eq!(builder.with_label_id().position, 2);
+        let select = builder.build_select_query(3, 4, None, None, None, None);
+        assert!(select.contains("INNER JOIN image_labels l ON t.hash = l.image_hash AND t.user_id = l.image_user_id AND l.label_id = $2"));
+        let count = builder.build_count_query(false);
+        assert!(count.contains("INNER JOIN image_labels l"));
+        assert!(count.contains("label_id = $2"));
+    }
+
+    #[test]
+    fn test_video_label_tables() {
+        let mut builder = MediaQueryBuilder::new(tables::VIDEOS);
+        builder.with_user_id();
+        builder.with_label_id();
+        let select = builder.build_select_query(3, 4, None, None, None, None);
+        assert!(select.contains("INNER JOIN video_labels l ON t.hash = l.video_hash AND t.user_id = l.video_user_id"));
+    }
+
+    #[test]
+    fn test_date_and_no_exif_filters() {
+        let mut builder = MediaQueryBuilder::new(tables::IMAGES);
+        builder.with_user_id();
+        builder.with_start_date();
+        builder.with_end_date();
+        builder.with_no_exif();
+        let query = builder.build_select_query(4, 5, None, None, None, None);
+        assert!(query.contains("t.created_at >= $2"));
+        assert!(query.contains("t.created_at < $3"));
+        assert!(query.contains("t.exif IS NULL"));
+        assert!(query.contains("LIMIT $4 OFFSET $5"));
+    }
+
+    #[test]
+    fn test_geo_distance_parameters() {
+        let mut builder = MediaQueryBuilder::new(tables::IMAGES);
+        builder.with_user_id();
+        builder.with_starred_only();
+        let query = builder.build_select_query(3, 4, Some(10), Some(11), None, None);
+        assert!(query.contains("ST_Distance(t.location, ST_MakePoint($10, $11)::geography)"));
+        assert!(query.contains("s.hash IS NOT NULL"));
+    }
+
+    #[test]
+    fn test_is_table_type_helpers() {
+        assert!(MediaQueryBuilder::new(tables::IMAGES).is_images_table());
+        assert!(MediaQueryBuilder::new(tables::VIDEOS).is_videos_table());
     }
 }

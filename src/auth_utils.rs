@@ -207,6 +207,19 @@ mod tests {
         let hash = hash_password(password).expect("Failed to hash password");
 
         assert!(verify_password(password, &hash).expect("Failed to verify password"));
+
+
         assert!(!verify_password("wrong_password", &hash).expect("Failed to verify password"));
+    }
+
+    #[test]
+    fn test_parse_user_uuid() {
+        let valid = "550e8400-e29b-41d4-a716-446655440000";
+        assert!(parse_user_uuid(valid).is_ok());
+        assert_eq!(parse_user_uuid(valid).unwrap().to_string(), valid);
+
+        assert!(parse_user_uuid("not-a-uuid").is_err());
+        assert!(parse_user_uuid("").is_err());
+        assert!(parse_user_uuid(&"a".repeat(40)).is_err());
     }
 }

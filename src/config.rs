@@ -317,3 +317,113 @@ impl Config {
         self.videos_dir.as_deref().unwrap_or("uploaded_videos")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::Ordering;
+
+    // Config reads the process-global API_SECRET_KEY env var; serialize the
+    // tests so the precedence test cannot race the other from_file tests.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn temp_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("reminisce_cfg_{}_{}", name, std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn min_yaml(secret: &str) -> String {
+        format!("api_secret_key: \"{}\"\n", secret)
+    }
+
+    #[test]
+    fn from_file_minimal_config_applies_defaults() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let dir = temp_dir("minimal");
+        let path = dir.join("config.yaml");
+        let secret = "unit-test-secret-0123456789abcdef0123456789abcdef";
+        std::fs::write(&path, min_yaml(secret)).unwrap();
+
+        let cfg = Config::from_file(&path).expect("minimal config should parse");
+        assert_eq!(cfg.get_api_key().unwrap(), secret);
+        assert_eq!(cfg.port, 8080);
+        assert_eq!(cfg.db_pool_max_size, 50);
+        assert_eq!(cfg.db_pool_min_size, 10);
+        assert_eq!(cfg.db_pool_timeout_secs, 30);
+        assert!(!cfg.db_tls);
+        assert_eq!(cfg.ai_grpc_url, "http://localhost:50051");
+        assert!(cfg.enable_local_geocoding);
+        assert_eq!(cfg.get_images_dir(), "uploaded_images");
+        assert_eq!(cfg.get_videos_dir(), "uploaded_videos");
+        assert_eq!(cfg.p2p_data_shards, 3);
+        assert_eq!(cfg.p2p_parity_shards, 2);
+        assert!(cfg.enable_ai_descriptions.load(Ordering::Relaxed));
+        assert!(!cfg.enable_media_backup.load(Ordering::Relaxed));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn from_file_respects_explicit_fields() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let dir = temp_dir("explicit");
+        let path = dir.join("config.yaml");
+        let yaml = r#"
+api_secret_key: "k-abcdef0123456789abcdef0123456789abcdef0123"
+port: 9090
+database_url: "postgres://u:p@h:5432/db"
+db_pool_max_size: 8
+images_dir: "/data/images"
+videos_dir: "/data/videos"
+p2p_data_shards: 5
+p2p_deterministic_identity: true
+"#;
+        std::fs::write(&path, yaml).unwrap();
+        let cfg = Config::from_file(&path).expect("config should parse");
+        assert_eq!(cfg.port, 9090);
+        assert_eq!(cfg.get_api_key().unwrap(), "k-abcdef0123456789abcdef0123456789abcdef0123");
+        assert_eq!(cfg.database_url.as_deref(), Some("postgres://u:p@h:5432/db"));
+        assert_eq!(cfg.db_pool_max_size, 8);
+        assert_eq!(cfg.get_images_dir(), "/data/images");
+        assert_eq!(cfg.get_videos_dir(), "/data/videos");
+        assert_eq!(cfg.p2p_data_shards, 5);
+        assert!(cfg.p2p_deterministic_identity);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn from_file_missing_file_or_secret_is_an_error() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let dir = temp_dir("missing");
+        let missing = dir.join("does-not-exist.yaml");
+        assert!(Config::from_file(&missing).is_err(), "missing file must error");
+
+        let empty = dir.join("empty.yaml");
+        std::fs::write(&empty, "port: 8080\n").unwrap();
+        assert!(Config::from_file(&empty).is_err(), "missing api_secret_key must error");
+
+        let blank = dir.join("blank.yaml");
+        std::fs::write(&blank, "api_secret_key: \"\"\n").unwrap();
+        assert!(Config::from_file(&blank).is_err(), "empty api_secret_key must error");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn api_secret_key_env_takes_precedence_over_file() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let dir = temp_dir("env");
+        let path = dir.join("config.yaml");
+        std::fs::write(&path, min_yaml("from-file-secret-0123456789abcdef0123456789abcdef")).unwrap();
+        unsafe {
+            std::env::set_var("API_SECRET_KEY", "from-env-secret-0123456789abcdef0123456789abcdef");
+        }
+        let cfg = Config::from_file(&path).expect("should parse with env secret");
+        assert_eq!(cfg.get_api_key().unwrap(), "from-env-secret-0123456789abcdef0123456789abcdef");
+        unsafe {
+            std::env::remove_var("API_SECRET_KEY");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+

@@ -969,3 +969,69 @@ pub async fn extract_video_keyframes(
     info!("Extracted {} keyframes from video {:?}", keyframes.len(), video_path);
     Ok(keyframes)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn content_hash_validation() {
+        let ok = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        assert!(is_valid_content_hash(ok));
+        assert!(!is_valid_content_hash(""));
+        assert!(!is_valid_content_hash(&ok[..63]), "too short rejected");
+        assert!(!is_valid_content_hash(&ok.to_uppercase()), "uppercase rejected");
+        assert!(
+            !is_valid_content_hash("zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"),
+            "non-hex chars rejected"
+        );
+    }
+
+    #[test]
+    fn media_ext_validation() {
+        assert!(is_valid_media_ext("jpg"));
+        assert!(is_valid_media_ext("MP4"));
+        assert!(!is_valid_media_ext(""));
+        assert!(!is_valid_media_ext("a/b"), "path separator rejected");
+        assert!(!is_valid_media_ext(".."), "dotdot rejected");
+        assert!(!is_valid_media_ext(".hidden"), "leading dot rejected");
+        assert!(!is_valid_media_ext("superlongext"), "too long rejected");
+        assert!(!is_valid_media_ext("a b"), "whitespace rejected");
+    }
+
+    #[test]
+    fn safe_resolve_rejects_traversal_and_missing_files() {
+        assert!(safe_resolve_content_path("/tmp", "..", "jpg").is_err(), "traversal hash rejected");
+
+        let valid_hash = "a".repeat(64);
+        assert!(
+            safe_resolve_content_path("/tmp", &valid_hash, "../x").is_err(),
+            "traversal ext rejected"
+        );
+        assert!(
+            safe_resolve_content_path("/tmp", &valid_hash, "jpg").is_err(),
+            "nonexistent file must not silently succeed"
+        );
+    }
+
+    #[test]
+    fn subdirectory_path_uses_first_two_chars() {
+        assert!(get_subdirectory_path("/base", "ab1234").ends_with("ab"));
+        assert_eq!(get_subdirectory_path("/base", "a"), std::path::PathBuf::from("/base"));
+    }
+
+    #[test]
+    fn parse_image_name_dates() {
+        let dt = parse_date_from_image_name("IMG_20231222_191241.jpg").expect("camera-style name");
+        assert_eq!(
+            dt.to_rfc3339(),
+            "2023-12-22T19:12:41+00:00",
+            "IMG_YYYYMMDD_HHMMSS parses to a UTC datetime"
+        );
+        assert!(parse_date_from_image_name("IMG-20240115-WA0000.jpg").is_some(), "WhatsApp format");
+        assert!(parse_date_from_image_name("IMG-20240115.jpg").is_some(), "date-only format");
+        assert!(parse_date_from_image_name("photo.png").is_none());
+        assert!(parse_date_from_image_name("VID_20240101_000000.mp4").is_none(), "video names excluded");
+    }
+}
+

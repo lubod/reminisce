@@ -243,3 +243,52 @@ where
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn token_bucket_allows_full_capacity_and_denies_when_empty() {
+        let mut tb = TokenBucket::new(10.0);
+        assert!(tb.consume(10.0, 1.0, 10.0), "a full burst must be allowed");
+        assert!(!tb.consume(10.0, 1.0, 1.0), "an empty bucket must deny immediately");
+    }
+
+    #[test]
+    fn token_bucket_refills_over_time() {
+        let mut tb = TokenBucket::new(10.0);
+        assert!(tb.consume(10.0, 10.0, 10.0));
+        assert!(!tb.consume(10.0, 10.0, 1.0), "drained bucket denies");
+        // ~200ms at 10 tokens/sec refills ~2 tokens -> a 1-token request passes.
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(tb.consume(10.0, 10.0, 1.0), "bucket refilled enough for one token");
+    }
+
+    #[test]
+    fn token_bucket_caps_at_max_capacity() {
+        let mut tb = TokenBucket::new(10.0);
+        assert!(tb.consume(10.0, 10.0, 1.0));
+        std::thread::sleep(Duration::from_millis(500));
+        // 500ms * 10/s = 5 refilled; tokens are capped at max (never above).
+        assert!(tb.consume(10.0, 10.0, 10.0), "refill is capped at max_tokens");
+        assert!(!tb.consume(10.0, 10.0, 1.0), "drained again after full draw");
+    }
+
+    #[test]
+    fn shard_index_is_stable_and_in_range() {
+        let ips: [IpAddr; 4] = [
+            "1.2.3.4".parse().unwrap(),
+            "192.168.1.1".parse().unwrap(),
+            "::1".parse().unwrap(),
+            "2001:db8::1".parse().unwrap(),
+        ];
+        for ip in ips {
+            let a = shard_index(ip);
+            assert!(a < SHARD_COUNT, "shard index out of range: {}", a);
+            assert_eq!(a, shard_index(ip), "same IP must map to the same shard");
+        }
+    }
+}
+
