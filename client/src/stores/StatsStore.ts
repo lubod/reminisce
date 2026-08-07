@@ -2,7 +2,7 @@ import { makeAutoObservable, runInAction } from "mobx";
 import axios from "../api/axiosConfig";
 import { isAxiosError } from "axios";
 import { logger } from "../utils/logger";
-import { RootStore } from "./RootStore";
+import type { RootStore } from "./RootStore";
 
 export interface DashboardStats {
     total_images: number;

@@ -1,7 +1,7 @@
 import { makeAutoObservable, runInAction } from "mobx";
 import axios from "../api/axiosConfig";
 import { logger } from "../utils/logger";
-import { RootStore } from "./RootStore";
+import type { RootStore } from "./RootStore";
 
 export interface Label {
     id: number;

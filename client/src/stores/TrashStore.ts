@@ -1,5 +1,5 @@
 import { makeAutoObservable, runInAction } from "mobx";
-import { RootStore } from "./RootStore";
+import type { RootStore } from "./RootStore";
 import api from "../api/axiosConfig";
 
 export interface TrashItem {

@@ -1,5 +1,5 @@
 import { makeAutoObservable } from "mobx";
-import { RootStore } from "./RootStore";
+import type { RootStore } from "./RootStore";
 import api from "../api/axiosConfig";
 import { logger } from "../utils/logger";
 import axios from "axios";

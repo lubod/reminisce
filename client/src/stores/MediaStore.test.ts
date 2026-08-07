@@ -35,13 +35,23 @@ const api = vi.hoisted(() => {
         mapParams: string;
         mapPool: PoolPoint[];
         mapPoint: (hash: string, i: number) => PoolPoint;
+        imagesPool: Array<Record<string, unknown>>;
+        imagesTotal: number;
+        rejectPost: boolean;
     } = {
         mapParams: "",
         mapPool: [mapPoint("m1", 0)],
         mapPoint,
+        imagesPool: [],
+        imagesTotal: 0,
+        rejectPost: false,
     };
     return {
         state,
+        post: async () => {
+            if (state.rejectPost) throw new Error("server failure");
+            return { data: { starred: true }, status: 200 };
+        },
         get: async (url: string) => {
             const u = new URL(url, "http://localhost");
             if (url.includes("/map/media")) {
@@ -62,6 +72,20 @@ const api = vi.hoisted(() => {
                 const limit = Number(u.searchParams.get("limit") || 50);
                 return { data: { results: pool.slice(offset, offset + limit), total: pool.length }, status: 200 };
             }
+            if (url.includes("/image_thumbnails")) {
+                const page = Number(u.searchParams.get("page") || 1);
+                const limit = Number(u.searchParams.get("limit") || 50);
+                const start = (page - 1) * limit;
+                return {
+                    data: {
+                        thumbnails: state.imagesPool.slice(start, start + limit),
+                        total: state.imagesTotal,
+                        page,
+                        limit,
+                    },
+                    status: 200,
+                };
+            }
             return { data: { bytes: 1 }, status: 200 };
         },
     };
@@ -69,7 +93,7 @@ const api = vi.hoisted(() => {
 
 vi.mock("../api/axiosConfig", () => ({
     __esModule: true,
-    default: { get: api.get },
+    default: { get: api.get, post: api.post },
 }));
 
 // MediaStore's computed/pure logic (filtering, grouping, lightbox getters) is
@@ -278,3 +302,97 @@ describe("map points (fetchMapPoints)", () => {
         expect(new URL("http://localhost?" + api.state.mapParams).searchParams.get("page")).toBe("2");
     });
 });
+
+
+describe("map auto-fetch + star/delete + fetchImages", () => {
+    it("setMapActive(true) auto-fetches map points", async () => {
+        api.state.mapParams = "";
+        api.state.mapPool = [api.state.mapPoint("m1", 0)];
+        const s = makeStore();
+        expect(s.mapPoints).toHaveLength(0);
+        s.setMapActive(true);
+        await new Promise(r => setTimeout(r, 0));
+        expect(api.state.mapParams).toContain("page=1");
+        expect(s.mapPoints).toHaveLength(1);
+        expect(s.mapTotal).toBe(1);
+    });
+
+    it("setMapActive does not fetch in search mode", async () => {
+        const s = makeStore();
+        s.searchMode = true;
+        s.setMapActive(true);
+        expect(s.mapPoints).toHaveLength(0);
+    });
+
+    it("toggleStarMedia flips starred across arrays and applies the server value", async () => {
+        const s = makeStore();
+        const target = item({ device_id: "a", starred: false, media_type: "image" });
+        s.images = [target];
+        s.allMedia = [target];
+
+        await s.toggleStarMedia(target.hash);
+
+        expect(s.images[0].starred).toBe(true);
+        expect(s.allMedia[0].starred).toBe(true);
+    });
+
+    it("toggleStarMedia rolls back to the previous value on server failure", async () => {
+        const setError = vi.fn();
+        const s = new MediaStore({ uiStore: { setError } } as unknown as RootStore);
+        const target = item({ device_id: "a", starred: false, media_type: "image" });
+        s.images = [target];
+
+        api.state.rejectPost = true;
+        try {
+            await s.toggleStarMedia(target.hash);
+        } finally {
+            api.state.rejectPost = false;
+        }
+
+        expect(s.images[0].starred).toBe(false);
+        expect(setError).toHaveBeenCalled();
+    });
+
+    it("deleteMedia removes the item from every list", async () => {
+        const s = makeStore();
+        const a = item({ media_type: "image" });
+        const b = item({ media_type: "image" });
+        const c = item({ media_type: "video" });
+        s.images = [a, b];
+        s.videos = [c];
+        s.allMedia = [a, b, c];
+
+        await s.deleteMedia(b.hash);
+
+        expect(s.images.map(i => i.hash)).toEqual([a.hash]);
+        expect(s.videos.map(i => i.hash)).toEqual([c.hash]);
+        expect(s.allMedia.map(i => i.hash)).toEqual([a.hash, c.hash]);
+    });
+
+    it("deleteMedia clamps the lightbox index when the selected last item is deleted", async () => {
+        const s = makeStore();
+        const a = item({ media_type: "image" });
+        const b = item({ media_type: "image" });
+        s.allMedia = [a, b];
+        s.lightboxSource = "all";
+        s.selectedMediaIndex = 1;
+        await s.deleteMedia(b.hash);
+        expect(s.allMedia.map(i => i.hash)).toEqual([a.hash]);
+        expect(s.selectedMediaIndex).toBe(0);
+    });
+
+    it("fetchImages sets hasMore from the server total and pages", async () => {
+        api.state.imagesTotal = 3;
+        api.state.imagesPool = ["x1", "x2", "x3"].map(h => ({ hash: h, name: h }));
+        const s = new MediaStore({ uiStore: { setLoading: () => {}, setError: () => {} } } as unknown as RootStore);
+
+        await s.fetchImages(1, 2);
+        expect(s.images).toHaveLength(2);
+        expect(s.hasMore).toBe(true);
+
+        await s.fetchImages(2, 2, true);
+        expect(s.images).toHaveLength(3);
+        expect(s.hasMore).toBe(false);
+    });
+});
+
