@@ -11,26 +11,48 @@ const api = vi.hoisted(() => {
         name: `n${i}.jpg`,
         created_at: "2024-01-15T10:00:00Z",
     }));
-    const state = { mapParams: "" };
+    interface PoolPoint {
+        hash: string;
+        lon: number;
+        lat: number;
+        created_at: string;
+        place: string | null;
+        starred: boolean;
+        device_id: string | null;
+        has_thumbnail: boolean;
+    }
+    const mapPoint = (hash: string, i: number): PoolPoint => ({
+        hash,
+        lon: 14.0 + i,
+        lat: 50.0 + i,
+        created_at: "2024-01-15T10:00:00Z",
+        place: null,
+        starred: false,
+        device_id: null,
+        has_thumbnail: true,
+    });
+    const state: {
+        mapParams: string;
+        mapPool: PoolPoint[];
+        mapPoint: (hash: string, i: number) => PoolPoint;
+    } = {
+        mapParams: "",
+        mapPool: [mapPoint("m1", 0)],
+        mapPoint,
+    };
     return {
         state,
         get: async (url: string) => {
             const u = new URL(url, "http://localhost");
             if (url.includes("/map/media")) {
                 state.mapParams = u.searchParams.toString();
+                const page = Number(u.searchParams.get("page") || 1);
+                const limit = Number(u.searchParams.get("limit") || 10000);
+                const start = (page - 1) * limit;
                 return {
                     data: {
-                        points: [{
-                            hash: "m1",
-                            lon: 14.42,
-                            lat: 50.08,
-                            created_at: "2024-01-15T10:00:00Z",
-                            place: null,
-                            starred: false,
-                            device_id: null,
-                            has_thumbnail: true,
-                        }],
-                        total: 1,
+                        points: state.mapPool.slice(start, start + limit),
+                        total: state.mapPool.length,
                     },
                     status: 200,
                 };
@@ -242,5 +264,17 @@ describe("map points (fetchMapPoints)", () => {
         expect(s.mapPoints.length).toBe(1);
         expect(s.mapPoints[0].hash).toBe("m1");
         expect(s.mapTotal).toBe(1);
+    });
+
+    it("pages through the whole geotagged library (server caps per-page)", async () => {
+        api.state.mapPool = Array.from({ length: 12000 }, (_, i) => api.state.mapPoint(`pm${i}`, i));
+        const s = makeStore();
+        s.mapActive = true;
+
+        await s.fetchMapPoints();
+
+        expect(s.mapPoints.length).toBe(12000);
+        expect(s.mapTotal).toBe(12000);
+        expect(new URL("http://localhost?" + api.state.mapParams).searchParams.get("page")).toBe("2");
     });
 });

@@ -1,5 +1,9 @@
 //! Map view support: return geotagged media (images only — videos carry no
 //! location) as lightweight map points for client-side clustering.
+//!
+//! The endpoint is paginated (`page`/`limit`, `limit` capped) so a large
+//! geotagged library can never be returned in a single unbounded response;
+//! `total` is the overall match count so clients can page through all points.
 
 use actix_web::{ get, web, HttpResponse, HttpRequest };
 use serde::{Deserialize, Serialize};
@@ -9,6 +13,11 @@ use utoipa::ToSchema;
 use crate::config::Config;
 use crate::db::MainDbPool;
 use crate::utils;
+
+/// Upper bound on points returned in a single /map/media response.
+const MAP_LIMIT_MAX: usize = 10_000;
+/// Default page size if the client does not ask for one.
+const MAP_DEFAULT_LIMIT: usize = 1_000;
 
 #[derive(Serialize, Deserialize, ToSchema)]
 pub struct MapPoint {
@@ -45,6 +54,20 @@ pub struct MapQuery {
     /// Optional device ID filter
     #[serde(default)]
     pub device_id: Option<String>,
+    /// Page number, 1-based
+    #[serde(default = "default_page")]
+    pub page: usize,
+    /// Points per page (capped at MAP_LIMIT_MAX)
+    #[serde(default = "default_limit")]
+    pub limit: usize,
+}
+
+fn default_page() -> usize {
+    1
+}
+
+fn default_limit() -> usize {
+    MAP_DEFAULT_LIMIT
 }
 
 #[utoipa::path(
@@ -55,7 +78,9 @@ pub struct MapQuery {
         ("label_id" = Option<i32>, Query, description = "Only media carrying this label"),
         ("start_date" = Option<String>, Query, description = "created_at >= date"),
         ("end_date" = Option<String>, Query, description = "created_at < date+1d"),
-        ("device_id" = Option<String>, Query, description = "Only media from this device")
+        ("device_id" = Option<String>, Query, description = "Only media from this device"),
+        ("page" = Option<usize>, Query, description = "Page number, 1-based"),
+        ("limit" = Option<usize>, Query, description = "Points per page (capped)")
     ),
     responses(
         (status = 200, description = "Geotagged media points", body = MapPointsResponse),
@@ -125,7 +150,17 @@ pub async fn get_map_points(
 
     let where_clause = conditions.join(" AND ");
 
-    let sql = format!(
+    // Total match count (bounded by the same filters) — enables pagination.
+    let count_sql = format!(
+        "SELECT COUNT(*) FROM ( \
+            SELECT DISTINCT i.hash FROM images i \
+            LEFT JOIN starred_images s ON i.hash = s.hash AND s.user_id = $1 \
+            WHERE {} \
+        ) t",
+        where_clause
+    );
+
+    let select_sql = format!(
         "SELECT i.hash, ST_X(i.location::geometry) AS lon, ST_Y(i.location::geometry) AS lat, \
                 i.created_at, i.place, \
                 CASE WHEN s.hash IS NOT NULL THEN true ELSE false END AS starred, \
@@ -133,8 +168,11 @@ pub async fn get_map_points(
          FROM images i \
          LEFT JOIN starred_images s ON i.hash = s.hash AND s.user_id = $1 \
          WHERE {} \
-         ORDER BY i.created_at DESC",
-        where_clause
+         ORDER BY i.created_at DESC \
+         LIMIT ${} OFFSET ${}",
+        where_clause,
+        param_count + 1,
+        param_count + 2
     );
 
     let user_uuid = utils::parse_user_uuid(&claims.user_id)?;
@@ -160,7 +198,26 @@ pub async fn get_map_points(
         params.push(ed);
     }
 
-    let rows = match client.query(&sql, &params).await {
+    let total: i64 = match client.query(&count_sql, &params[..param_count]).await {
+        Ok(rows) => rows[0].get::<_, i64>(0),
+        Err(e) => {
+            error!("Failed to count map points: {}", e);
+            return Ok(HttpResponse::InternalServerError().json(serde_json::json!({
+                "error": "Failed to load map points"
+            })));
+        }
+    };
+
+    let page = query.page.max(1);
+    let limit = query.limit.clamp(1, MAP_LIMIT_MAX);
+    let offset = (page - 1) * limit;
+
+    let limit_i64 = limit as i64;
+    let offset_i64 = offset as i64;
+    params.push(&limit_i64);
+    params.push(&offset_i64);
+
+    let rows = match client.query(&select_sql, &params).await {
         Ok(r) => r,
         Err(e) => {
             error!("Failed to query map points: {}", e);
@@ -183,9 +240,9 @@ pub async fn get_map_points(
             has_thumbnail: row.get(7),
         })
         .collect();
+    let total = total as usize;
 
-    let total = points.len();
-    info!("Returned {} map points for user {}", total, claims.user_id);
+    info!("Returned {} of {} map points for user {}", points.len(), total, claims.user_id);
 
     Ok(HttpResponse::Ok().json(MapPointsResponse { points, total }))
 }

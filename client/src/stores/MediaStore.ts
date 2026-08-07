@@ -3,6 +3,11 @@ import type { RootStore } from "./RootStore";
 import axios from "../api/axiosConfig";
 import { logger } from "../utils/logger";
 
+// Map paging: the backend caps /map/media responses, so the client pages
+// through until it has every geotagged point (bounded by MAP_MAX_PAGES).
+const MAP_PAGE_LIMIT = 10000;
+const MAP_MAX_PAGES = 100;
+
 export interface MapPoint {
     hash: string;
     lon: number;
@@ -278,17 +283,33 @@ export class MediaStore {
         this.mapError = "";
         if (this.mapPoints.length === 0) this.isMapLoading = true;
         try {
-            const params = new URLSearchParams({ starred_only: this.filters.starredOnly.toString() });
+            const params = new URLSearchParams({
+                starred_only: this.filters.starredOnly.toString(),
+                page: "1",
+                limit: MAP_PAGE_LIMIT.toString(),
+            });
             if (this.filters.startDate) params.append('start_date', this.filters.startDate);
             if (this.filters.endDate) params.append('end_date', this.filters.endDate);
             if (this.filters.selectedLabelId !== null) params.append('label_id', this.filters.selectedLabelId.toString());
             if (this.filters.selectedDeviceId !== 'all') params.append('device_id', this.filters.selectedDeviceId);
 
-            const response = await axios.get<{ points: MapPoint[]; total: number }>(`/map/media?${params}`);
-            if (seq !== this.requestSeq) return; // stale response — discard
+            // The server pages /map/media (capped at 10000/page); collect all
+            // pages so supercluster can cluster the full geotagged library.
+            let collected: MapPoint[] = [];
+            let total = 0;
+            let page = 1;
+            do {
+                params.set("page", String(page));
+                const response = await axios.get<{ points: MapPoint[]; total: number }>(`/map/media?${params}`);
+                if (seq !== this.requestSeq) return; // stale response — discard
+                total = response.data.total;
+                collected = [...collected, ...response.data.points];
+                page += 1;
+            } while (collected.length < total && page <= MAP_MAX_PAGES);
+
             runInAction(() => {
-                this.mapPoints = response.data.points;
-                this.mapTotal = response.data.total;
+                this.mapPoints = collected;
+                this.mapTotal = total;
                 this.isMapLoading = false;
             });
         } catch (error) {
