@@ -437,3 +437,69 @@ async fn delete_shard_remote(
         Err(e) => warn!("Retention: failed to delete shard {} from node {}: {}", &shard_hash_hex[..16.min(shard_hash_hex.len())], node_id, e),
     }
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use std::io::Write;
+
+    /// Build a Config from a minimal YAML (serde defaults fill the rest).
+    fn mini_config(images_dir: Option<String>) -> Config {
+        let mut c: Config = serde_yaml::from_str("api_secret_key: \"test-secret-for-unit-tests-0123456789abcdef01234567\"\n")
+            .expect("minimal config");
+        c.images_dir = images_dir;
+        c
+    }
+
+    #[actix_web::test]
+    async fn blake3_file_hex_hashes_temp_file() {
+        let dir = std::env::temp_dir().join(format!("reminisce_bk_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("data.bin");
+        let mut f = std::fs::File::create(&p).unwrap();
+        f.write_all(b"hello backup coverage").unwrap();
+        drop(f);
+
+        let hex = blake3_file_hex(&p).await.expect("hash ok");
+        assert_eq!(hex.len(), 64);
+        assert_eq!(hex, blake3::hash(b"hello backup coverage").to_hex().to_string());
+
+        let missing = dir.join("nope.bin");
+        assert!(blake3_file_hex(&missing).await.is_err(), "missing file errors");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[actix_web::test]
+    async fn dump_database_requires_configured_url() {
+        let cfg = mini_config(None);
+        let res = dump_database(&cfg).await;
+        assert!(res.is_err(), "empty database_url -> Err");
+    }
+
+    #[actix_web::test]
+    async fn append_key_to_escrow_writes_line_with_0600() {
+        let base = std::env::temp_dir()
+            .join(format!("reminisce_escrow_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let media = base.join("media");
+        std::fs::create_dir_all(&media).unwrap();
+
+        let cfg = mini_config(Some(media.to_string_lossy().to_string()));
+        append_key_to_escrow(&cfg, "hash001", &[0x01, 0x02, 0x03]);
+
+        // escrow lives at <base>/p2p_keys.escrow (parent of the images dir).
+        let escrow = base.join("p2p_keys.escrow");
+        let content = std::fs::read_to_string(&escrow).expect("escrow written");
+        assert!(content.contains("dbbackup:hash001,010203"), "escrow line: {}", content);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&escrow).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "escrow file is 0600");
+        }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+}
+

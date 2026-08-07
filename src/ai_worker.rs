@@ -1091,6 +1091,7 @@ async fn update_status_metrics(client: &tokio_postgres::Client) -> Result<(), to
 #[cfg(test)]
 mod tests {
     use super::*;
+    use image::ImageEncoder;
 
     fn dummy_faces(bboxes: &[[i32; 4]]) -> Vec<(Vec<i32>, pgvector::Vector, f32)> {
         bboxes.iter().map(|b| {
@@ -1142,4 +1143,36 @@ mod tests {
         assert_eq!(result[0].0, vec![200, 200, 400, 400]);
         assert_eq!(result[1].0, vec![1000, 800, 600, 600]);
     }
+
+    #[actix_web::test]
+    async fn resize_image_for_ai_keeips_small_images() {
+        // A tiny 4x4 image is already <= max_dim -> returned byte-for-byte.
+        let img = make_test_jpeg(4, 4);
+        let out = resize_image_for_ai(img.clone(), 256).await.expect("resize ok");
+        assert_eq!(out, img, "small image returned unchanged");
+    }
+
+    #[actix_web::test]
+    async fn resize_image_for_ai_downscales_large_images() {
+        let img = make_test_jpeg(800, 600);
+        let out = resize_image_for_ai(img, 200).await.expect("resize ok");
+        let decoded = image::load_from_memory(&out).expect("decodes as jpeg");
+        assert!(decoded.width() <= 200 && decoded.height() <= 200,
+                "downscaled to max_dim: {}x{}", decoded.width(), decoded.height());
+    }
+
+    #[actix_web::test]
+    async fn resize_image_for_ai_rejects_garbage() {
+        assert!(resize_image_for_ai(b"not an image".to_vec(), 256).await.is_err());
+    }
+
+    fn make_test_jpeg(w: u32, h: u32) -> Vec<u8> {
+        let img = image::RgbImage::from_pixel(w, h, image::Rgb([200, 30, 40]));
+        let mut buf = std::io::Cursor::new(Vec::new());
+        image::codecs::jpeg::JpegEncoder::new(&mut buf)
+            .write_image(img.as_raw(), w, h, image::ColorType::Rgb8)
+            .expect("encode");
+        buf.into_inner()
+    }
+
 }

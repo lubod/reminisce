@@ -111,7 +111,7 @@ async fn replicate_all(
 /// `target_shards`, so the next replication batch re-shards them from their local originals.
 /// Only shards on recently-active nodes count, mirroring the status/verify queries. Capped to
 /// `limit` files per table per cycle to keep self-healing bounded.
-async fn requeue_under_replicated(
+pub async fn requeue_under_replicated(
     pool: &Pool,
     limit: i64,
     target_shards: i64,
