@@ -44,6 +44,7 @@ pub mod services {
     pub mod pool_stats;
     pub mod geodb_stats;
     pub mod geocoding;
+    pub mod map;
     pub mod ai_settings;
     pub mod face_detection;
     pub mod person;
@@ -107,6 +108,7 @@ pub use crate::services::stats::get_stats;
 pub use crate::services::pool_stats::get_pool_stats;
 pub use crate::services::geodb_stats::get_geodb_stats;
 pub use crate::services::geocoding::search_places;
+pub use crate::services::map::get_map_points;
 pub use crate::services::ai_settings::{get_ai_settings, update_ai_settings};
 pub use crate::services::import_dir::{import_directory, get_import_status};
 
@@ -152,6 +154,7 @@ pub use crate::services::import_dir::{import_directory, get_import_status};
         crate::services::pool_stats::get_pool_stats,
         crate::services::geodb_stats::get_geodb_stats,
         crate::services::geocoding::search_places,
+        crate::services::map::get_map_points,
         crate::services::ai_settings::get_ai_settings,
         crate::services::ai_settings::update_ai_settings,
         crate::services::person::get_persons,
@@ -721,6 +724,7 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
                     .service(get_geodb_stats)
                     .service(get_device_ids)
                     .service(search_places)
+                    .service(services::map::get_map_points)
                     .service(get_ai_settings)
                     .service(update_ai_settings)
                     .service(services::person::get_persons)

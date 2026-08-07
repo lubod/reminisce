@@ -11,9 +11,30 @@ const api = vi.hoisted(() => {
         name: `n${i}.jpg`,
         created_at: "2024-01-15T10:00:00Z",
     }));
+    const state = { mapParams: "" };
     return {
+        state,
         get: async (url: string) => {
             const u = new URL(url, "http://localhost");
+            if (url.includes("/map/media")) {
+                state.mapParams = u.searchParams.toString();
+                return {
+                    data: {
+                        points: [{
+                            hash: "m1",
+                            lon: 14.42,
+                            lat: 50.08,
+                            created_at: "2024-01-15T10:00:00Z",
+                            place: null,
+                            starred: false,
+                            device_id: null,
+                            has_thumbnail: true,
+                        }],
+                        total: 1,
+                    },
+                    status: 200,
+                };
+            }
             if (url.includes("/search/images")) {
                 const offset = Number(u.searchParams.get("offset") || 0);
                 const limit = Number(u.searchParams.get("limit") || 50);
@@ -196,5 +217,30 @@ describe("search pagination (performSearch)", () => {
         expect(s.allMedia).toHaveLength(120);
         expect(s.searchOffset).toBe(120);
         expect(s.allMediaHasMore).toBe(false);
+    });
+});
+
+
+describe("map points (fetchMapPoints)", () => {
+    it("maps browse filters to query params and stores points", async () => {
+        api.state.mapParams = "";
+        const s = makeStore();
+        s.filters.starredOnly = true;
+        s.filters.startDate = "2024-01-01";
+        s.filters.endDate = "2024-02-01";
+        s.filters.selectedLabelId = 7;
+        s.filters.selectedDeviceId = "devX";
+        s.mapActive = true;
+
+        await s.fetchMapPoints();
+
+        expect(api.state.mapParams).toContain("starred_only=true");
+        expect(api.state.mapParams).toContain("start_date=2024-01-01");
+        expect(api.state.mapParams).toContain("end_date=2024-02-01");
+        expect(api.state.mapParams).toContain("label_id=7");
+        expect(api.state.mapParams).toContain("device_id=devX");
+        expect(s.mapPoints.length).toBe(1);
+        expect(s.mapPoints[0].hash).toBe("m1");
+        expect(s.mapTotal).toBe(1);
     });
 });

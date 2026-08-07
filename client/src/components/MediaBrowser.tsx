@@ -3,7 +3,8 @@ import { observer } from "mobx-react-lite";
 import { useStore } from "../stores/RootStore";
 import type { SearchType, MediaTypeFilter } from "../stores/MediaStore";
 import { MediaLightbox } from "./MediaLightbox";
-import { Star, Search, X, ChevronDown, ChevronUp, SlidersHorizontal, Play, MapPin } from "lucide-react";
+import { Star, Search, X, ChevronDown, ChevronUp, SlidersHorizontal, Play, MapPin, Map, LayoutGrid } from "lucide-react";
+import { MapView } from "./MapView";
 
 export const MediaBrowser = observer(() => {
     const { mediaStore, labelStore } = useStore();
@@ -288,11 +289,29 @@ export const MediaBrowser = observer(() => {
                         <div className="text-[10px] text-gray-500 uppercase tracking-widest font-bold">
                             Showing {mediaStore.allMedia.length} / {mediaStore.totalAllMedia} items
                         </div>
+                        <button
+                            onClick={() => mediaStore.setMapActive(!mediaStore.mapActive)}
+                            disabled={mediaStore.searchMode}
+                            title={mediaStore.searchMode ? "Map is available outside of search" : mediaStore.mapActive ? "Back to grid" : "View on map"}
+                            className={`text-[10px] px-2 py-1 rounded-md flex items-center gap-1 transition-colors ${
+                                mediaStore.searchMode
+                                    ? "text-gray-600 cursor-not-allowed"
+                                    : mediaStore.mapActive
+                                    ? "bg-blue-600 text-white"
+                                    : "text-gray-400 hover:text-white"
+                            }`}
+                        >
+                            {mediaStore.mapActive ? <LayoutGrid size={12} /> : <Map size={12} />}
+                            {mediaStore.mapActive ? "Grid" : "Map"}
+                        </button>
                     </div>
                 </div>
             </div>
 
-            {mediaStore.groupedAllMedia.map((group) => (
+            {mediaStore.mapActive ? (
+                <MapView />
+            ) : (
+            mediaStore.groupedAllMedia.map((group) => (
                 <div key={group.date} className="mb-8 animate-in fade-in slide-in-from-bottom-2 duration-500">
                     <h2 className="text-lg font-bold text-gray-200 border-b border-gray-800 pb-2 mb-4 flex items-center justify-between">
                         {group.displayDate}
@@ -379,28 +398,32 @@ export const MediaBrowser = observer(() => {
                         })}
                     </div>
                 </div>
-            ))}
+            )))}
 
-            {mediaStore.searchMode && !mediaStore.allMediaHasMore && mediaStore.allMedia.length > 0 && (
-                <div className="text-center text-xs text-gray-500 py-3">
-                    End of results ({mediaStore.allMedia.length} / {mediaStore.totalAllMedia})
-                </div>
-            )}
-            {mediaStore.searchMode && mediaStore.allMediaHasMore && (
-                <div className="flex justify-center py-4">
-                    <button
-                        onClick={() => mediaStore.loadMoreAllMedia()}
-                        disabled={mediaStore.isLoadingMoreSearch}
-                        className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-md text-sm"
-                    >
-                        {mediaStore.isLoadingMoreSearch ? "Loading…" : `Show more (${mediaStore.allMedia.length} / ${mediaStore.totalAllMedia})`}
-                    </button>
-                </div>
-            )}
+            {!mediaStore.mapActive && (
+                <>
+                    {mediaStore.searchMode && !mediaStore.allMediaHasMore && mediaStore.allMedia.length > 0 && (
+                        <div className="text-center text-xs text-gray-500 py-3">
+                            End of results ({mediaStore.allMedia.length} / {mediaStore.totalAllMedia})
+                        </div>
+                    )}
+                    {mediaStore.searchMode && mediaStore.allMediaHasMore && (
+                        <div className="flex justify-center py-4">
+                            <button
+                                onClick={() => mediaStore.loadMoreAllMedia()}
+                                disabled={mediaStore.isLoadingMoreSearch}
+                                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-md text-sm"
+                            >
+                                {mediaStore.isLoadingMoreSearch ? "Loading…" : `Show more (${mediaStore.allMedia.length} / ${mediaStore.totalAllMedia})`}
+                            </button>
+                        </div>
+                    )}
 
-            <div ref={observerTarget} className="h-20 flex items-center justify-center">
-                {(mediaStore.isLoadingMoreAllMedia || mediaStore.isLoadingMoreSearch) && <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />}
-            </div>
+                    <div ref={observerTarget} className="h-20 flex items-center justify-center">
+                        {(mediaStore.isLoadingMoreAllMedia || mediaStore.isLoadingMoreSearch) && <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />}
+                    </div>
+                </>
+            )}
 
             <MediaLightbox />
         </div>

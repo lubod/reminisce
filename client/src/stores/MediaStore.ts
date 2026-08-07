@@ -3,6 +3,17 @@ import type { RootStore } from "./RootStore";
 import axios from "../api/axiosConfig";
 import { logger } from "../utils/logger";
 
+export interface MapPoint {
+    hash: string;
+    lon: number;
+    lat: number;
+    created_at: string;
+    place?: string | null;
+    starred: boolean;
+    device_id?: string | null;
+    has_thumbnail: boolean;
+}
+
 export interface MediaItem {
     hash: string;
     name: string;
@@ -82,6 +93,13 @@ export class MediaStore {
     allMediaCurrentPage: number = 1;
     totalAllMedia: number = 0;
     allMediaHasMore: boolean = true;
+
+    // Map view state
+    mapActive: boolean = false;
+    mapPoints: MapPoint[] = [];
+    isMapLoading: boolean = false;
+    mapTotal: number = 0;
+    mapError: string = "";
     isLoadingMoreAllMedia: boolean = false;
 
     // "Orientation check" tab: images with no EXIF metadata (rely on AI orientation)
@@ -252,6 +270,55 @@ export class MediaStore {
         this.fetchImages(1, 50, false);
         this.fetchVideos(1, 50, false);
         this.fetchAllMedia(1, 50, false);
+        if (this.mapActive) this.fetchMapPoints();
+    };
+
+    fetchMapPoints = async () => {
+        const seq = this.requestSeq;
+        this.mapError = "";
+        if (this.mapPoints.length === 0) this.isMapLoading = true;
+        try {
+            const params = new URLSearchParams({ starred_only: this.filters.starredOnly.toString() });
+            if (this.filters.startDate) params.append('start_date', this.filters.startDate);
+            if (this.filters.endDate) params.append('end_date', this.filters.endDate);
+            if (this.filters.selectedLabelId !== null) params.append('label_id', this.filters.selectedLabelId.toString());
+            if (this.filters.selectedDeviceId !== 'all') params.append('device_id', this.filters.selectedDeviceId);
+
+            const response = await axios.get<{ points: MapPoint[]; total: number }>(`/map/media?${params}`);
+            if (seq !== this.requestSeq) return; // stale response — discard
+            runInAction(() => {
+                this.mapPoints = response.data.points;
+                this.mapTotal = response.data.total;
+                this.isMapLoading = false;
+            });
+        } catch (error) {
+            if (seq === this.requestSeq) {
+                logger.error("Failed to load map points", error);
+                this.mapError = "Failed to load map";
+                this.isMapLoading = false;
+            }
+        }
+    };
+
+    setMapActive = (active: boolean) => {
+        this.mapActive = active;
+        if (active && !this.searchMode) this.fetchMapPoints();
+    };
+
+    openMapPhoto = (hash: string) => {
+        const point = this.mapPoints.find(p => p.hash === hash);
+        if (!point) return;
+        const item: MediaItem = {
+            hash: point.hash,
+            name: "",
+            created_at: point.created_at,
+            place: point.place ?? undefined,
+            starred: point.starred,
+            thumbnailUrl: `/api/thumbnail/${point.hash}`,
+            media_type: "image",
+        };
+        this.customLightboxItems = [item];
+        this.openMediaLightbox(0, "custom");
     };
 
     clearAllFilters = () => {
