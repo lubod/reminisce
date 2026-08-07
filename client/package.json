@@ -9,7 +9,9 @@
     "lint": "eslint .",
     "test": "vitest run",
     "preview": "vite preview",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "coverage:gate": "vitest run --coverage -c vitest.coverage.gate.ts",
+    "coverage:full": "vitest run --coverage"
   },
   "dependencies": {
     "@opentelemetry/api": "^1.7.0",
