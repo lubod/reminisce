@@ -73,12 +73,14 @@ fn build_arm_where(
     if let Some(p) = end_param {
         conds.push(format!("{}.created_at < ${}", alias, p));
     }
-    if let (Some(lon), Some(lat)) = (lon_param, lat_param) {
-        conds.push(format!("{}.location IS NOT NULL", alias));
-        conds.push(format!(
-            "ST_DWithin({}.location, ST_MakePoint(${}, ${})::geography, {})",
-            alias, lon, lat, radius_meters
-        ));
+    if alias == "i" {
+        if let (Some(lon), Some(lat)) = (lon_param, lat_param) {
+            conds.push(format!("{}.location IS NOT NULL", alias));
+            conds.push(format!(
+                "ST_DWithin({}.location, ST_MakePoint(${}, ${})::geography, {})",
+                alias, lon, lat, radius_meters
+            ));
+        }
     }
     conds.join(" AND ")
 }
@@ -205,12 +207,14 @@ pub async fn search_by_text(
         if let Some(p) = end_param {
             conds.push(format!("{}.created_at < ${}", alias, p));
         }
-        if let (Some(lon), Some(lat)) = (lon_param, lat_param) {
-            conds.push(format!("{}.location IS NOT NULL", alias));
-            conds.push(format!(
-                "ST_DWithin({}.location, ST_MakePoint(${}, ${})::geography, {})",
-                alias, lon, lat, radius_meters
-            ));
+        if alias == "i" {
+            if let (Some(lon), Some(lat)) = (lon_param, lat_param) {
+                conds.push(format!("{}.location IS NOT NULL", alias));
+                conds.push(format!(
+                    "ST_DWithin({}.location, ST_MakePoint(${}, ${})::geography, {})",
+                    alias, lon, lat, radius_meters
+                ));
+            }
         }
         conds.join(" AND ")
     };
@@ -218,7 +222,7 @@ pub async fn search_by_text(
     let img_where = anchor("i", "image_labels", "image_hash", "image_user_id");
     let vid_where = anchor("v", "video_labels", "video_hash", "video_user_id");
     let img_distance = build_distance_expr(lon_param, lat_param, "i");
-    let vid_distance = build_distance_expr(lon_param, lat_param, "v");
+    let vid_distance = build_distance_expr(None, None, "v");
 
     let ts_rank = |alias: &str| -> String {
         format!(
@@ -439,7 +443,7 @@ pub async fn search_hybrid(
     );
 
     let img_distance = build_distance_expr(lon_param, lat_param, "i");
-    let vid_distance = build_distance_expr(lon_param, lat_param, "v");
+    let vid_distance = build_distance_expr(None, None, "v");
 
     // Hybrid similarity: vector*0.7 + ts_rank*0.3
     let hybrid_score = |alias: &str| -> String {
