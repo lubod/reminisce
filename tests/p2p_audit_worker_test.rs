@@ -225,3 +225,80 @@ async fn test_find_undersharded_respects_limit() {
     let results = find_undersharded_files(&pool, 3).await.expect("query should succeed");
     assert!(results.len() <= 3, "limit of 3 should be respected");
 }
+
+
+async fn insert_video_synced(client: &deadpool_postgres::Object, hash: &str) {
+    let uid = Uuid::parse_str(TEST_USER_ID).unwrap();
+    client.execute(
+        "INSERT INTO videos (user_id, deviceid, hash, name, ext, type, has_thumbnail, p2p_synced_at, p2p_encryption_key, p2p_encrypted_size)
+         VALUES ($1, 'test', $2, $3, 'mp4', 'camera', false, NOW(), '\\x0000000000000000000000000000000000000000000000000000000000000000'::bytea, 100)",
+        &[&uid, &hash, &format!("{}.mp4", hash)],
+    ).await.expect("insert synced video");
+}
+
+#[tokio::test]
+#[serial]
+async fn test_find_undersharded_includes_videos() {
+    let (pool, _db) = setup_test_database_with_instance().await;
+    let client = pool.get().await.unwrap();
+
+    let hash = "undersharded_video_001";
+    insert_video_synced(&client, hash).await;
+    insert_shard(&client, hash, 0).await;
+    insert_shard(&client, hash, 1).await;
+
+    let results = find_undersharded_files(&pool, 100).await.expect("query should succeed");
+    assert!(results.contains(&hash.to_string()), "synced video with 2/5 shards should appear");
+}
+
+#[tokio::test]
+#[serial]
+async fn test_find_undersharded_respects_custom_data_shards() {
+    let (pool, _db) = setup_test_database_with_instance().await;
+    let client = pool.get().await.unwrap();
+
+    // Image with p2p_data_shards = 1 and a single shard -> not undersharded.
+    let uid = Uuid::parse_str(TEST_USER_ID).unwrap();
+    let hash = "undersharded_override_001";
+    client.execute(
+        "INSERT INTO images (user_id, deviceid, hash, name, ext, type, has_thumbnail, p2p_synced_at, p2p_data_shards)
+         VALUES ($1, 'test', $2, $3, 'jpg', 'camera', false, NOW(), 1)",
+        &[&uid, &hash, &format!("{}.jpg", hash)],
+    ).await.unwrap();
+    insert_shard(&client, hash, 0).await;
+
+    let results = find_undersharded_files(&pool, 100).await.expect("query should succeed");
+    assert!(!results.contains(&hash.to_string()), "1 shard meets its data_shards of 1");
+
+    // Same again but with 2 required shards + 1 present -> undersharded.
+    let hash2 = "undersharded_override_002";
+    client.execute(
+        "INSERT INTO images (user_id, deviceid, hash, name, ext, type, has_thumbnail, p2p_synced_at, p2p_data_shards)
+         VALUES ($1, 'test', $2, $3, 'jpg', 'camera', false, NOW(), 2)",
+        &[&uid, &hash2, &format!("{}.jpg", hash2)],
+    ).await.unwrap();
+    insert_shard(&client, hash2, 0).await;
+
+    let results2 = find_undersharded_files(&pool, 100).await.expect("query should succeed");
+    assert!(results2.contains(&hash2.to_string()), "1 shard is below its data_shards of 2");
+}
+
+#[tokio::test]
+#[serial]
+async fn test_cleanup_purges_shards_of_deleted_video() {
+    let (pool, _db) = setup_test_database_with_instance().await;
+    let client = pool.get().await.unwrap();
+
+    let uid = Uuid::parse_str(TEST_USER_ID).unwrap();
+    let hash = "orphan_cleanup_video_001";
+    client.execute(
+        "INSERT INTO videos (user_id, deviceid, hash, name, ext, type, has_thumbnail, p2p_synced_at, deleted_at)
+         VALUES ($1, 'test', $2, $3, 'mp4', 'camera', false, NOW(), NOW())",
+        &[&uid, &hash, &format!("{}.mp4", hash)],
+    ).await.unwrap();
+    insert_shard(&client, hash, 0).await;
+    insert_shard(&client, hash, 1).await;
+
+    let deleted = cleanup_orphaned_shards(&pool).await.expect("cleanup should succeed");
+    assert_eq!(deleted, 2, "deleted video shards purged");
+}

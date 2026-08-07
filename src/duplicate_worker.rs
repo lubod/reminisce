@@ -73,7 +73,7 @@ pub async fn start_duplicate_worker(
     .await;
 }
 
-async fn process_batch(
+pub async fn process_batch(
     pool: &MainDbPool,
     status: &SharedDuplicateStatus,
 ) -> Result<bool, String> {

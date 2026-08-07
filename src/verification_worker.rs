@@ -40,7 +40,7 @@ pub async fn start_verification_worker(
     ).await;
 }
 
-async fn verify_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -> Result<bool, String> {
+pub async fn verify_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -> Result<bool, String> {
     let client = pool.0.get().await.map_err(|e| format!("Failed to get database client: {}", e))?;
 
     let load_average = get_load_average().await;

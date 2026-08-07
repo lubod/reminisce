@@ -1033,5 +1033,85 @@ mod tests {
         assert!(parse_date_from_image_name("photo.png").is_none());
         assert!(parse_date_from_image_name("VID_20240101_000000.mp4").is_none(), "video names excluded");
     }
+
+    #[test]
+    fn determines_media_type_from_name() {
+        assert_eq!(determine_image_type("/storage/emulated/0/DCIM/Camera/IMG_1.jpg"), media::TYPE_CAMERA);
+        assert_eq!(determine_image_type("WhatsApp Image x.jpg"), media::TYPE_WHATSAPP);
+        assert_eq!(determine_image_type("Screenshot_1.png"), media::TYPE_SCREENSHOT);
+        assert_eq!(determine_image_type("photo.png"), media::TYPE_OTHER);
+
+        assert_eq!(determine_video_type("/DCIM/Camera/VID_1.mp4"), media::TYPE_CAMERA);
+        assert_eq!(determine_video_type("DJI_0001.mp4"), media::TYPE_CAMERA);
+        assert_eq!(determine_video_type("WhatsApp Video.mp4"), media::TYPE_WHATSAPP);
+        assert_eq!(determine_video_type("screen recording.mp4"), media::TYPE_SCREEN_RECORDING);
+        assert_eq!(determine_video_type("clip.mp4"), media::TYPE_OTHER);
+    }
+
+    #[test]
+    fn parses_video_name_dates() {
+        let dt = parse_date_from_video_name("VID_20240220_101530.mp4").expect("camera video");
+        assert_eq!(dt.to_rfc3339(), "2024-02-20T10:15:30+00:00");
+        assert!(parse_date_from_video_name("IMG_20240101_000000.jpg").is_none(), "image names excluded");
+        assert!(parse_date_from_video_name("clip.mp4").is_none());
+    }
+
+    #[test]
+    fn orient_image_to_jpeg_rejects_garbage() {
+        assert!(orient_image_to_jpeg(b"not an image", 6).is_err());
+    }
+
+    #[test]
+    fn rotate_png_rejects_garbage() {
+        assert!(rotate_png_bytes(b"not a png", 6).is_none());
+    }
+
+    #[test]
+    fn exif_orientation_round_trip() {
+        // Not a JPEG -> no orientation, inject returns input unchanged.
+        assert_eq!(read_exif_orientation_from_bytes(b"garbage"), None);
+        let unchanged = inject_exif_orientation(b"garbage", 6);
+        assert_eq!(unchanged, b"garbage".to_vec());
+
+        // Minimal JPEG: SOI + a JFIF APP0 segment + EOI.
+        let jpeg: Vec<u8> = vec![
+            0xFF, 0xD8,
+            0xFF, 0xE0, 0x00, 0x10, b'J', b'F', b'I', b'F', 0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01,
+            0xFF, 0xD9,
+        ];
+
+        // Inject orientation 6, then read it back.
+        let out = inject_exif_orientation(&jpeg, 6);
+        assert!(out.len() > jpeg.len(), "APP1 block appended");
+        assert_eq!(&out[6..12], b"Exif\0\0");
+        assert_eq!(read_exif_orientation_from_bytes(&out), Some(6), "round-trip orientation");
+
+        // Already contains EXIF APP1 -> returned byte-for-byte unchanged.
+        let again = inject_exif_orientation(&out, 8);
+        assert_eq!(again, out);
+    }
+
+    #[actix_web::test]
+    async fn hash_file_is_deterministic_64_hex() {
+        let dir = std::env::temp_dir().join(format!("reminisce_hash_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("f.bin");
+        std::fs::write(&p, b"hello coverage bytes").unwrap();
+
+        let h1 = hash_file_blake3(&p).await.expect("hash ok");
+        let h2 = hash_file_blake3(&p).await.expect("hash ok");
+        assert_eq!(h1.len(), 64);
+        assert!(h1.bytes().all(|b| b.is_ascii_hexdigit()));
+        assert_eq!(h1, h2);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[actix_web::test]
+    async fn extract_video_keyframes_reports_missing_input() {
+        let missing = std::env::temp_dir().join(format!("no_such_video_{}.mp4", std::process::id()));
+        let res = extract_video_keyframes(&missing, 1.0, 3).await;
+        assert!(res.is_err(), "missing input must be an error, got {:?}", res);
+    }
+
 }
 

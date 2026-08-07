@@ -803,3 +803,99 @@ pub fn init_metrics() {
     Lazy::force(&P2P_SHARDS_REPAIR_FAILED_TOTAL);
     Lazy::force(&P2P_ORPHANED_SHARDS_CLEANED_TOTAL);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Forcing every metric (via init_metrics) plus a recording call per metric
+    /// type covers the static registrations and keeps them usable.
+    #[test]
+    fn all_metrics_register_and_record() {
+        // Lazy::force runs each closure exactly once, so this covers every
+        // static registration and is idempotent across repeated runs.
+        init_metrics();
+
+        // Touch every metric type so the recording API paths are exercised.
+        for i in 1..=3 {
+            USER_REGISTRATIONS_TOTAL.inc();
+            USER_LOGINS_TOTAL.inc();
+            USER_LOGIN_FAILURES_TOTAL.inc();
+            MEMORIES_CREATED_TOTAL.inc();
+            MEMORIES_RETRIEVED_TOTAL.inc();
+            MEMORIES_DELETED_TOTAL.inc();
+            MEMORIES_SHARED_TOTAL.inc();
+            DB_CONNECTION_ERRORS_TOTAL.inc();
+            SLOW_QUERIES_TOTAL.inc();
+            P2P_CONNECTIONS_TOTAL.inc();
+            NAT_TRAVERSAL_SUCCESS_TOTAL.inc();
+            NAT_TRAVERSAL_FAILURES_TOTAL.inc();
+            FILE_UPLOADS_TOTAL.inc();
+            BYTES_UPLOADED_TOTAL.inc_by(i as u64);
+            APPLICATION_ERRORS_TOTAL.inc();
+            VALIDATION_ERRORS_TOTAL.inc();
+            BACKUP_ATTEMPTS_TOTAL.inc();
+            BACKUP_SUCCESS_TOTAL.inc();
+            BACKUP_FAILURES_TOTAL.inc();
+            BACKUP_DEDUPLICATED_TOTAL.inc();
+            BACKUP_RATE_LIMITED_TOTAL.inc();
+            DB_BACKUP_SUCCESS_TOTAL.inc();
+            DB_BACKUP_FAILURES_TOTAL.inc();
+            DB_BACKUP_PRUNED_TOTAL.inc();
+            VERIFICATION_SUCCESS_TOTAL.inc();
+            VERIFICATION_FAILURES_TOTAL.inc();
+            AI_DESCRIPTION_SUCCESS_TOTAL.inc();
+            AI_DESCRIPTION_FAILURES_TOTAL.inc();
+            EMBEDDING_SUCCESS_TOTAL.inc();
+            EMBEDDING_FAILURES_TOTAL.inc();
+            FACE_DETECTION_SUCCESS_TOTAL.inc();
+            FACE_DETECTION_FAILURES_TOTAL.inc();
+            FACES_DETECTED_TOTAL.inc();
+            THUMBNAIL_SUCCESS_TOTAL.inc();
+            THUMBNAIL_FAILURES_TOTAL.inc();
+            ORIENTATION_SUCCESS_TOTAL.inc();
+            ORIENTATION_FAILURES_TOTAL.inc();
+            P2P_SHARDS_AUDITED_TOTAL.inc();
+            P2P_SHARDS_REPAIRED_TOTAL.inc();
+            P2P_SHARDS_REPAIR_FAILED_TOTAL.inc();
+            P2P_ORPHANED_SHARDS_CLEANED_TOTAL.inc();
+
+            ACTIVE_SESSIONS.set(i);
+            DB_POOL_SIZE.set(i);
+            DB_POOL_AVAILABLE.set(i);
+            DB_POOL_ACTIVE.set(i);
+            DB_POOL_MAX_SIZE.set(i);
+            DB_POOL_UTILIZATION.set(i);
+            BACKUP_PEERS_AVAILABLE.set(i);
+            DB_BACKUP_SNAPSHOTS_KEPT.set(i);
+            TOTAL_IMAGES.set(i);
+            THUMBNAIL_COUNT.set(i);
+            THUMBNAIL_COVERAGE.set(0.5);
+            IMAGES_WITH_EMBEDDING.set(i);
+            IMAGES_WITH_DESCRIPTION.set(i);
+            IMAGES_FACE_PROCESSED.set(i);
+            DUPLICATE_PAIRS_TOTAL.set(i);
+            DUPLICATE_CHECKED_IMAGES.set(i);
+
+            DB_QUERY_DURATION.observe(0.01 * i as f64);
+            UPLOAD_DURATION.observe(0.5);
+            BACKUP_SIZE_BYTES.observe(1024.0 * i as f64);
+            BACKUP_DURATION_SECONDS.observe(2.0);
+            DB_BACKUP_SIZE_BYTES.observe(2048.0);
+            DB_BACKUP_DURATION_SECONDS.observe(3.0);
+            VERIFICATION_DURATION.observe(1.0);
+            AI_DESCRIPTION_DURATION.observe(0.2);
+            EMBEDDING_DURATION.observe(0.3);
+            FACE_DETECTION_DURATION.observe(0.4);
+            FACE_CLUSTERING_DURATION.observe(0.6);
+            THUMBNAIL_DURATION.observe(0.05);
+            THUMBNAIL_PROCESSING_DELAY.observe(0.1);
+            AI_DESCRIPTION_PROCESSING_DELAY.observe(0.1);
+            EMBEDDING_PROCESSING_DELAY.observe(0.1);
+            FACE_DETECTION_PROCESSING_DELAY.observe(0.1);
+            ORIENTATION_DURATION.observe(0.4);
+            ORIENTATION_PROCESSING_DELAY.observe(0.1);
+        }
+    }
+}
+
