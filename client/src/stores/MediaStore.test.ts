@@ -1,6 +1,33 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { MediaStore, type MediaItem } from "./MediaStore";
 import type { RootStore } from "./RootStore";
+
+// Search pagination tests need a mocked API: a pool of 120 results served in
+// pages, `/thumbnail/{hash}` returning anything (URL.createObjectURL is a no-op
+// in the Node test env and falls back to returning the item unharmed).
+const api = vi.hoisted(() => {
+    const pool = Array.from({ length: 120 }, (_, i) => ({
+        hash: `h${i}`,
+        name: `n${i}.jpg`,
+        created_at: "2024-01-15T10:00:00Z",
+    }));
+    return {
+        get: async (url: string) => {
+            const u = new URL(url, "http://localhost");
+            if (url.includes("/search/images")) {
+                const offset = Number(u.searchParams.get("offset") || 0);
+                const limit = Number(u.searchParams.get("limit") || 50);
+                return { data: { results: pool.slice(offset, offset + limit), total: pool.length }, status: 200 };
+            }
+            return { data: { bytes: 1 }, status: 200 };
+        },
+    };
+});
+
+vi.mock("../api/axiosConfig", () => ({
+    __esModule: true,
+    default: { get: api.get },
+}));
 
 // MediaStore's computed/pure logic (filtering, grouping, lightbox getters) is
 // tested without any network: the MobX filter reaction is debounced (400ms) and
@@ -133,5 +160,41 @@ describe("lightbox getters", () => {
         s.selectedMediaIndex = 1;
         expect(s.isFirstMedia).toBe(false);
         expect(s.isLastMedia).toBe(false);
+    });
+});
+
+
+describe("search pagination (performSearch)", () => {
+    beforeEach(() => {
+        // reset per-test: construct a fresh store inside each test
+    });
+
+    it("loads all pages and flips allMediaHasMore exactly at the end", async () => {
+        const s = makeStore();
+        s.searchType = "semantic";
+        s.filters.allMediaTypeFilter = "all";
+
+        await s.performSearch("sunset");
+        expect(s.allMedia).toHaveLength(50);
+        expect(s.searchOffset).toBe(50);
+        expect(s.totalAllMedia).toBe(120);
+        expect(s.allMediaHasMore).toBe(true);
+
+        await s.performSearch("sunset", true);
+        expect(s.allMedia).toHaveLength(100);
+        expect(s.searchOffset).toBe(100);
+        expect(s.allMediaHasMore).toBe(true);
+
+        await s.performSearch("sunset", true);
+        expect(s.allMedia).toHaveLength(120);
+        expect(s.searchOffset).toBe(120);
+        // offset(100) + rows(20) == total(120) -> no more
+        expect(s.allMediaHasMore).toBe(false);
+
+        // Stale append past the total must not append duplicate content.
+        await s.performSearch("sunset", true);
+        expect(s.allMedia).toHaveLength(120);
+        expect(s.searchOffset).toBe(120);
+        expect(s.allMediaHasMore).toBe(false);
     });
 });

@@ -290,6 +290,11 @@ export class MediaStore {
         const reqSeq = this.requestSeq;
 
         const offset = append ? this.searchOffset : 0;
+        // Guard against an append past the server-reported total (stale hasMore).
+        if (offset > this.totalAllMedia) {
+            runInAction(() => { this.allMediaHasMore = false; this.isLoadingMoreSearch = false; });
+            return;
+        }
 
         try {
             const params = new URLSearchParams({
@@ -319,7 +324,10 @@ export class MediaStore {
             }));
 
             const itemsWithThumbnails = await this.attachThumbnails(searchResults);
-            const gotFullPage = itemsWithThumbnails.length === this.searchPageSize;
+            // More results exist iff the server reports more than we have now
+            // (offset + this page's rows). Do NOT rely on "did we get a full page" —
+            // the +1 probe on the server makes an exhausted page shorter than limit.
+            const hasMoreFromServer = response.data.total > offset + searchResults.length;
             if (reqSeq !== this.requestSeq) { this.revokeThumbnailUrls(itemsWithThumbnails); return; } // stale response — discard
 
             runInAction(() => {
@@ -333,8 +341,7 @@ export class MediaStore {
                 this.totalImages = response.data.total;
                 this.totalAllMedia = response.data.total;
                 this.searchOffset = offset + itemsWithThumbnails.length;
-                // More results available if we got a full page
-                this.allMediaHasMore = gotFullPage;
+                this.allMediaHasMore = hasMoreFromServer;
                 this.hasMore = false;
             });
         } catch (error) {
@@ -518,7 +525,7 @@ export class MediaStore {
     loadMoreAllMedia = () => {
         if (!this.allMediaHasMore) return;
         if (this.searchMode) {
-            if (!this.isLoadingMoreSearch) this.performSearch(this.searchQuery, true);
+            if (!this.isSearching && !this.isLoadingMoreSearch) this.performSearch(this.searchQuery, true);
         } else {
             if (!this.isLoadingMoreAllMedia) this.fetchAllMedia(this.allMediaCurrentPage + 1, 50, true);
         }

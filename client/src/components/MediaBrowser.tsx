@@ -381,6 +381,23 @@ export const MediaBrowser = observer(() => {
                 </div>
             ))}
 
+            {mediaStore.searchMode && !mediaStore.allMediaHasMore && mediaStore.allMedia.length > 0 && (
+                <div className="text-center text-xs text-gray-500 py-3">
+                    End of results ({mediaStore.allMedia.length} / {mediaStore.totalAllMedia})
+                </div>
+            )}
+            {mediaStore.searchMode && mediaStore.allMediaHasMore && (
+                <div className="flex justify-center py-4">
+                    <button
+                        onClick={() => mediaStore.loadMoreAllMedia()}
+                        disabled={mediaStore.isLoadingMoreSearch}
+                        className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-md text-sm"
+                    >
+                        {mediaStore.isLoadingMoreSearch ? "Loading…" : `Show more (${mediaStore.allMedia.length} / ${mediaStore.totalAllMedia})`}
+                    </button>
+                </div>
+            )}
+
             <div ref={observerTarget} className="h-20 flex items-center justify-center">
                 {(mediaStore.isLoadingMoreAllMedia || mediaStore.isLoadingMoreSearch) && <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />}
             </div>
