@@ -181,7 +181,7 @@
             android:paddingStart="8dp"
             android:paddingEnd="8dp"
             android:paddingBottom="6dp"
-            android:background="?android:attr/colorBackground">
+            android:background="#6200EE">
 
             <TextView
                 android:layout_width="wrap_content"

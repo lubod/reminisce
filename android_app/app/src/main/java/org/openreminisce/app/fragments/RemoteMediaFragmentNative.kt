@@ -158,14 +158,20 @@ class RemoteMediaFragmentNative : Fragment(), FilterBottomSheetFragment.OnFilter
     // ── FilterBottomSheetFragment.OnFiltersApplied ────────────────────────
 
     override fun onFiltersApplied(filter: MediaFilter) {
-        // The inline chips remain the single source of truth for media type and
-        // search mode; the bottom sheet only carries dates/star/device/label/location.
-        currentFilter = filter.copy(
-            mediaType = currentMediaTypeFilter(),
-            searchMode = currentSearchMode()
-        )
+        // Media type may be chosen in the sheet OR the inline chips; keep both in
+        // sync and apply the chosen value. Search mode stays owned by the inline chips.
+        currentFilter = filter.copy(searchMode = currentSearchMode())
+        syncMediaTypeChip(currentFilter.mediaType)
         updateFilterBadge()
         resetAndReload()
+    }
+
+    private fun syncMediaTypeChip(t: MediaTypeFilter) {
+        when (t) {
+            MediaTypeFilter.IMAGE -> filterChipGroup.check(R.id.chipImages)
+            MediaTypeFilter.VIDEO -> filterChipGroup.check(R.id.chipVideos)
+            else -> filterChipGroup.check(R.id.chipAll)
+        }
     }
 
     // ── Setup ─────────────────────────────────────────────────────────────
@@ -540,11 +546,6 @@ class RemoteMediaFragmentNative : Fragment(), FilterBottomSheetFragment.OnFilter
         else -> SearchMode.SEMANTIC
     }
 
-    private fun currentMediaTypeFilter(): MediaTypeFilter = when (filterChipGroup.checkedChipId) {
-        R.id.chipImages -> MediaTypeFilter.IMAGE
-        R.id.chipVideos -> MediaTypeFilter.VIDEO
-        else -> MediaTypeFilter.ALL
-    }
 
     companion object {
         fun newInstance() = RemoteMediaFragmentNative()

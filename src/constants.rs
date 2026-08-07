@@ -6,6 +6,8 @@
 /// Media types for images and videos
 pub mod media {
     pub const TYPE_ALL: &str = "all";
+    pub const TYPE_IMAGE: &str = "image";
+    pub const TYPE_VIDEO: &str = "video";
     pub const TYPE_CAMERA: &str = "camera";
     pub const TYPE_WHATSAPP: &str = "whatsapp";
     pub const TYPE_SCREENSHOT: &str = "screenshot";

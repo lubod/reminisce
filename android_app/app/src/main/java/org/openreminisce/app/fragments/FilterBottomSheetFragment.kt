@@ -27,6 +27,7 @@ import org.openreminisce.app.R
 import org.openreminisce.app.model.Label
 import org.openreminisce.app.model.LocationResult
 import org.openreminisce.app.model.MediaFilter
+import org.openreminisce.app.model.MediaTypeFilter
 import org.openreminisce.app.model.SearchMode
 import org.openreminisce.app.repository.LabelRepository
 import org.openreminisce.app.repository.RemoteMediaRepository
@@ -51,6 +52,7 @@ class FilterBottomSheetFragment : BottomSheetDialogFragment() {
             arguments = Bundle().apply {
                 putBoolean(ARG_SHOW_SEARCH_MODE, showSearchMode)
                 // Pass current filter values for pre-population
+                putString("media_type", currentFilter.mediaType.name)
                 putLong("start_date", currentFilter.startDate ?: -1L)
                 putLong("end_date", currentFilter.endDate ?: -1L)
                 putBoolean("starred_only", currentFilter.starredOnly)
@@ -85,6 +87,7 @@ class FilterBottomSheetFragment : BottomSheetDialogFragment() {
         val endDateField = view.findViewById<TextInputEditText>(R.id.endDateField)
         val clearDatesButton = view.findViewById<MaterialButton>(R.id.clearDatesButton)
         val starredSwitch = view.findViewById<SwitchMaterial>(R.id.starredSwitch)
+        val mediaTypeChipGroup = view.findViewById<ChipGroup>(R.id.mediaTypeChipGroup)
         val deviceDropdown = view.findViewById<MaterialAutoCompleteTextView>(R.id.deviceDropdown)
         val labelChipGroup = view.findViewById<ChipGroup>(R.id.labelChipGroup)
         val locationField = view.findViewById<MaterialAutoCompleteTextView>(R.id.locationSearchField)
@@ -105,6 +108,13 @@ class FilterBottomSheetFragment : BottomSheetDialogFragment() {
         clearDatesButton.visibility = if (startDateMs != null || endDateMs != null) View.VISIBLE else View.GONE
 
         starredSwitch.isChecked = args.getBoolean("starred_only", false)
+
+        val savedMediaType = runCatching { MediaTypeFilter.valueOf(args.getString("media_type", "ALL") ?: "ALL") }.getOrDefault(MediaTypeFilter.ALL)
+        when (savedMediaType) {
+            MediaTypeFilter.IMAGE -> mediaTypeChipGroup.check(R.id.filterChipImages)
+            MediaTypeFilter.VIDEO -> mediaTypeChipGroup.check(R.id.filterChipVideos)
+            else -> mediaTypeChipGroup.check(R.id.filterChipAll)
+        }
 
         // Radius slider (hidden until a location is picked, like the web GUI)
         val savedRadius = args.getFloat("radius_km", 10f)
@@ -236,8 +246,14 @@ class FilterBottomSheetFragment : BottomSheetDialogFragment() {
         }
 
         applyButton.setOnClickListener {
+            val mediaType = when (mediaTypeChipGroup.checkedChipId) {
+                R.id.filterChipImages -> MediaTypeFilter.IMAGE
+                R.id.filterChipVideos -> MediaTypeFilter.VIDEO
+                else -> MediaTypeFilter.ALL
+            }
             val deviceId = deviceDropdown.text.toString().trim().takeIf { it.isNotEmpty() }
             val filter = MediaFilter(
+                mediaType = mediaType,
                 starredOnly = starredSwitch.isChecked,
                 startDate = startDateMs,
                 endDate = endDateMs,

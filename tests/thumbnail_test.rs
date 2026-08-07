@@ -691,3 +691,71 @@ async fn test_media_thumbnails_starred_filter_params() {
     let body: serde_json::Value = test::read_body_json(response).await;
     assert_eq!(body["total"].as_i64().unwrap_or(-1), 2, "legacy key 'starred' is ignored by the server (documented Android bug)");
 }
+
+
+// Regression: /media_thumbnails?media_type=image|video must scope by TABLE, not by
+// the unpopulated images/videos `type` column (which was NULL everywhere, so the
+// type filter silently matched nothing on the Android app).
+#[actix_web::test]
+#[serial]
+async fn test_media_thumbnails_media_type_table_scoped() {
+    let (pool, _test_db) = setup_test_database_with_instance().await;
+    let client = pool.get().await.expect("Failed to get client from pool");
+    let config = common::utils::create_test_config();
+    let user_id = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+
+    client
+        .execute(
+            "INSERT INTO images (user_id, hash, name, exif, created_at, deviceid, ext, has_thumbnail) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+            &[&user_id, &"mt_img_hash", &"mt_img.jpg", &None::<&str>, &chrono::Utc::now(), &"dev1", &"jpg", &true],
+        )
+        .await
+        .expect("insert image failed");
+    client
+        .execute(
+            "INSERT INTO videos (user_id, hash, name, created_at, deviceid, ext, has_thumbnail) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7)",
+            &[&user_id, &"mt_vid_hash", &"mt_vid.mp4", &chrono::Utc::now(), &"dev1", &"mp4", &true],
+        )
+        .await
+        .expect("insert video failed");
+
+    let main_pool = common::utils::wrap_main_pool(pool.clone());
+    let geotagging_pool = common::utils::create_geotagging_pool().await;
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(main_pool.clone()))
+            .app_data(web::Data::new(geotagging_pool.clone()))
+            .app_data(web::Data::new(config.clone()))
+            .service(list_all_media_thumbnails)
+    ).await;
+    let token = common::utils::create_test_jwt_token().await;
+
+    // NOTE: nested fn cannot capture `app`; inline instead.
+    let req = test::TestRequest::get().uri("/media_thumbnails?page=1&limit=50")
+        .insert_header(("Authorization", format!("Bearer {}", token))).to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), http::StatusCode::OK);
+    let body: serde_json::Value = test::read_body_json(resp).await;
+    let all: Vec<String> = body["thumbnails"].as_array().unwrap().iter().filter_map(|t| t["hash"].as_str().map(|h| h.to_string())).collect();
+    assert!(all.contains(&"mt_img_hash".to_string()) && all.contains(&"mt_vid_hash".to_string()), "both types with no filter: {:?}", all);
+
+    let req = test::TestRequest::get().uri("/media_thumbnails?page=1&limit=50&media_type=image")
+        .insert_header(("Authorization", format!("Bearer {}", token))).to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), http::StatusCode::OK);
+    let body: serde_json::Value = test::read_body_json(resp).await;
+    let imgs: Vec<String> = body["thumbnails"].as_array().unwrap().iter().filter_map(|t| t["hash"].as_str().map(|h| h.to_string())).collect();
+    assert!(imgs.contains(&"mt_img_hash".to_string()), "media_type=image must include the image: {:?}", imgs);
+    assert!(!imgs.contains(&"mt_vid_hash".to_string()), "media_type=image must exclude videos: {:?}", imgs);
+
+    let req = test::TestRequest::get().uri("/media_thumbnails?page=1&limit=50&media_type=video")
+        .insert_header(("Authorization", format!("Bearer {}", token))).to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), http::StatusCode::OK);
+    let body: serde_json::Value = test::read_body_json(resp).await;
+    let vids: Vec<String> = body["thumbnails"].as_array().unwrap().iter().filter_map(|t| t["hash"].as_str().map(|h| h.to_string())).collect();
+    assert!(vids.contains(&"mt_vid_hash".to_string()), "media_type=video must include the video: {:?}", vids);
+    assert!(!vids.contains(&"mt_img_hash".to_string()), "media_type=video must exclude images: {:?}", vids);
+}

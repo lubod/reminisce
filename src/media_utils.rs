@@ -378,8 +378,13 @@ pub async fn list_thumbnails(
         if device_id.is_some() {
             builder.with_device_id();
         }
-        if media_type != media::TYPE_ALL {
-            builder.with_media_type();
+        // The `type` column is unpopulated, so media type must be scoped by table:
+        // `all` keeps both tables, `image`/`video` keep only their own and zero out
+        // the other (postgres `type` column cannot be trusted for this filter).
+        let wrong_table = (media_type == media::TYPE_IMAGE && !builder.is_images_table())
+            || (media_type == media::TYPE_VIDEO && !builder.is_videos_table());
+        if wrong_table {
+            builder.add_custom_condition("1 = 0".to_string());
         }
         if starred_only {
             builder.with_starred_only();
@@ -516,9 +521,7 @@ pub async fn list_thumbnails(
         device_id_value = dev_id;
         params.push(&device_id_value as &(dyn tokio_postgres::types::ToSql + Sync));
     }
-    if media_type != media::TYPE_ALL {
-        params.push(&media_type as &(dyn tokio_postgres::types::ToSql + Sync));
-    }
+
     if let Some(lbl_id) = label_id {
         label_id_value = lbl_id;
         params.push(&label_id_value as &(dyn tokio_postgres::types::ToSql + Sync));
@@ -620,8 +623,13 @@ pub async fn total_thumbnails(
         if device_id.is_some() {
             builder.with_device_id();
         }
-        if media_type != media::TYPE_ALL {
-            builder.with_media_type();
+        // The `type` column is unpopulated, so media type must be scoped by table:
+        // `all` keeps both tables, `image`/`video` keep only their own and zero out
+        // the other (postgres `type` column cannot be trusted for this filter).
+        let wrong_table = (media_type == media::TYPE_IMAGE && !builder.is_images_table())
+            || (media_type == media::TYPE_VIDEO && !builder.is_videos_table());
+        if wrong_table {
+            builder.add_custom_condition("1 = 0".to_string());
         }
         if starred_only {
             builder.with_starred_only();
@@ -713,9 +721,7 @@ pub async fn total_thumbnails(
         device_id_value = dev_id;
         params.push(&device_id_value as &(dyn tokio_postgres::types::ToSql + Sync));
     }
-    if media_type != media::TYPE_ALL {
-        params.push(&media_type as &(dyn tokio_postgres::types::ToSql + Sync));
-    }
+
     if let Some(lbl_id) = label_id {
         label_id_value = lbl_id;
         params.push(&label_id_value as &(dyn tokio_postgres::types::ToSql + Sync));

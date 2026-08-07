@@ -89,6 +89,11 @@ impl MediaQueryBuilder {
         self.table == tables::IMAGES
     }
 
+    /// True when this builder targets the videos table.
+    pub fn is_videos_table(&self) -> bool {
+        self.table == tables::VIDEOS
+    }
+
     /// Add start date filter condition (created_at >= start_date)
     pub fn with_start_date(&mut self) -> QueryParam {
         self.param_count += 1;
