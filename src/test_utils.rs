@@ -257,7 +257,11 @@ mod tests {
             eprintln!("test_setup_test_database_helper: skipping (no dev PG env configured)");
             return;
         }
-        let pool = setup_test_database().await;
+        // Keep the TestDatabase instance alive for the whole test: setup_test_database()
+        // drops the backing database immediately, which can terminate the pool's
+        // connections mid-test (FATAL: terminating connection due to administrator
+        // command) and surface as a spurious Close.
+        let (pool, _instance) = setup_test_database_with_instance().await;
         let client = pool.get().await.expect("Failed to get client");
 
         let test_user_id = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
