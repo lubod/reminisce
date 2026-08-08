@@ -18,7 +18,7 @@ services:
       "/etc/alloy/config.alloy"
     ]
     ports:
-      - "12345:12345" # Alloy UI
+      - "127.0.0.1:12345:12345" # Alloy UI (loopback only)
     restart: unless-stopped
     deploy:
       resources:
@@ -35,7 +35,7 @@ services:
       - ./observability/alert-rules.yml:/etc/prometheus/alert-rules.yml:ro
       - prometheus_data:/prometheus
     ports:
-      - "9090:9090"
+      - "127.0.0.1:9090:9090"
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
@@ -75,11 +75,10 @@ services:
       - ./observability/dashboards:/var/lib/grafana/dashboards:ro
       - grafana_data:/var/lib/grafana
     environment:
-      - GF_AUTH_ANONYMOUS_ENABLED=true
-      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
-      - GF_AUTH_DISABLE_LOGIN_FORM=true
+      - GF_AUTH_ANONYMOUS_ENABLED=false
+      - GF_AUTH_DISABLE_LOGIN_FORM=false
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     restart: unless-stopped
     depends_on:
       - prometheus

@@ -198,16 +198,17 @@ print_success "init.sql created"
 # Create config.yaml if it doesn't exist
 if [ ! -f "$REMINISCE_DIR/config.yaml" ]; then
     print_info "Creating config.yaml in $REMINISCE_DIR..."
-    cat > "$REMINISCE_DIR/config.yaml" << 'EOF'
+    # Generate a strong random secret so the app never runs with a placeholder.
+    RANDOM_SECRET="$(openssl rand -hex 32 2>/dev/null || head -c 64 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+    cat > "$REMINISCE_DIR/config.yaml" << EOF
 # Database connection string - for Docker setup
 database_url: "postgres://postgres:postgres@postgres:5432/reminisce_db"
 
 # Geotagging database (for reverse geocoding)
 geotagging_database_url: "postgres://postgres:postgres@geotagging-db:5432/geotagging_db"
 
-# Secret key for API authentication
-# IMPORTANT: Change this to a strong random secret!
-api_secret_key: "CHANGE_THIS_TO_A_STRONG_SECRET_KEY"
+# Secret key for API authentication (auto-generated random 64-hex)
+api_secret_key: "$RANDOM_SECRET"
 
 # Directory for storing uploaded images
 images_dir: "uploaded_images"
@@ -226,7 +227,8 @@ ai_service_url: "http://ai-server:8081"
 face_service_url: "http://ai-server:8081"
 EOF
     print_success "config.yaml created at $REMINISCE_DIR/config.yaml"
-    print_warning "Please edit $REMINISCE_DIR/config.yaml and set your api_secret_key!"
+    print_success "api_secret_key auto-generated (random)."
+    print_info "Your random api_secret_key is in: $REMINISCE_DIR/config.yaml"
 else
     print_info "config.yaml already exists, skipping..."
 fi
@@ -374,9 +376,8 @@ echo "  - Iroh Data: $REMINISCE_DIR/iroh_data"
 echo "  - Node Identity: $REMINISCE_DIR/data"
 echo ""
 print_warning "Don't forget to:"
-echo "  1. Edit $REMINISCE_DIR/config.yaml and set a strong api_secret_key"
-echo "  2. For production, replace self-signed certificates with real ones"
-echo "  3. Restart services after changes: cd $REMINISCE_DIR && docker compose restart"
+echo "  1. For production, replace self-signed certificates with real ones"
+echo "  2. Restart services after changes: cd $REMINISCE_DIR && docker compose restart"
 echo ""
 echo "GPU Acceleration:"
 echo "  GPU support is ENABLED BY DEFAULT for Intel, AMD, and NVIDIA GPUs!"
@@ -384,10 +385,9 @@ echo "  The services automatically detect available GPUs via /dev/dri"
 echo "  Falls back to CPU if no GPU is detected"
 echo "  CLIP (semantic search) runs ~10x faster on GPU"
 echo ""
-echo "Login credentials:"
-echo "  - Username: admin"
-echo "  - Password: admin123"
-echo "  - IMPORTANT: Change the password after first login!"
+echo "Admin account:"
+echo "  The first user to open the web UI creates the admin account via the"
+echo "  first-run setup screen. No default password is pre-set."
 echo ""
 INSTALL_FOOTER
 
