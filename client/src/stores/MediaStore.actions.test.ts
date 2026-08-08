@@ -177,7 +177,7 @@ describe("MediaStore video/all-media fetches", () => {
 
         await s.fetchVideos(1, 50);
 
-        const called = api.get.mock.calls.find(c => String(c[0]).includes("/video_thumbnails"));
+        const called = api.get.mock.calls.find(c => String(c[0]).includes("/video_thumbnails"))!;
         const params = new URL(String(called[0]), "http://localhost").searchParams;
         expect(params.get("device_id")).toBe("devA");
         expect(params.get("starred_only")).toBe("true");
@@ -227,7 +227,7 @@ describe("MediaStore no-EXIF + loadMore", () => {
         api.state.totalNoExif = 2;
         const s = makeStore();
         await s.fetchNoExifImages(1, 1);
-        const called = api.get.mock.calls.find(c => String(c[0]).includes("/image_thumbnails"));
+        const called = api.get.mock.calls.find(c => String(c[0]).includes("/image_thumbnails"))!;
         expect(new URL(String(called[0]), "http://localhost").searchParams.get("no_exif")).toBe("true");
         expect(s.noExifImages).toHaveLength(1);
         expect(s.noExifHasMore).toBe(true);
@@ -336,7 +336,7 @@ describe("MediaStore browsing + search actions", () => {
 
         await s.performSearch("sunset");
 
-        const called = api.get.mock.calls.find(c => String(c[0]).includes("/search/images"));
+        const called = api.get.mock.calls.find(c => String(c[0]).includes("/search/images"))!;
         const params = new URL(String(called[0]), "http://localhost").searchParams;
         expect(params.get("query")).toBe("sunset");
         expect(params.get("device_id")).toBe("devA");
