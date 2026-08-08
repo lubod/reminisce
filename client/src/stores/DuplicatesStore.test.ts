@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { DuplicatesStore } from "./DuplicatesStore";
 import type { RootStore } from "./RootStore";
 
@@ -123,5 +123,87 @@ describe("DuplicatesStore", () => {
         mocks.api.post.mockImplementationOnce(async () => { throw new Error("x"); });
         await s.deleteImage("d");
         expect(s.error).toBe("Failed to delete image");
+    });
+});
+
+describe("DuplicatesStore worker status + scan", () => {
+    beforeEach(() => {
+        mocks.clear();
+        vi.useRealTimers();
+    });
+    afterEach(() => vi.useRealTimers());
+
+    it("fetchWorkerStatus populates status (and tolerates failure)", async () => {
+        mocks.routes["/duplicates/status"] = () => ({ data: { running: true, checked_images: 10, total_images: 100, total_pairs: 5, last_completed_at: null } });
+        const s = makeStore();
+        await s.fetchWorkerStatus();
+        expect(s.workerStatus?.running).toBe(true);
+        expect(s.workerStatus?.total_images).toBe(100);
+
+        mocks.routes["/duplicates/status"] = () => { throw new Error("x"); };
+        await s.fetchWorkerStatus();
+        expect(s.isLoading).toBe(false);
+    });
+
+    it("startStatusPolling polls periodically until stopped", async () => {
+        const s = makeStore();
+        vi.useFakeTimers();
+        const callsBefore = mocks.api.get.mock.calls.length;
+
+        s.startStatusPolling();
+        expect(mocks.api.get.mock.calls.length).toBe(callsBefore + 1);
+
+        vi.advanceTimersByTime(5000);
+        expect(mocks.api.get.mock.calls.length).toBe(callsBefore + 2);
+
+        s.stopStatusPolling();
+        const afterStop = mocks.api.get.mock.calls.length;
+        vi.advanceTimersByTime(20000);
+        expect(mocks.api.get.mock.calls.length).toBe(afterStop);
+    });
+
+    it("stopStatusPolling is a no-op when never started", () => {
+        const s = makeStore();
+        expect(() => s.stopStatusPolling()).not.toThrow();
+    });
+
+    it("triggerScan posts, refreshes status, and clears busy state", async () => {
+        mocks.routes["/duplicates/status"] = () => ({ data: { running: true, checked_images: 0, total_images: 0, total_pairs: 0, last_completed_at: null } });
+        mocks.api.post.mockImplementationOnce(async () => ({ data: {}, status: 200 }));
+        const s = makeStore();
+
+        await s.triggerScan();
+
+        expect(mocks.api.post).toHaveBeenCalledWith("/duplicates/scan");
+        expect(s.isTriggeringScan).toBe(false);
+        expect(s.workerStatus?.running).toBe(true);
+    });
+
+    it("triggerScan failure sets an error and clears busy state", async () => {
+        mocks.api.post.mockImplementationOnce(async () => { throw new Error("x"); });
+        const s = makeStore();
+        await s.triggerScan();
+        expect(s.error).toBe("Failed to trigger scan");
+        expect(s.isTriggeringScan).toBe(false);
+    });
+
+    it("loadNextPage failure sets an error", async () => {
+        const calls = mocks.api.get as ReturnType<typeof vi.fn>;
+        calls.mockImplementationOnce(async () => ({ data: { groups: [group(["a", "b"])], total_groups: 5, page: 1, limit: 1 }, status: 200 }))
+            .mockImplementationOnce(async () => { throw new Error("x"); });
+
+        const s = makeStore();
+        await s.fetchDuplicates();
+        await s.loadNextPage();
+        expect(s.error).toBe("Failed to load more duplicates");
+        expect(s.isLoadingMore).toBe(false);
+    });
+
+    it("fetchDuplicates clears a previous error on success", async () => {
+        mocks.routes["/duplicates"] = () => ({ data: { groups: [group(["a", "b"])], total_groups: 1, page: 1, limit: 20 } });
+        const s = makeStore();
+        s.error = "stale";
+        await s.fetchDuplicates();
+        expect(s.error).toBeNull();
     });
 });

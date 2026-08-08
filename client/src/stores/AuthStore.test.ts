@@ -15,8 +15,18 @@ const mocks = vi.hoisted(() => {
         if (!fn) return { data: {}, status: 200 };
         return fn();
     });
+    const patch = vi.fn(async (url: string) => {
+        const fn = routes["PATCH " + url];
+        if (!fn) return { data: {}, status: 200 };
+        return fn();
+    });
+    const del = vi.fn(async (url: string) => {
+        const fn = routes["DELETE " + url];
+        if (!fn) return { data: {}, status: 200 };
+        return fn();
+    });
     const clearRoutes = () => { for (const k of Object.keys(routes)) delete routes[k]; };
-    return { api: { get, post }, routes, clearRoutes };
+    return { api: { get, post, patch, delete: del }, routes, clearRoutes };
 });
 
 vi.mock("../api/axiosConfig", () => ({ __esModule: true, default: mocks.api }));
@@ -151,5 +161,80 @@ describe("AuthStore", () => {
         expect(s.imageToken).toBeNull();
         expect(s.user).toBeNull();
         expect(s.isAuthenticated).toBe(false);
+    });
+
+    it("login falls back to the plain error message for non-HTTP errors", async () => {
+        mocks.api.post.mockImplementationOnce(async () => { throw new Error("socket hang up"); });
+        const s = makeStore();
+        const result = await s.login("admin", "pass");
+        expect(result.success).toBe(false);
+        if (!result.success) expect(result.error).toBe("socket hang up");
+        expect(s.isAuthenticated).toBe(false);
+    });
+
+    it("initialize tolerates a failed setup-status check", async () => {
+        mocks.routes["GET /auth/setup-status"] = () => { throw new Error("offline"); };
+        const s = makeStore();
+        await s.initialize();
+        expect(s.initialized).toBe(true);
+        expect(s.needsSetup).toBe(false);
+    });
+
+    it("checkSetupStatus records needsSetup and falls back on failure", async () => {
+        mocks.routes["GET /auth/setup-status"] = () => ({ data: { needs_setup: true } });
+        const s = makeStore();
+        await s.checkSetupStatus();
+        expect(s.needsSetup).toBe(true);
+
+        mocks.routes["GET /auth/setup-status"] = () => { throw new Error("x"); };
+        await s.checkSetupStatus();
+        expect(s.needsSetup).toBe(false);
+    });
+
+    it("listUsers returns the managed users", async () => {
+        mocks.routes["GET /users"] = () => ({ data: [{ id: "1", username: "admin", email: "", role: "admin", is_active: true, created_at: "2024", last_login_at: null }] });
+        const s = makeStore();
+        const users = await s.listUsers();
+        expect(users).toHaveLength(1);
+        expect(users[0].username).toBe("admin");
+    });
+
+    it("createUser succeeds and returns the server failure message", async () => {
+        mocks.routes["POST /users"] = () => ({ data: {}, status: 201 });
+        const s = makeStore();
+        expect((await s.createUser("bob", "pw", "user")).success).toBe(true);
+
+        mocks.routes["POST /users"] = () => { throw axError(400, { message: "Username taken" }); };
+        const result = await s.createUser("bob", "pw", "user");
+        expect(result.success).toBe(false);
+        if (!result.success) expect(result.error).toBe("Username taken");
+
+        mocks.routes["POST /users"] = () => { throw new Error("net"); };
+        const result2 = await s.createUser("bob", "pw", "user");
+        if (!result2.success) expect(result2.error).toBe("Failed to create user");
+    });
+
+    it("updateUser succeeds and returns the server failure message", async () => {
+        mocks.routes["PATCH /users/1"] = () => ({ data: {}, status: 200 });
+        const s = makeStore();
+        expect((await s.updateUser("1", { role: "admin" })).success).toBe(true);
+        expect(mocks.api.patch).toHaveBeenCalledWith("/users/1", { role: "admin" });
+
+        mocks.routes["PATCH /users/1"] = () => { throw axError(403, { message: "Not allowed" }); };
+        const result = await s.updateUser("1", { is_active: false });
+        expect(result.success).toBe(false);
+        if (!result.success) expect(result.error).toBe("Not allowed");
+    });
+
+    it("deleteUser succeeds and returns the server failure message", async () => {
+        mocks.routes["DELETE /users/9"] = () => ({ data: {}, status: 200 });
+        const s = makeStore();
+        expect((await s.deleteUser("9")).success).toBe(true);
+        expect(mocks.api.delete).toHaveBeenCalledWith("/users/9");
+
+        mocks.routes["DELETE /users/9"] = () => { throw axError(404, { message: "Missing" }); };
+        const result = await s.deleteUser("9");
+        expect(result.success).toBe(false);
+        if (!result.success) expect(result.error).toBe("Missing");
     });
 });

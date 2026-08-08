@@ -21,11 +21,12 @@ export default defineConfig({
       include: ['src/stores/*.ts'],
       exclude: ['**/*.test.ts', 'src/stores/RootStore.ts', 'src/stubs/**'],
       thresholds: {
-        // Staged, raised each wave (currently ~45%/33%/41%/43%).
-        lines: 40,
-        functions: 38,
-        branches: 30,
-        statements: 40,
+        // Staged, raised each wave. Measured 2026-08: lines 94.3, stmts 90.3,
+        // funcs 89.6, branches 75.8. Gate set ~4-6pp below to buffer test churn.
+        lines: 90,
+        functions: 85,
+        branches: 70,
+        statements: 86,
       },
     },
   },

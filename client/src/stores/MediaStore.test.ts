@@ -102,7 +102,7 @@ vi.mock("../api/axiosConfig", () => ({
 // (which would hit the API) are not invoked.
 
 function makeStore(): MediaStore {
-    const mockRoot = { uiStore: { setError: () => {} } } as unknown as RootStore;
+    const mockRoot = { uiStore: { setError: () => {}, setLoading: () => {} } } as unknown as RootStore;
     return new MediaStore(mockRoot);
 }
 
@@ -338,7 +338,7 @@ describe("map auto-fetch + star/delete + fetchImages", () => {
 
     it("toggleStarMedia rolls back to the previous value on server failure", async () => {
         const setError = vi.fn();
-        const s = new MediaStore({ uiStore: { setError } } as unknown as RootStore);
+        const s = new MediaStore({ uiStore: { setError, setLoading: () => {} } } as unknown as RootStore);
         const target = item({ device_id: "a", starred: false, media_type: "image" });
         s.images = [target];
 

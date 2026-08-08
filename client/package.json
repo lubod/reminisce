@@ -11,6 +11,7 @@
     "preview": "vite preview",
     "test:coverage": "vitest run --coverage",
     "coverage:gate": "vitest run --coverage -c vitest.coverage.gate.ts",
+    "coverage:overall": "vitest run --coverage -c vitest.coverage.overall.ts",
     "coverage:full": "vitest run --coverage"
   },
   "dependencies": {

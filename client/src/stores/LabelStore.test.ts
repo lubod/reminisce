@@ -90,4 +90,61 @@ describe("LabelStore", () => {
         mocks.routes["/images/hash1/labels"] = () => { throw new Error("x"); };
         expect(await store.getImageLabels("hash1")).toEqual([]);
     });
+
+    it("addImageLabel posts and reports failures", async () => {
+        mocks.api.post.mockImplementationOnce(async () => ({ data: {}, status: 200 }));
+        const { store } = makeStore();
+        await store.addImageLabel("h1", 3);
+        expect(mocks.api.post).toHaveBeenCalledWith("/images/h1/labels", { label_id: 3 });
+
+        mocks.api.post.mockImplementationOnce(async () => { throw new Error("x"); });
+        const { store: s2, errors } = makeStore();
+        await expect(s2.addImageLabel("h1", 3)).rejects.toThrow();
+        expect(errors).toContain("Failed to add label");
+    });
+
+    it("removeImageLabel deletes and reports failures", async () => {
+        mocks.api.delete.mockImplementationOnce(async () => ({ data: {}, status: 200 }));
+        const { store } = makeStore();
+        await store.removeImageLabel("h1", 3);
+        expect(mocks.api.delete).toHaveBeenCalledWith("/images/h1/labels/3");
+
+        mocks.api.delete.mockImplementationOnce(async () => { throw new Error("x"); });
+        const { store: s2, errors } = makeStore();
+        await expect(s2.removeImageLabel("h1", 3)).rejects.toThrow();
+        expect(errors).toContain("Failed to remove label");
+    });
+
+    it("getVideoLabels returns labels on success and [] on failure", async () => {
+        mocks.routes["/videos/v1/labels"] = () => ({ data: { labels: [{ id: 4, name: "D" }] } });
+        const { store } = makeStore();
+        expect(await store.getVideoLabels("v1")).toHaveLength(1);
+
+        mocks.routes["/videos/v1/labels"] = () => { throw new Error("x"); };
+        expect(await store.getVideoLabels("v1")).toEqual([]);
+    });
+
+    it("addVideoLabel posts and reports failures", async () => {
+        mocks.api.post.mockImplementationOnce(async () => ({ data: {}, status: 200 }));
+        const { store } = makeStore();
+        await store.addVideoLabel("v1", 4);
+        expect(mocks.api.post).toHaveBeenCalledWith("/videos/v1/labels", { label_id: 4 });
+
+        mocks.api.post.mockImplementationOnce(async () => { throw new Error("x"); });
+        const { store: s2, errors } = makeStore();
+        await expect(s2.addVideoLabel("v1", 4)).rejects.toThrow();
+        expect(errors).toContain("Failed to add label");
+    });
+
+    it("removeVideoLabel deletes and reports failures", async () => {
+        mocks.api.delete.mockImplementationOnce(async () => ({ data: {}, status: 200 }));
+        const { store } = makeStore();
+        await store.removeVideoLabel("v1", 4);
+        expect(mocks.api.delete).toHaveBeenCalledWith("/videos/v1/labels/4");
+
+        mocks.api.delete.mockImplementationOnce(async () => { throw new Error("x"); });
+        const { store: s2, errors } = makeStore();
+        await expect(s2.removeVideoLabel("v1", 4)).rejects.toThrow();
+        expect(errors).toContain("Failed to remove label");
+    });
 });
