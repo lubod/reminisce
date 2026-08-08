@@ -39,9 +39,22 @@ The 5 nodes with the highest scores receive the shards. This is stable — addin
 
 ## Encryption
 
-`ChaCha20Poly1305` with a **deterministic nonce** derived from `blake3(key || segment_index)`. The nonce is deterministic so that re-encrypting the same file+key always produces the same ciphertext. This is critical for repair: a re-sharded shard must be byte-identical to the original so it's compatible with the 4 surviving shards.
+`ChaCha20Poly1305` with a **deterministic nonce** derived from
+`blake3(key ‖ segment_index ‖ content_hash)` (the plaintext is included so two distinct
+payloads can never reuse a nonce under the same key+context; identical content + key +
+context reproduces byte-identical ciphertext for shard-repair compatibility).
 
 Implementation: `np2p/src/storage/encryption.rs`
+
+## Shard token authorization
+
+Every store/retrieve/delete requires a signed token from the home server's P2P
+identity. Tokens are **operation-bound** — the signature covers
+`op_tag ‖ shard_hash ‖ timestamp` (`ShardOp::{Store, Retrieve, Delete}`) — so a
+captured retrieve token can never be replayed to delete the shard, and the ±5-minute
+timestamp window bounds replay. Storage nodes are **owner-pinned** via
+`--authorized-node-id` (or run explicitly unpinned with `--allow-unpinned`; see
+[deployment.md](deployment.md)).
 
 ## Large Files (>256 MB)
 

@@ -24,15 +24,19 @@ docker compose -f docker/docker-compose-observability.yml up -d  # optional
 
 ## First-Run Setup
 
-On a fresh database there are no users. Create the first admin account:
+On a fresh database there are no users — `generate_install.sh` generates a random
+`api_secret_key` and does **not** pre-seed an admin account. Open the web UI and the
+first visitor creates the admin via the setup screen.
+
+If you must script it, the API still accepts an explicit first-admin creation:
 
 ```bash
 curl -X POST http://localhost:8080/api/auth/setup \
   -H 'Content-Type: application/json' \
-  -d '{"username": "admin", "password": "changeme123"}'
+  -d '{"username": "admin", "password": "<random>"}'
 ```
 
-This endpoint returns `403` if any user already exists, so it's safe to call idempotently.
+This endpoint returns `403` once any user exists, so it's safe to call idempotently.
 
 ## Configuration (`config.yaml`)
 
@@ -42,6 +46,7 @@ Copy `config-fullstack.yaml.example` to `config-fullstack.yaml`. Required fields
 
 `api_secret_key` is the **master secret** for the whole system — JWT signing, backup-key wrapping, the P2P node identity (when `p2p_deterministic_identity` is on), and mesh-manifest encryption all chain off it. Treat it accordingly:
 
+- `generate_install.sh` generates a **random 64-hex value** for `config.yaml` automatically; you don't need to invent one.
 - **Prefer env injection** over the file: set `API_SECRET_KEY` in the environment (it takes precedence over `config.yaml`, so the secret never touches disk).
 - If it must live in `config.yaml`, lock the file down: `chmod 600 config.yaml`. The server **warns at startup** if the file is readable by group/others.
 - Rotate it with care: rotating invalidates existing JWTs and changes the deterministic P2P node identity (existing shard tokens/owner-pins must be re-established).
@@ -85,6 +90,11 @@ The server uses `rustls`. Put TLS termination in nginx (see `nginx/` at the repo
 - HTTPS on port 28444 (self-signed cert for LAN use)
 - WebSocket proxying for live updates
 - Static file serving for the React client
+- On the HTTP listener, credential-bearing paths (`user-login-form`, `user-login`,
+  `setup`) are **307-redirected to HTTPS** so passwords never traverse cleartext.
+
+Session cookies are `Secure`, so an HTTP-only login can never establish a session —
+**use HTTPS (or a VPN like NetBird) to protect the media traffic itself.**
 
 ## Storage Nodes (Pi Setup)
 
@@ -94,10 +104,18 @@ Each Pi runs the `np2p` daemon binary (`np2pd`):
 cargo build --release --bin np2pd
 scp target/release/np2pd pi@192.168.1.x:/usr/local/bin/
 
-# On the Pi:
-np2pd --data-dir /mnt/disk/p2p --coordinator-addr yourcoordinator.example.com:5055 \
-  --coordinator-node-id <64-hex-coordinator-node-id>
+# On the Pi — pin the home server as the ONLY allowed owner (recommended):
+np2pd --data-dir /mnt/disk/p2p \
+  --coordinator-addr yourcoordinator.example.com:5055 \
+  --coordinator-node-id <64-hex-coordinator-node-id> \
+  --authorized-node-id <64-hex-home-server-node-id>
 ```
+
+> **Security: storage nodes FAIL CLOSED.** `np2pd` refuses to start without
+> `--authorized-node-id` **or** an explicit `--allow-unpinned` opt-in. Prefer pinning:
+> an unpinned node accepts self-signed store/retrieve/delete tokens from any node. To
+> find the home server's node id, check `${p2p_data_dir}/node_id.txt` on the server (or
+> its startup log).
 
 The home server will auto-discover Pi nodes via LAN UDP broadcast (`p2p_discovery_port`) or via the coordinator for WAN. `--coordinator-node-id` is mandatory whenever `--coordinator-addr` is used (identity binding); the value is printed in the coordinator's startup log. On the home server, set `p2p_coordinator_node_id` in the config (see the table above).
 
@@ -114,6 +132,10 @@ All components export metrics and traces:
 | Traces | → `otlp_endpoint` | OTLP gRPC (bring your own backend, e.g. Tempo/Jaeger) |
 
 Grafana dashboards are in `observability/grafana/dashboards/`. Promtail scrapes Docker container logs into Loki.
+
+> **Access control:** Grafana requires login (anonymous admin is disabled) and is bound
+> to `127.0.0.1` together with Prometheus and Alloy. Loki log retention is **7 days**.
+> Publish ports yourself only if you install your own auth in front.
 
 Key metrics: `user_registrations_total`, `user_logins_total`, `user_login_failures_total`, `api_http_requests_total`, `api_http_request_duration_seconds`.
 
