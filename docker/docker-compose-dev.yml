@@ -119,6 +119,7 @@ services:
     network_mode: host
     command: >
       np2pd --listen 0.0.0.0:5050
+            --allow-unpinned
             --data-dir /data
             --discovery-port 5066
             --coordinator-addr 127.0.0.1:5055
@@ -133,6 +134,7 @@ services:
     network_mode: host
     command: >
       np2pd --listen 0.0.0.0:5051
+            --allow-unpinned
             --data-dir /data
             --discovery-port 5066
             --coordinator-addr 127.0.0.1:5055
@@ -147,6 +149,7 @@ services:
     network_mode: host
     command: >
       np2pd --listen 0.0.0.0:5052
+            --allow-unpinned
             --data-dir /data
             --discovery-port 5066
             --coordinator-addr 127.0.0.1:5055
@@ -161,6 +164,7 @@ services:
     network_mode: host
     command: >
       np2pd --listen 0.0.0.0:5053
+            --allow-unpinned
             --data-dir /data
             --discovery-port 5066
             --coordinator-addr 127.0.0.1:5055
@@ -175,6 +179,7 @@ services:
     network_mode: host
     command: >
       np2pd --listen 0.0.0.0:5054
+            --allow-unpinned
             --data-dir /data
             --discovery-port 5066
             --coordinator-addr 127.0.0.1:5055

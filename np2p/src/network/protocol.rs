@@ -96,7 +96,12 @@ pub struct Protocol;
 impl Protocol {
     pub async fn send(send: &mut quinn::SendStream, msg: &Message) -> crate::error::Result<()> {
         let bytes = bincode::serialize(msg)?;
-        let len = bytes.len() as u32;
+        // Never silently truncate: the frame prefix is a u32, so oversized
+        // messages must error instead of corrupting the framing on the wire.
+        let len = u32::try_from(bytes.len())
+            .map_err(|_| crate::error::Np2pError::Protocol(format!(
+                "Message too large to frame ({} bytes)", bytes.len()
+            )))?;
 
         send.write_all(&len.to_be_bytes()).await?;
         send.write_all(&bytes).await?;

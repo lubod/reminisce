@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tracing::{info, warn};
+use tracing::{info, warn, error};
 use tracing_subscriber::EnvFilter;
 use clap::Parser;
 use np2p::crypto::NodeIdentity;
@@ -46,6 +46,12 @@ struct Args {
     /// Authorized home server Node ID (hex format) allowed to store/retrieve shards.
     #[arg(long)]
     authorized_node_id: Option<String>,
+
+    /// Explicitly allow running WITHOUT a pinned owner (insecure: any node with a
+    /// self-signed recent token may store/retrieve/delete shards). Default is to
+    /// FAIL CLOSED at startup unless --authorized-node-id is provided.
+    #[arg(long)]
+    allow_unpinned: bool,
 }
 
 #[tokio::main]
@@ -88,8 +94,16 @@ async fn main() -> anyhow::Result<()> {
         key
     });
 
+    if authorized_owner_id.is_none() && !args.allow_unpinned {
+        error!(
+            "FAIL CLOSED: refusing to start an unpinned storage node. Pass --authorized-node-id \
+             <home-server-node-id> to restrict access, or --allow-unpinned to explicitly opt into \
+             accepting self-signed store/retrieve/delete requests from any node."
+        );
+        anyhow::bail!("storage node requires --authorized-node-id or --allow-unpinned");
+    }
     if authorized_owner_id.is_none() {
-        warn!("⚠️  --authorized-node-id not set: this storage node will accept shard store/retrieve/delete requests from ANY node that presents a self-signed token. Pin the owner with --authorized-node-id <home-server-node-id> to restrict access.");
+        warn!("⚠️  --allow-unpinned set: this storage node will accept shard store/retrieve/delete requests from ANY node that presents a self-signed token. Pin the owner with --authorized-node-id <home-server-node-id> to restrict access.");
     }
 
     let storage_path = args.data_dir.join("shards");

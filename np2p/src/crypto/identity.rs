@@ -140,18 +140,115 @@ pub fn verify_signature(node_id_bytes: &[u8], msg: &[u8], signature_bytes: &[u8]
     key.verify(msg, &sig).is_ok()
 }
 
-/// Extract Ed25519 public key bytes from raw DER encoded X.509 certificate.
+/// Reads a single DER TLV at `pos` (definite-length encoding only — sufficient
+/// for the fixed X.509 shapes we parse, and rejects indefinite/oversized forms).
+/// Returns `(tag, value_offset, value_len)`.
+fn read_tlv(der: &[u8], pos: usize) -> Option<(u8, usize, usize)> {
+    let tag = *der.get(pos)?;
+    let mut p = pos + 1;
+    let first = *der.get(p)?;
+    p += 1;
+    let (len, nbytes) = if first & 0x80 == 0 {
+        (first as usize, 1usize)
+    } else {
+        let n = (first & 0x7f) as usize;
+        if n == 0 || n > 4 {
+            return None; // indefinite-length or absurd multi-byte length
+        }
+        let mut l = 0usize;
+        for _ in 0..n {
+            let b = *der.get(p)? as usize;
+            p += 1;
+            l = (l << 8) | b;
+        }
+        (l, 1 + n)
+    };
+    let value_start = p;
+    let value_end = value_start.checked_add(len)?;
+    if value_end > der.len() {
+        return None;
+    }
+    let _ = nbytes;
+    Some((tag, value_start, len))
+}
+
+/// Returns the direct children of a SEQUENCE as `(tag, value_offset, value_len)` tuples.
+fn sequence_children(der: &[u8], value_start: usize, value_len: usize) -> Vec<(u8, usize, usize)> {
+    let mut out = Vec::new();
+    let end = value_start.saturating_add(value_len);
+    let mut pos = value_start;
+    while pos < end {
+        match read_tlv(der, pos) {
+            Some((tag, vs, vl)) => {
+                out.push((tag, vs, vl));
+                pos = vs.saturating_add(vl);
+            }
+            None => break,
+        }
+    }
+    out
+}
+
+/// If `(tag, val, len)` at the TBS level is an Ed25519 SubjectPublicKeyInfo
+/// (`SEQUENCE { SEQUENCE { OID 1.3.101.112 }, BIT STRING }`), returns the 32-byte key.
+fn parse_ed25519_spki(der: &[u8], tag: u8, val: usize, len: usize) -> Option<[u8; 32]> {
+    if tag != 0x30 {
+        return None;
+    }
+    let spki = sequence_children(der, val, len);
+    if spki.len() != 2 {
+        return None;
+    }
+    let (alg_tag, alg_val, alg_len) = spki[0];
+    let (bit_tag, bit_val, bit_len) = spki[1];
+    if alg_tag != 0x30 || bit_tag != 0x03 {
+        return None;
+    }
+    // First child of the algorithm SEQUENCE must be the Ed25519 OID 1.3.101.112.
+    let alg = sequence_children(der, alg_val, alg_len);
+    let (oid_tag, oid_val, oid_len) = *alg.first()?;
+    if oid_tag != 0x06 {
+        return None;
+    }
+    if der[oid_val..oid_val + oid_len] != [0x2b, 0x65, 0x70] {
+        return None;
+    }
+    // BIT STRING: first byte = unused-bits (must be 0), then 32 raw key bytes.
+    let bit_string = &der[bit_val..bit_val + bit_len];
+    if bit_len < 33 || bit_string[0] != 0 {
+        return None;
+    }
+    let mut key = [0u8; 32];
+    key.copy_from_slice(&bit_string[1..33]);
+    Some(key)
+}
+
+/// Extract the Ed25519 public key from a DER-encoded X.509 certificate.
+///
+/// This uses a strict DER structure walk of the certificate's actual
+/// `subjectPublicKeyInfo`, NOT a byte-pattern scan. The previous implementation
+/// scanned for the Ed25519 OID + key byte pattern *anywhere* in the DER, so a
+/// certificate crafted with the victim's node-id bytes in an issuer/subject DN
+/// or an extension could make the identity pin validate while the TLS handshake
+/// is signed by the attacker's real key — a full MITM and coordinator registry
+/// poisoning primitive. Reading the SPKI field at its grammar position (7th TBS
+/// element for v3 certs, 6th for v1) and validating its shape makes the pin
+/// reflect the exact key rustls verifies the handshake against.
 pub fn extract_public_key(cert_der: &[u8]) -> Option<[u8; 32]> {
-    let oid = [0x06, 0x03, 0x2b, 0x65, 0x70]; // Ed25519 OID
-    for pos in 0..cert_der.len().saturating_sub(oid.len() + 3 + 32) {
-        if cert_der[pos..pos+oid.len()] == oid
-           && cert_der[pos + oid.len()] == 0x03 // BIT STRING
-           && cert_der[pos + oid.len() + 1] == 0x21 // Length 33
-           && cert_der[pos + oid.len() + 2] == 0x00 // Unused bits 0
-        {
-            let mut key = [0u8; 32];
-            key.copy_from_slice(&cert_der[pos + oid.len() + 3 .. pos + oid.len() + 35]);
-            return Some(key);
+    let (outer_tag, cert_val, cert_len) = read_tlv(cert_der, 0)?;
+    if outer_tag != 0x30 {
+        return None;
+    }
+    let cert_children = sequence_children(cert_der, cert_val, cert_len);
+    let (_, tbs_val, tbs_len) = *cert_children.first()?;
+    let tbs = sequence_children(cert_der, tbs_val, tbs_len);
+
+    // subjectPublicKeyInfo is element 6 for v3 (version present) or element 5 for v1.
+    for idx in [6usize, 5] {
+        if let Some(&(tag, val, len)) = tbs.get(idx) {
+            if let Some(key) = parse_ed25519_spki(cert_der, tag, val, len) {
+                return Some(key);
+            }
         }
     }
     None
@@ -333,6 +430,151 @@ mod tests {
     }
 
     #[test]
+    fn test_extract_public_key_rejects_pattern_smuggling() {
+        // Regression for the cert-identity pin bypass: the old extract_public_key
+        // scanned for the Ed25519 OID + key byte pattern anywhere in the DER. A
+        // certificate carrying the victim's node_id bytes inside a custom extension
+        // (or DN) would then validate the pin while the TLS handshake is signed by
+        // the attacker's real key — a full MITM. The strict SPKI walk must return
+        // the REAL key, not the smuggled victim bytes.
+        let attacker = NodeIdentity::generate();
+        let victim_key = [0x11u8; 32]; // the "victim" node_id the attacker tries to impersonate
+
+        let node_id_hex = hex::encode(attacker.node_id());
+        let mut params = CertificateParams::default();
+        params.distinguished_name = DistinguishedName::new();
+        params.distinguished_name.push(rcgen::DnType::CommonName, format!("np2p-node-{}", node_id_hex));
+        params.subject_alt_names = vec![rcgen::SanType::DnsName(node_id_hex.clone().try_into().unwrap())];
+
+        // Smoke the EXACT byte pattern the old scanner looked for into an extension:
+        //   OID 06 03 2b 65 70, BIT STRING 03 21 00, then the victim public key.
+        let mut poison = vec![0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00];
+        poison.extend_from_slice(&victim_key);
+        params.custom_extensions = vec![rcgen::CustomExtension::from_oid_content(&[1, 3, 6, 1, 4, 1, 54321], poison)];
+
+        let secret_bytes = attacker.signing_key.to_bytes();
+        let mut pkcs8 = Vec::with_capacity(48);
+        pkcs8.extend_from_slice(&[
+            0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20
+        ]);
+        pkcs8.extend_from_slice(&secret_bytes);
+        let private_key_der = rustls_pki_types::PrivatePkcs8KeyDer::from(pkcs8);
+        let rc_keypair = RcKeyPair::from_pkcs8_der_and_sign_algo(&private_key_der, &rcgen::PKCS_ED25519).unwrap();
+        let cert = params.self_signed(&rc_keypair).unwrap();
+
+        assert!(
+            cert.der().windows(8).any(|w| w == [0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00]),
+            "poison bytes must actually be present in the DER for a meaningful test"
+        );
+        // The strict walk must return the attacker's REAL public key, never the
+        // smuggled victim bytes (which the old byte-scan would have returned).
+        assert_eq!(extract_public_key(cert.der()).unwrap(), attacker.node_id());
+        assert_ne!(extract_public_key(cert.der()).unwrap(), victim_key);
+    }
+
+    #[test]
+    fn test_extract_public_key_rejects_garbage() {
+        assert_eq!(extract_public_key(&[]), None);
+        assert_eq!(extract_public_key(&[0x30, 0x03, 0x02, 0x01, 0x00]), None);
+        assert_eq!(extract_public_key(&[0xff, 0xff, 0xff, 0xff]), None);
+        // Truncated valid-ish cert must not panic or yield a key.
+        assert_eq!(extract_public_key(&[0x30, 0x05, 0x30, 0x03, 0x06]), None);
+        // Not an outer SEQUENCE.
+        assert_eq!(extract_public_key(&[0x31, 0x00]), None);
+        // Outer SEQUENCE with no children.
+        assert_eq!(extract_public_key(&[0x30, 0x00]), None);
+    }
+
+    fn der_len(len: usize) -> Vec<u8> {
+        if len < 0x80 {
+            vec![len as u8]
+        } else if len < 0x100 {
+            vec![0x81, len as u8]
+        } else {
+            vec![0x82, (len >> 8) as u8, (len & 0xff) as u8]
+        }
+    }
+    fn der_seq(children: &[Vec<u8>]) -> Vec<u8> {
+        let mut body = Vec::new();
+        for c in children {
+            body.extend_from_slice(c);
+        }
+        let mut out = vec![0x30];
+        out.extend(der_len(body.len()));
+        out.extend(body);
+        out
+    }
+    fn der_oid(content: &[u8]) -> Vec<u8> {
+        let mut out = vec![0x06];
+        out.extend(der_len(content.len()));
+        out.extend(content);
+        out
+    }
+    fn der_ed25519_alg() -> Vec<u8> {
+        der_seq(&[der_oid(&[0x2b, 0x65, 0x70])])
+    }
+    fn der_bitstring(key: &[u8], unused_bits: u8) -> Vec<u8> {
+        let mut out = vec![0x03];
+        out.extend(der_len(key.len() + 1));
+        out.push(unused_bits);
+        out.extend_from_slice(key);
+        out
+    }
+    fn der_ed25519_spki(key: &[u8]) -> Vec<u8> {
+        der_seq(&[der_ed25519_alg(), der_bitstring(key, 0)])
+    }
+
+    #[test]
+    fn test_read_tlv_rejects_malformed() {
+        assert_eq!(read_tlv(&[], 0), None, "empty");
+        assert_eq!(read_tlv(&[0x02], 0), None, "missing length");
+        assert_eq!(read_tlv(&[0x02, 0x80], 0), None, "indefinite length");
+        assert_eq!(read_tlv(&[0x02, 0x85, 0, 0, 0, 0, 0], 0), None, "length form n>4");
+        assert_eq!(read_tlv(&[0x02, 0x03, 0xaa], 0), None, "length exceeds remaining");
+        let (t, v, l) = read_tlv(&[0x02, 0x03, 0xaa, 0xbb, 0xcc], 0).unwrap();
+        assert_eq!((t, v, l), (0x02, 2, 3), "well-formed short TLV");
+    }
+
+    #[test]
+    fn test_spki_rejects_wrong_shapes() {
+        // Wrong outer tag.
+        assert_eq!(parse_ed25519_spki(&[0x30, 0x00], 0x31, 0, 2), None);
+        // Not exactly two children.
+        assert_eq!(parse_ed25519_spki(&der_seq(&[der_ed25519_alg()]), 0x30, 0, 2), None);
+        // Algorithm is not a SEQUENCE.
+        assert_eq!(
+            parse_ed25519_spki(&der_seq(&[der_oid(&[0x2b, 0x65, 0x70]), der_bitstring(&[9u8; 32], 0)]), 0x30, 0, 2),
+            None
+        );
+        // Second child is not a BIT STRING.
+        assert_eq!(
+            parse_ed25519_spki(&der_seq(&[der_ed25519_alg(), der_oid(&[0x01])]), 0x30, 0, 2),
+            None
+        );
+        // Wrong algorithm OID (RSA 1.2.840.113549.1.1.1).
+        let rsa_alg = der_seq(&[der_oid(&[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01])]);
+        assert_eq!(
+            parse_ed25519_spki(&der_seq(&[rsa_alg, der_bitstring(&[9u8; 32], 0)]), 0x30, 0, 2),
+            None
+        );
+        // Non-zero unused bits.
+        assert_eq!(
+            parse_ed25519_spki(&der_seq(&[der_ed25519_alg(), der_bitstring(&[9u8; 32], 1)]), 0x30, 0, 2),
+            None
+        );
+        // BIT STRING too short.
+        assert_eq!(
+            parse_ed25519_spki(&der_seq(&[der_ed25519_alg(), der_bitstring(&[9u8; 4], 0)]), 0x30, 0, 2),
+            None
+        );
+        // Valid SPKI round-trips through the parser.
+        let key = [7u8; 32];
+        let spki = der_ed25519_spki(&key);
+        let (tag, val, len) = read_tlv(&spki, 0).unwrap();
+        assert_eq!(parse_ed25519_spki(&spki, tag, val, len), Some(key));
+    }
+
+    #[test]
     fn test_verify_shard_token_accepts_recent() {
         let identity = NodeIdentity::generate();
         let shard_hash = [7u8; 32];
@@ -340,6 +582,52 @@ mod tests {
         assert!(verify_shard_token(&token, &shard_hash, Some(&identity.node_id())));
         // Without an owner pin, a validly-signed recent token is still accepted.
         assert!(verify_shard_token(&token, &shard_hash, None));
+    }
+
+    #[test]
+    fn test_from_secret_bytes() {
+        assert!(NodeIdentity::from_secret_bytes(&[0u8; 32]).is_ok());
+        assert!(NodeIdentity::from_secret_bytes(&[0u8; 16]).is_err(), "wrong size must error");
+        // A node derived from secret bytes must sign/verify against its node_id.
+        let good = NodeIdentity::from_secret_bytes(&[1u8; 32]).unwrap();
+        assert!(good.sign([0u8; 32].as_slice()).len() == 64);
+    }
+
+    #[test]
+    fn test_sni_for_node_id_validation() {
+        let id = NodeIdentity::generate();
+        let hex_id = hex::encode(id.node_id());
+        let sni = sni_for_node_id(&hex_id).unwrap();
+        assert_eq!(sni, format!("{}.{}", &hex_id[..32], &hex_id[32..]));
+        assert!(sni_for_node_id("short").is_err(), "not 64 hex");
+        assert!(sni_for_node_id(&"z".repeat(64)).is_err(), "non-hex chars");
+        assert!(sni_for_node_id(&"0".repeat(63)).is_err(), "too short");
+    }
+
+    #[test]
+    fn test_verify_signature_paths() {
+        let identity = NodeIdentity::generate();
+        let msg = b"hello signature";
+        let sig = identity.sign(msg);
+        assert!(verify_signature(&identity.node_id(), msg, &sig), "valid signature");
+        assert!(!verify_signature(&identity.node_id(), b"tampered", &sig), "wrong message");
+
+        let other = NodeIdentity::generate();
+        assert!(!verify_signature(&other.node_id(), msg, &sig), "wrong key");
+
+        // Malformed inputs must be rejected, not panic.
+        assert!(!verify_signature(&[0u8; 8], msg, &sig), "short node id");
+        assert!(!verify_signature(&identity.node_id(), msg, &[0u8; 8]), "short signature");
+    }
+
+    #[test]
+    fn test_owner_pin_rejects_wrong_owner() {
+        let owner = NodeIdentity::generate();
+        let other = NodeIdentity::generate();
+        let shard_hash = [5u8; 32];
+        let token = owner.create_shard_token(&shard_hash);
+        assert!(verify_shard_token(&token, &shard_hash, Some(&owner.node_id())));
+        assert!(!verify_shard_token(&token, &shard_hash, Some(&other.node_id())));
     }
 
     #[test]
