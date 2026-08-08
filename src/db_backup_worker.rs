@@ -479,8 +479,7 @@ mod tests {
     }
 
     #[actix_web::test]
-    async fn append_key_to_escrow_writes_line_with_0600() {
-        let base = std::env::temp_dir()
+    async fn append_key_to_escrow_writes_line_with_0600() {        let base = std::env::temp_dir()
             .join(format!("reminisce_escrow_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let media = base.join("media");
@@ -499,6 +498,96 @@ mod tests {
             let mode = std::fs::metadata(&escrow).unwrap().permissions().mode() & 0o777;
             assert_eq!(mode, 0o600, "escrow file is 0600");
         }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Detect whether the dev Postgres connection env is configured, so DB-backed
+    /// unit tests skip cleanly when the gate runs without a live dev DB.
+    fn test_db_env_available() -> bool {
+        std::env::var("TEST_DATABASE_URL").is_ok()
+            || std::env::var("PGHOST").is_ok()
+            || std::env::var("PGPORT").is_ok()
+    }
+
+    #[actix_web::test]
+    async fn backup_cycle_short_circuits_when_disabled_or_no_url() {
+        if !test_db_env_available() {
+            eprintln!("backup_cycle: skipping (no dev PG env)");
+            return;
+        }
+        // Disabled worker: no DB, no peers needed — returns false immediately.
+        let (pool, _db) = crate::test_utils::setup_test_database_with_instance().await;
+        let mut cfg = mini_config(None);
+        cfg.workers.db_backup_enabled = false;
+        let p2p = Arc::new(
+            np2p::network::P2PService::new("127.0.0.1:0".parse().unwrap(), np2p::crypto::NodeIdentity::generate())
+                .await.unwrap()
+        );
+        assert!(
+            !backup_cycle(&pool, &cfg, &p2p).await.unwrap(),
+            "disabled backup worker should short-circuit to Ok(false)"
+        );
+
+        // Enabled but no configured DB URL: also short-circuits without error.
+        let mut cfg = mini_config(None);
+        cfg.workers.db_backup_enabled = true;
+        cfg.database_url = None;
+        assert!(
+            !backup_cycle(&pool, &cfg, &p2p).await.unwrap(),
+            "no database_url should short-circuit to Ok(false)"
+        );
+
+        // Enabled + URL but zero discovered peers: short-circuits to Ok(false).
+        let mut cfg = mini_config(None);
+        cfg.workers.db_backup_enabled = true;
+        cfg.database_url = Some("postgres://postgres:postgres@localhost:25432/reminisce_db".to_string());
+        assert!(
+            !backup_cycle(&pool, &cfg, &p2p).await.unwrap(),
+            "no peers should short-circuit to Ok(false)"
+        );
+    }
+
+    #[actix_web::test]
+    #[serial_test::serial]
+    async fn prune_old_snapshots_respects_retention() {
+        if !test_db_env_available() {
+            eprintln!("prune_old_snapshots: skipping (no dev PG env)");
+            return;
+        }
+
+        let (pool, _db) = crate::test_utils::setup_test_database_with_instance().await;
+        let client = pool.get().await.unwrap();
+
+        // Minimal config so manifest_dir points into a temp dir.
+        let base = std::env::temp_dir().join(format!("reminisce_prune_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let media = base.join("media");
+        std::fs::create_dir_all(&media).unwrap();
+        let cfg = mini_config(Some(media.to_string_lossy().to_string()));
+
+        // Insert 3 snapshots with distinct created_at (override via direct SQL).
+        let key = [0x42u8; 32];
+        for (i, h) in ["prune_snap_a", "prune_snap_b", "prune_snap_c"].iter().enumerate() {
+            client.execute(
+                "INSERT INTO db_backups (backup_hash, created_at, size_bytes, encrypted_size, encryption_key, segment_count)
+                 VALUES ($1, NOW() - ($2 || ' hours')::interval, 1, 1, $3, 1)",
+                &[&h, &i.to_string(), &key.as_slice()],
+            ).await.unwrap();
+        }
+
+        // No live nodes, so delete_shard_remote is best-effort no-op; only the
+        // manifest row + file removal path runs.
+        let p2p = Arc::new(
+            np2p::network::P2PService::new("127.0.0.1:0".parse().unwrap(), np2p::crypto::NodeIdentity::generate())
+                .await.unwrap()
+        );
+
+        let pruned = prune_old_snapshots(&pool, &cfg, &p2p, 1).await.expect("prune ok");
+        assert_eq!(pruned, 2, "keeping 1 newest should prune 2 oldest");
+
+        let remaining: i64 = client.query_one("SELECT COUNT(*) FROM db_backups", &[]).await.unwrap().get(0);
+        assert_eq!(remaining, 1, "only the newest snapshot remains");
+
         let _ = std::fs::remove_dir_all(&base);
     }
 }
