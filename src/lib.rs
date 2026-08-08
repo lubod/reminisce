@@ -1,4 +1,4 @@
-use utoipa::{ OpenApi };
+use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 use std::sync::Arc;
 
@@ -25,6 +25,7 @@ pub mod ai_worker;
 pub mod ai_client;
 pub mod telemetry;
 pub mod metrics;
+pub mod openapi;
 
 pub mod duplicate_worker;
 pub mod test_utils;
@@ -112,178 +113,6 @@ pub use crate::services::map::get_map_points;
 pub use crate::services::ai_settings::{get_ai_settings, update_ai_settings};
 pub use crate::services::import_dir::{import_directory, get_import_status};
 
-#[derive(OpenApi)]
-#[openapi(
-    paths(
-        crate::services::auth::user_login,
-        crate::services::auth::user_login_form,
-        crate::services::health::ping,
-        crate::services::health::health_check,
-        crate::services::existence_check::check_image_exists,
-        crate::services::existence_check::check_video_exists,
-        crate::services::upload::upload_image,
-        crate::services::upload::upload_video,
-        crate::services::upload::upload_image_metadata,
-        crate::services::upload::upload_video_metadata,
-        crate::services::upload::batch_upload_image,
-        crate::services::upload::check_images_exist_batch,
-        crate::services::upload::check_videos_exist_batch,
-        crate::services::upload::batch_check_images,
-        crate::services::upload::batch_check_videos,
-        crate::services::thumbnail::list_image_thumbnails,
-        crate::services::thumbnail::list_video_thumbnails,
-        crate::services::thumbnail::list_all_media_thumbnails,
-        crate::services::thumbnail::get_thumbnail,
-        crate::services::thumbnail::get_face_thumbnail,
-        crate::services::media::get_image,
-        crate::services::media::get_video,
-        crate::services::media::get_image_metadata,
-        crate::services::media::toggle_image_star,
-        crate::services::media::toggle_video_star,
-        crate::services::media::delete_image,
-        crate::services::media::delete_video,
-        crate::services::media::restore_image,
-        crate::services::media::restore_video,
-        crate::services::media::get_trash,
-        crate::services::media::get_device_ids,
-        crate::services::media::get_random_image,
-        crate::services::media::enhance_image,
-        crate::services::embedding::search_images,
-        crate::services::embedding::search_video_keyframes,
-        crate::services::stats::get_stats,
-        crate::services::pool_stats::get_pool_stats,
-        crate::services::geodb_stats::get_geodb_stats,
-        crate::services::geocoding::search_places,
-        crate::services::map::get_map_points,
-        crate::services::ai_settings::get_ai_settings,
-        crate::services::ai_settings::update_ai_settings,
-        crate::services::person::get_persons,
-        crate::services::person::get_person,
-        crate::services::person::get_person_images,
-        crate::services::person::update_person_name,
-        crate::services::person::set_representative_face,
-        crate::services::person::merge_persons,
-        crate::services::system_stats::get_system_stats,
-        crate::services::system_stats::get_p2p_daemon_status,
-        crate::services::label::get_labels,
-        crate::services::label::create_label,
-        crate::services::label::delete_label,
-        crate::services::label::get_image_labels,
-        crate::services::label::add_image_label,
-        crate::services::label::remove_image_label,
-        crate::services::import_dir::import_directory,
-        crate::services::import_dir::get_import_status,
-        crate::services::p2p_restore::restore_p2p_file,
-        crate::services::p2p_status::get_p2p_backup_status,
-        crate::services::p2p_status::verify_p2p_backup,
-        crate::services::p2p_status::list_p2p_backups,
-        crate::services::p2p_status::list_backup_timestamps,
-        crate::services::p2p_status::get_p2p_connection_info,
-        crate::services::p2p_status::get_discovered_peers,
-        crate::services::p2p_status::get_invite_status,
-        crate::services::p2p_status::remove_p2p_node,
-        crate::services::p2p_status::trigger_rebalance,
-        crate::services::duplicates::get_duplicates,
-        crate::services::duplicates::get_duplicate_status,
-        crate::services::duplicates::trigger_duplicate_scan,
-        crate::services::auth::register_user,
-        crate::services::auth::user_logout,
-        crate::services::auth::get_me,
-        crate::services::auth::setup_status,
-        crate::services::auth::setup_admin,
-        crate::services::user_management::list_users,
-        crate::services::user_management::create_user,
-        crate::services::user_management::update_user,
-        crate::services::user_management::delete_user,
-        crate::services::media::save_enhanced_image,
-        crate::services::label::get_video_labels,
-        crate::services::label::add_video_label,
-        crate::services::label::remove_video_label
-    ),
-    components(
-        schemas(
-            crate::services::existence_check::ImageCheckQuery,
-            crate::services::existence_check::ExistenceResponse,
-            crate::services::existence_check::VideoCheckQuery,
-            crate::services::thumbnail::PaginationQuery,
-            crate::services::thumbnail::ThumbnailItem,
-            crate::services::thumbnail::ThumbnailsResponse,
-            crate::services::upload::UploadImageRequest,
-            crate::services::upload::UploadVideoRequest,
-            crate::services::upload::UploadImageMetadataRequest,
-            crate::services::upload::UploadImageMetadataResponse,
-            crate::services::upload::UploadVideoMetadataRequest,
-            crate::services::upload::UploadVideoMetadataResponse,
-            crate::services::upload::CheckImagesExistRequest,
-            crate::services::upload::CheckImagesExistResponse,
-            crate::services::upload::CheckVideosExistRequest,
-            crate::services::upload::CheckVideosExistResponse,
-            crate::services::media::ImageMetadata,
-            crate::services::media::StarResponse,
-            crate::services::media::DeviceIdsResponse,
-            crate::services::media::RandomImageResponse,
-            crate::services::media::TrashItem,
-            crate::services::embedding::SearchResult,
-            crate::services::embedding::VideoKeyframeResult,
-            crate::services::auth::RegisterRequest,
-            crate::services::auth::UserLoginRequest,
-            crate::services::health::HealthCheckResponse,
-            crate::services::system_stats::SystemStatsResponse,
-            crate::services::system_stats::P2PDaemonStatus,
-            crate::services::p2p_status::P2PBackupStatusResponse,
-            crate::services::p2p_status::ConnectionInfoResponse,
-            crate::services::p2p_status::BackupListResponse,
-            crate::services::p2p_status::BackupEntry,
-            crate::services::p2p_status::BackupTimestampsResponse,
-            crate::services::p2p_status::DiscoveredPeersResponse,
-            crate::services::p2p_status::DiscoveredPeer,
-            crate::services::p2p_status::InviteStatusResponse,
-            crate::services::p2p_status::MembershipInfo,
-            crate::services::p2p_status::VerificationResult,
-            crate::services::p2p_status::FileVerifyResult,
-            crate::services::p2p_status::RemoveNodeResponse,
-            crate::services::p2p_status::RebalanceResponse,
-            crate::services::stats::StatsResponse,
-            crate::services::pool_stats::PoolStatsResponse,
-            crate::services::pool_stats::PoolMetrics,
-            crate::services::geodb_stats::GeoDbStatsResponse,
-            crate::services::geocoding::GeocodeResult,
-            crate::services::geocoding::PlaceSearchQuery,
-            crate::services::ai_settings::AiSettingsResponse,
-            crate::services::ai_settings::UpdateAiSettingsRequest,
-            crate::services::person::Person,
-            crate::services::person::PersonsResponse,
-            crate::services::person::PersonResponse,
-            crate::services::person::PersonImage,
-            crate::services::person::PersonImagesResponse,
-            crate::services::person::UpdatePersonNameRequest,
-            crate::services::person::MergePersonsRequest,
-            crate::services::system_stats::SystemStatsResponse,
-            crate::services::label::Label,
-            crate::services::label::LabelsResponse,
-            crate::services::label::CreateLabelRequest,
-            crate::services::label::AddLabelToMediaRequest,
-            crate::services::label::MediaLabelsResponse,
-            crate::services::import_dir::ImportDirectoryRequest,
-            crate::services::import_dir::ImportDirectoryResponse,
-            crate::services::import_dir::StartImportResponse,
-            crate::services::import_dir::ImportJob,
-            crate::services::import_dir::JobStatus,
-            Claims,
-            crate::services::duplicates::DuplicateImage,
-            crate::services::duplicates::DuplicateGroup,
-            crate::services::duplicates::DuplicatesResponse,
-            crate::services::duplicates::DuplicateWorkerStatusResponse,
-            crate::services::auth::SetupRequest,
-            crate::services::user_management::UserRecord,
-            crate::services::user_management::CreateUserRequest,
-            crate::services::user_management::UpdateUserRequest,
-            crate::services::media::SaveEnhancedRequest
-        )
-    ),
-    tags((name = "reminisce", description = "Reminisce: Self-hosted photo and video memory vault."))
-)]
-struct ApiDoc;
 
 struct CustomRootSpanBuilder;
 
@@ -676,7 +505,7 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
             .app_data(shared_system.clone())
             .app_data(duplicate_status.clone())
             .service(
-                SwaggerUi::new("/swagger-ui/{_:.*}").url("/api-doc/openapi.json", ApiDoc::openapi())
+                SwaggerUi::new("/swagger-ui/{_:.*}").url("/api-doc/openapi.json", crate::openapi::ApiDoc::openapi())
             )
             .route("/metrics", web::get().to(metrics_handler))
             .service(ping)
