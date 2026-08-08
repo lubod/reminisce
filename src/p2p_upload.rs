@@ -110,17 +110,7 @@ pub async fn store_shard(
                 .await.map_err(|e| e.to_string())?;
             match Protocol::receive(&mut recv).await.map_err(|e| e.to_string())? {
                 Message::StoreShardStreamResponse { success, available_space_bytes } => {
-                    crate::metrics::P2P_PEER_WRITE_LAST_STATUS
-                        .with_label_values(&[&node_id]).set(if success { 1 } else { 0 });
-                    crate::metrics::P2P_PEER_AVAILABLE_SPACE_BYTES
-                        .with_label_values(&[&node_id]).set(available_space_bytes as f64);
-                    if success {
-                        crate::metrics::P2P_PEER_WRITE_SUCCESS_TOTAL
-                            .with_label_values(&[&node_id]).inc();
-                    } else {
-                        crate::metrics::P2P_PEER_WRITE_FAILURES_TOTAL
-                            .with_label_values(&[&node_id]).inc();
-                    }
+                    crate::metrics::record_peer_write(&node_id, success, Some(available_space_bytes));
                     Ok(success)
                 },
                 other => Err(format!("unexpected response: {:?}", other)),
@@ -280,17 +270,10 @@ async fn stream_one_shard(
         Protocol::send(&mut send, &Message::StoreShardStreamFinal { shard_hash }).await.map_err(|e| e.to_string())?;
         match Protocol::receive(&mut recv).await.map_err(|e| e.to_string())? {
             Message::StoreShardStreamResponse { success, available_space_bytes } => {
-                crate::metrics::P2P_PEER_WRITE_LAST_STATUS
-                    .with_label_values(&[&node_id]).set(if success { 1 } else { 0 });
-                crate::metrics::P2P_PEER_AVAILABLE_SPACE_BYTES
-                    .with_label_values(&[&node_id]).set(available_space_bytes as f64);
+                crate::metrics::record_peer_write(&node_id, success, Some(available_space_bytes));
                 if success {
-                    crate::metrics::P2P_PEER_WRITE_SUCCESS_TOTAL
-                        .with_label_values(&[&node_id]).inc();
                     Ok(blake3::Hash::from(shard_hash).to_hex().to_string())
                 } else {
-                    crate::metrics::P2P_PEER_WRITE_FAILURES_TOTAL
-                        .with_label_values(&[&node_id]).inc();
                     Err("node rejected shard stream (success=false)".to_string())
                 }
             },

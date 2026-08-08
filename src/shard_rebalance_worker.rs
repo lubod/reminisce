@@ -419,21 +419,10 @@ pub async fn upload_shard_to_node(
     let result = upload_shard_to_node_inner(p2p_service, addr, &node_id, shard_data).await;
 
     // Surface per-peer write health from this code path too (it stores shards on
-    // repair/migrate, so disk-full rejections would otherwise be invisible).
-    match &result {
-        Ok(_) => {
-            crate::metrics::P2P_PEER_WRITE_LAST_STATUS
-                .with_label_values(&[&node_id]).set(1);
-            crate::metrics::P2P_PEER_WRITE_SUCCESS_TOTAL
-                .with_label_values(&[&node_id]).inc();
-        }
-        Err(_) => {
-            crate::metrics::P2P_PEER_WRITE_LAST_STATUS
-                .with_label_values(&[&node_id]).set(0);
-            crate::metrics::P2P_PEER_WRITE_FAILURES_TOTAL
-                .with_label_values(&[&node_id]).inc();
-        }
-    }
+    // repair/migrate, so disk-full rejections would otherwise be invisible). The
+    // inner helpers update the available-space gauge on success; this records the
+    // last-write status and success/failure counters for every attempt.
+    crate::metrics::record_peer_write(&node_id, result.is_ok(), None);
     result
 }
 

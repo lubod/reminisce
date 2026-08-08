@@ -779,6 +779,32 @@ pub static P2P_PEER_WRITE_FAILURES_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
     ).expect("Failed to register p2p_peer_write_failures_total metric")
 });
 
+/// Record the outcome of a single shard-write attempt to a given peer.
+///
+/// Centralises the per-peer monitoring bookkeeping shared by every code path that
+/// stores shards (replication, rebalance, audit). `available_space_bytes` is the
+/// node's reported remaining space when known (store responses echo it back);
+/// pass `None` when it is not available so only the last-write status is updated.
+pub fn record_peer_write(node_id: &str, success: bool, available_space_bytes: Option<u64>) {
+    P2P_PEER_WRITE_LAST_STATUS
+        .with_label_values(&[node_id])
+        .set(if success { 1 } else { 0 });
+    if let Some(space) = available_space_bytes {
+        P2P_PEER_AVAILABLE_SPACE_BYTES
+            .with_label_values(&[node_id])
+            .set(space as f64);
+    }
+    if success {
+        P2P_PEER_WRITE_SUCCESS_TOTAL
+            .with_label_values(&[node_id])
+            .inc();
+    } else {
+        P2P_PEER_WRITE_FAILURES_TOTAL
+            .with_label_values(&[node_id])
+            .inc();
+    }
+}
+
 // ============================================================================
 // Startup Registration
 // ============================================================================
@@ -956,6 +982,64 @@ mod tests {
             ORIENTATION_DURATION.observe(0.4);
             ORIENTATION_PROCESSING_DELAY.observe(0.1);
         }
+    }
+
+    #[test]
+    fn record_peer_write_success_and_failure() {
+        init_metrics();
+
+        let big_space: f64 = 10.0 * 1024.0 * 1024.0 * 1024.0;
+        record_peer_write("peer-test-a", true, Some(big_space as u64));
+        assert_eq!(
+            P2P_PEER_WRITE_LAST_STATUS.with_label_values(&["peer-test-a"]).get(),
+            1,
+            "success should leave last-write status at 1"
+        );
+        assert_eq!(
+            P2P_PEER_WRITE_SUCCESS_TOTAL.with_label_values(&["peer-test-a"]).get(),
+            1,
+            "success should increment the success counter once"
+        );
+        assert_eq!(
+            P2P_PEER_WRITE_FAILURES_TOTAL.with_label_values(&["peer-test-a"]).get(),
+            0,
+            "success must not bump the failure counter"
+        );
+        assert_eq!(
+            P2P_PEER_AVAILABLE_SPACE_BYTES.with_label_values(&["peer-test-a"]).get(),
+            big_space,
+            "reported space should be recorded"
+        );
+
+        // Simulate a disk-full rejection chained right after a healthy write.
+        let tiny_space: u64 = 32 * 1024;
+        record_peer_write("peer-test-a", false, Some(tiny_space));
+        assert_eq!(
+            P2P_PEER_WRITE_LAST_STATUS.with_label_values(&["peer-test-a"]).get(),
+            0,
+            "failure should flip last-write status to 0"
+        );
+        assert_eq!(
+            P2P_PEER_WRITE_FAILURES_TOTAL.with_label_values(&["peer-test-a"]).get(),
+            1,
+            "failure should increment the failure counter once"
+        );
+        assert_eq!(
+            P2P_PEER_AVAILABLE_SPACE_BYTES.with_label_values(&["peer-test-a"]).get(),
+            tiny_space as f64,
+            "the failing node's reported (near-zero) space should reflect disk pressure"
+        );
+
+        // No space reported: status/counters still update, space stays as last-known.
+        record_peer_write("peer-test-b", false, None);
+        assert_eq!(
+            P2P_PEER_WRITE_LAST_STATUS.with_label_values(&["peer-test-b"]).get(),
+            0
+        );
+        assert_eq!(
+            P2P_PEER_WRITE_FAILURES_TOTAL.with_label_values(&["peer-test-b"]).get(),
+            1
+        );
     }
 }
 
