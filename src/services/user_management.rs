@@ -215,7 +215,7 @@ pub async fn update_user(
         Err(_) => return HttpResponse::InternalServerError().json(serde_json::json!({"error": "Failed to get database connection"})),
     };
 
-    let mut tx = match client.transaction().await {
+    let tx = match client.transaction().await {
         Ok(t) => t,
         Err(_) => return HttpResponse::InternalServerError().json(serde_json::json!({"error": "Failed to start transaction"})),
     };
@@ -233,13 +233,13 @@ pub async fn update_user(
         if !["admin", "user", "viewer"].contains(&role.as_str()) {
             return HttpResponse::BadRequest().json(serde_json::json!({"status":"error","message":"Invalid role"}));
         }
-        if let Err(_) = tx.execute("UPDATE users SET role = $1 WHERE id = $2", &[role, &target_id]).await {
+        if tx.execute("UPDATE users SET role = $1 WHERE id = $2", &[role, &target_id]).await.is_err() {
             return HttpResponse::InternalServerError().json(serde_json::json!({"error": "Failed to update role"}));
         }
     }
 
     if let Some(active) = body.is_active {
-        if let Err(_) = tx.execute("UPDATE users SET is_active = $1 WHERE id = $2", &[&active, &target_id]).await {
+        if tx.execute("UPDATE users SET is_active = $1 WHERE id = $2", &[&active, &target_id]).await.is_err() {
             return HttpResponse::InternalServerError().json(serde_json::json!({"error": "Failed to update active status"}));
         }
     }
@@ -250,7 +250,7 @@ pub async fn update_user(
         }
         match hash_password(new_password) {
             Ok(hash) => {
-                if let Err(_) = tx.execute("UPDATE users SET password_hash = $1 WHERE id = $2", &[&hash, &target_id]).await {
+                if tx.execute("UPDATE users SET password_hash = $1 WHERE id = $2", &[&hash, &target_id]).await.is_err() {
                     return HttpResponse::InternalServerError().json(serde_json::json!({"error": "Failed to update password"}));
                 }
             }
@@ -258,7 +258,7 @@ pub async fn update_user(
         }
     }
 
-    if let Err(_) = tx.commit().await {
+    if tx.commit().await.is_err() {
         return HttpResponse::InternalServerError().json(serde_json::json!({"error": "Failed to commit changes"}));
     }
 
