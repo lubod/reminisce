@@ -6,10 +6,51 @@ use actix_web::{
 use futures_util::future::{ready, LocalBoxFuture, Ready};
 use std::{
     collections::HashMap,
-    net::IpAddr,
+    net::{IpAddr, Ipv4Addr},
     sync::{Arc, Mutex},
     time::Instant,
 };
+
+fn is_private_or_local(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => v4.is_loopback() || v4.is_private() || v4.is_link_local(),
+        IpAddr::V6(v6) => v6.is_loopback(),
+    }
+}
+
+/// Resolve the effective client IP for rate limiting.
+///
+/// Proxy-supplied headers are only trusted when the immediate peer is a
+/// loopback/private/link-local address (i.e. the request arrived via the local
+/// reverse proxy, which is the deployment's shape). Public peers are treated as
+/// direct connections, so their self-supplied `X-Forwarded-For`/`X-Real-IP`
+/// headers are ignored — previously any client could rotate its IP header to
+/// obtain a fresh rate-limit bucket and bypass e.g. the login brute-force limit.
+///
+/// When trusted: `X-Real-IP` wins (nginx sets it from `$remote_addr`,
+/// overwriting client input), else the *last* `X-Forwarded-For` entry (nginx
+/// appends `$remote_addr`, so the last value is the proxy's view, whereas the
+/// first value is attacker-controlled).
+fn parse_client_ip(peer: Option<IpAddr>, x_real_ip: Option<&str>, x_forwarded_for: Option<&str>) -> IpAddr {
+    let peer = peer.unwrap_or_else(|| IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)));
+    let trusted_proxy = is_private_or_local(peer);
+    if !trusted_proxy {
+        return peer;
+    }
+    if let Some(v) = x_real_ip {
+        if let Ok(p) = v.trim().parse::<IpAddr>() {
+            return p;
+        }
+    }
+    if let Some(xff) = x_forwarded_for {
+        if let Some(last) = xff.rsplit(',').next() {
+            if let Ok(p) = last.trim().parse::<IpAddr>() {
+                return p;
+            }
+        }
+    }
+    peer
+}
 
 // Token Bucket for tracking rate limits
 struct TokenBucket {
@@ -133,27 +174,20 @@ where
     forward_ready!(service);
 
     fn call(&self, req: ServiceRequest) -> Self::Future {
-        // Extract IP address (supporting X-Forwarded-For / X-Real-IP behind reverse proxy)
-        let mut ip = req
-            .peer_addr()
-            .map(|addr| addr.ip())
-            .unwrap_or_else(|| IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1)));
-
-        if let Some(x_forwarded_for) = req.headers().get("x-forwarded-for") {
-            if let Ok(x_forwarded_str) = x_forwarded_for.to_str() {
-                if let Some(first_ip_str) = x_forwarded_str.split(',').next() {
-                    if let Ok(parsed_ip) = first_ip_str.trim().parse::<IpAddr>() {
-                        ip = parsed_ip;
-                    }
-                }
-            }
-        } else if let Some(x_real_ip) = req.headers().get("x-real-ip") {
-            if let Ok(x_real_str) = x_real_ip.to_str() {
-                if let Ok(parsed_ip) = x_real_str.trim().parse::<IpAddr>() {
-                    ip = parsed_ip;
-                }
-            }
-        }
+        // Resolve the effective client IP without trusting peer-supplied headers
+        // for direct (public) connections (see parse_client_ip docs).
+        let peer_ip = req.peer_addr().map(|addr| addr.ip());
+        let x_real_ip = req
+            .headers()
+            .get("x-real-ip")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+        let xff = req
+            .headers()
+            .get("x-forwarded-for")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+        let ip = parse_client_ip(peer_ip, x_real_ip.as_deref(), xff.as_deref());
 
         // Determine limits based on target path
         let path = req.path();
@@ -248,6 +282,50 @@ where
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    fn ip(s: &str) -> IpAddr {
+        s.parse().unwrap()
+    }
+
+    #[test]
+    fn rate_limit_ignores_spoofed_headers_on_public_peers() {
+        // A public (direct) peer cannot regenerate its bucket by lying in headers.
+        let peer = ip("203.0.113.7");
+        assert_eq!(
+            parse_client_ip(Some(peer), Some("1.2.3.4"), Some("1.2.3.4, 5.6.7.8")),
+            peer,
+            "public peer headers must be ignored",
+        );
+    }
+
+    #[test]
+    fn rate_limit_trusts_x_real_ip_behind_proxy() {
+        // Loopback peer (nginx -> backend on host network): X-Real-IP is the real
+        // client as set by nginx and must be used.
+        assert_eq!(
+            parse_client_ip(Some(ip("127.0.0.1")), Some("198.51.100.9"), Some("5.6.7.8")),
+            ip("198.51.100.9"),
+        );
+    }
+
+    #[test]
+    fn rate_limit_uses_last_forwarded_entry_not_the_spoofed_first() {
+        // $proxy_add_x_forwarded_for = "$remote_addr, $http_x_forwarded_for",
+        // so the LAST entry is the proxy's view and the FIRST is attacker input.
+        assert_eq!(
+            parse_client_ip(Some(ip("127.0.0.1")), None, Some("1.2.3.4, 198.51.100.9")),
+            ip("198.51.100.9"),
+        );
+    }
+
+    #[test]
+    fn rate_limit_falls_back_to_peer_on_garbage_headers() {
+        assert_eq!(
+            parse_client_ip(Some(ip("10.0.0.5")), Some("not-an-ip"), Some("also-bad")),
+            ip("10.0.0.5"),
+        );
+        assert_eq!(parse_client_ip(None, None, None), ip("127.0.0.1"));
+    }
 
     #[test]
     fn token_bucket_allows_full_capacity_and_denies_when_empty() {

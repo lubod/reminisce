@@ -296,7 +296,8 @@ impl RootSpanBuilder for CustomRootSpanBuilder {
         let host = request.connection_info().host().to_string();
         let client_ip = request.connection_info().realip_remote_addr().map(|s| s.to_string());
         let user_agent = request.headers().get(header::USER_AGENT).and_then(|h| h.to_str().ok()).unwrap_or("");
-        let target = request.uri().to_string();
+        // Path only (no query string): query params must never reach logs/OTLP.
+        let target = request.path().to_string();
         let request_id = uuid::Uuid::new_v4().to_string();
 
         if path == "/pool-stats" || path == "/system-stats" {
@@ -415,9 +416,12 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
     let worker_pool_inner = db::create_pool_with_options(&database_url, worker_pool_options, config.db_tls)
         .expect("Failed to create worker database pool");
 
-    // Apply idempotent schema migrations on every startup
+    // Apply idempotent schema migrations on every startup. A migration failure
+    // is fatal: continuing under an inconsistent schema silently corrupts data,
+    // so the server refuses to start instead.
     if let Err(e) = db::run_migrations(&pool).await {
-        error!("DB migration failed: {}", e);
+        error!("DB migration failed: {} — refusing to start (schema may be inconsistent)", e);
+        std::process::exit(1);
     }
 
     let main_pool = db::MainDbPool(pool.clone());

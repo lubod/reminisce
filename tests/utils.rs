@@ -49,6 +49,12 @@ pub fn create_test_config() -> config::Config {
 
 #[allow(dead_code)]
 pub async fn create_test_jwt_token() -> String {
+    create_test_jwt_token_with_scope(None).await
+}
+
+/// Creates a signed test JWT with an optional `scope` claim (e.g. "media_read").
+#[allow(dead_code)]
+pub async fn create_test_jwt_token_with_scope(scope: Option<&str>) -> String {
     let shared_secret = "test_secret_key_which_is_at_least_32_bytes_long";
 
     use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
@@ -60,7 +66,7 @@ pub async fn create_test_jwt_token() -> String {
         email: "test@example.com".to_string(),
         role: "admin".to_string(),
         exp: expiration_time.timestamp() as usize,
-        scope: None,
+        scope: scope.map(|s| s.to_string()),
     };
     encode(
         &Header::new(Algorithm::HS512),

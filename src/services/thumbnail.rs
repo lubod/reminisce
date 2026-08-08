@@ -60,22 +60,9 @@ pub async fn get_face_thumbnail(
     
     let cache_path = faces_dir.join(format!("{}.jpg", face_id));
 
-    // 1. Check cache first
-    if async_fs::try_exists(&cache_path).await.unwrap_or(false) {
-        match async_fs::read(&cache_path).await {
-            Ok(data) => {
-                return Ok(HttpResponse::Ok()
-                    .content_type("image/jpeg")
-                    .insert_header(("Cache-Control", "public, max-age=31536000, immutable"))
-                    .body(data));
-            }
-            Err(e) => {
-                warn!("Failed to read cached face thumbnail {:?}: {}", cache_path, e);
-                // Fallthrough to regenerate
-            }
-        }
-    }
-
+    // AUTHORIZATION FIRST: the face-thumbnail cache is a global namespace keyed by
+    // sequential face id, so it must never be served before verifying the requester
+    // owns the face (IDOR). The cache is only consulted after the ownership query.
     let client = utils::get_db_client(&pool.0).await?;
 
     // Query face details, extension, and orientation in one round-trip
@@ -96,6 +83,18 @@ pub async fn get_face_thumbnail(
         })?;
 
     if let Some(row) = row {
+        // Authorized: safe to serve the cached thumbnail if it exists.
+        if async_fs::try_exists(&cache_path).await.unwrap_or(false) {
+            if let Ok(data) = async_fs::read(&cache_path).await {
+                return Ok(HttpResponse::Ok()
+                    .content_type("image/jpeg")
+                    .insert_header(("Cache-Control", "public, max-age=31536000, immutable"))
+                    .body(data));
+            }
+            warn!("Failed to read cached face thumbnail {:?}", cache_path);
+            // Fallthrough to regenerate
+        }
+
         let image_hash: String = row.get(0);
         let x: i32 = row.get(1);
         let y: i32 = row.get(2);

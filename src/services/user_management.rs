@@ -210,20 +210,38 @@ pub async fn update_user(
         }
     }
 
-    let client = match pool.0.get().await {
+    let mut client = match pool.0.get().await {
         Ok(c) => c,
         Err(_) => return HttpResponse::InternalServerError().json(serde_json::json!({"error": "Failed to get database connection"})),
     };
+
+    let mut tx = match client.transaction().await {
+        Ok(t) => t,
+        Err(_) => return HttpResponse::InternalServerError().json(serde_json::json!({"error": "Failed to start transaction"})),
+    };
+
+    // Confirm the target exists so the update is honest (no silent no-op returning 200).
+    let user_exists = match tx.query_opt("SELECT 1 FROM users WHERE id = $1", &[&target_id]).await {
+        Ok(r) => r.is_some(),
+        Err(_) => return HttpResponse::InternalServerError().json(serde_json::json!({"error": "Database error"})),
+    };
+    if !user_exists {
+        return HttpResponse::NotFound().json(serde_json::json!({"status": "error", "message": "User not found"}));
+    }
 
     if let Some(ref role) = body.role {
         if !["admin", "user", "viewer"].contains(&role.as_str()) {
             return HttpResponse::BadRequest().json(serde_json::json!({"status":"error","message":"Invalid role"}));
         }
-        let _ = client.execute("UPDATE users SET role = $1 WHERE id = $2", &[role, &target_id]).await;
+        if let Err(_) = tx.execute("UPDATE users SET role = $1 WHERE id = $2", &[role, &target_id]).await {
+            return HttpResponse::InternalServerError().json(serde_json::json!({"error": "Failed to update role"}));
+        }
     }
 
     if let Some(active) = body.is_active {
-        let _ = client.execute("UPDATE users SET is_active = $1 WHERE id = $2", &[&active, &target_id]).await;
+        if let Err(_) = tx.execute("UPDATE users SET is_active = $1 WHERE id = $2", &[&active, &target_id]).await {
+            return HttpResponse::InternalServerError().json(serde_json::json!({"error": "Failed to update active status"}));
+        }
     }
 
     if let Some(ref new_password) = body.password {
@@ -231,9 +249,17 @@ pub async fn update_user(
             return HttpResponse::BadRequest().json(serde_json::json!({"status":"error","message":"Password must be ≥8 chars"}));
         }
         match hash_password(new_password) {
-            Ok(hash) => { let _ = client.execute("UPDATE users SET password_hash = $1 WHERE id = $2", &[&hash, &target_id]).await; }
+            Ok(hash) => {
+                if let Err(_) = tx.execute("UPDATE users SET password_hash = $1 WHERE id = $2", &[&hash, &target_id]).await {
+                    return HttpResponse::InternalServerError().json(serde_json::json!({"error": "Failed to update password"}));
+                }
+            }
             Err(_) => return HttpResponse::InternalServerError().json(serde_json::json!({"error": "Failed to hash password"})),
         }
+    }
+
+    if let Err(_) = tx.commit().await {
+        return HttpResponse::InternalServerError().json(serde_json::json!({"error": "Failed to commit changes"}));
     }
 
     info!("Admin {} updated user {}", claims.username, target_id);

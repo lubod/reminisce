@@ -58,6 +58,11 @@ pub async fn ensure_user_exists(
     Ok(())
 }
 
+// Media-read-scoped tokens (the short-lived `image_token` handed out for `<img>` /
+// media URLs) must never unlock anything that is not raw media byte-serving.
+// Every other handler requires a full session token.
+const MEDIA_READ_SAFE_HANDLERS: &[&str] = &["get_image", "get_video"];
+
 /// Authenticates a request by checking for a valid JWT in the Authorization header or
 /// `token` query parameter. Returns the decoded claims on success.
 pub async fn authenticate_request(
@@ -90,18 +95,7 @@ pub async fn authenticate_request(
         }
     }
 
-    // 2. Try 'token' query parameter (useful for <img> tags)
-    if token.is_none() {
-        if let Ok(query) =
-            web::Query::<std::collections::HashMap<String, String>>::from_query(req.query_string())
-        {
-            if let Some(t) = query.get("token") {
-                token = Some(t.clone());
-            }
-        }
-    }
-
-    // 3. Try 'access_token' HTTP cookie
+    // 2. Try 'access_token' HTTP cookie
     if token.is_none() {
         if let Some(cookie) = req.cookie("access_token") {
             token = Some(cookie.value().to_string());
@@ -118,6 +112,19 @@ pub async fn authenticate_request(
             Ok(token_data) => {
                 log::debug!("JWT token validated successfully for {}.", handler_name);
                 let claims = token_data.claims;
+
+                // Enforce token scope: a media_read-scoped token is downgraded to raw
+                // media access only; it cannot drive mutations or admin/management
+                // endpoints (previously the image_token worked as full privilege here).
+                if let Some(scope) = claims.scope.as_deref() {
+                    if scope == "media_read" && !MEDIA_READ_SAFE_HANDLERS.contains(&handler_name) {
+                        log::warn!("media_read-scoped token rejected for handler '{}'", handler_name);
+                        return Err(HttpResponse::Forbidden().json(serde_json::json!({
+                            "error": "Insufficient token scope"
+                        })));
+                    }
+                }
+
                 let user_uuid = match uuid::Uuid::parse_str(&claims.user_id) {
                     Ok(u) => u,
                     Err(_) => return Err(HttpResponse::Unauthorized().json(serde_json::json!({"error": "Invalid user ID in token"}))),

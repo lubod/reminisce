@@ -66,57 +66,94 @@ pub fn create_pool_with_options(
     Ok(pool)
 }
 
-/// Execute a SQL script, splitting on semicolons while respecting $$-quoted blocks.
-async fn exec_sql_script(client: &deadpool_postgres::Object, sql: &str, label: &str) -> (usize, usize) {
+/// Execute a SQL script, splitting on semicolons while respecting `$$`-quoted
+/// blocks, single-quoted string literals (including `''` escapes), and `--`
+/// line comments. The first failing statement aborts the script with a readable
+/// error so a partially-applied migration is never silently recorded as done.
+async fn exec_sql_script(client: &deadpool_postgres::Object, sql: &str, label: &str) -> Result<usize, String> {
     let mut ok = 0usize;
-    let mut errs = 0usize;
-    let mut current_statement = String::new();
-    let mut in_dollar_quote = false;
+    let mut current = String::new();
+    let mut in_dollar = false;
+    let mut in_single_quote = false;
+    let chars: Vec<char> = sql.chars().collect();
+    let mut i = 0usize;
 
-    for line in sql.lines() {
-        let trimmed_line = line.trim();
-        if trimmed_line.is_empty() || trimmed_line.starts_with("--") {
+    while i < chars.len() {
+        let c = chars[i];
+
+        // Line comment (outside quotes): drop through to end of line.
+        if c == '-' && i + 1 < chars.len() && chars[i + 1] == '-' && !in_dollar && !in_single_quote {
+            while i < chars.len() && chars[i] != '\n' {
+                i += 1;
+            }
             continue;
         }
 
-        // Toggle dollar quote state if the line contains an odd number of "$$"
-        let dollar_count = line.matches("$$").count();
-        if dollar_count % 2 != 0 {
-            in_dollar_quote = !in_dollar_quote;
+        // Dollar-quote open/close ($$).
+        if !in_dollar && c == '$' && i + 1 < chars.len() && chars[i + 1] == '$' {
+            in_dollar = true;
+            current.push_str("$$");
+            i += 2;
+            continue;
+        }
+        if in_dollar && c == '$' && i + 1 < chars.len() && chars[i + 1] == '$' {
+            in_dollar = false;
+            current.push_str("$$");
+            i += 2;
+            continue;
         }
 
-        current_statement.push_str(line);
-        current_statement.push('\n');
+        // Single-quote (open/close), honoring the '' escape.
+        if !in_dollar && c == '\'' {
+            if in_single_quote && i + 1 < chars.len() && chars[i + 1] == '\'' {
+                current.push_str("''");
+                i += 2;
+                continue;
+            }
+            in_single_quote = !in_single_quote;
+            current.push(c);
+            i += 1;
+            continue;
+        }
 
-        // If not in a dollar-quoted block and the line ends with a semicolon, execute the statement
-        if !in_dollar_quote && trimmed_line.ends_with(';') {
-            let statement = current_statement.trim();
+        // Statement terminator (only outside quotes).
+        if c == ';' && !in_dollar && !in_single_quote {
+            let statement = current.trim();
             if !statement.is_empty() {
                 match client.execute(statement, &[]).await {
                     Ok(_) => ok += 1,
                     Err(e) => {
-                        warn!("[{}] statement warning: {}\nStatement: {}", label, e, statement);
-                        errs += 1;
+                        return Err(format!(
+                            "[{}] statement failed: {}\nStatement: {}",
+                            label, e, statement
+                        ));
                     }
                 }
             }
-            current_statement.clear();
+            current.clear();
+            i += 1;
+            continue;
         }
+
+        current.push(c);
+        i += 1;
     }
 
-    // Execute any remaining statement that might not end with a semicolon
-    let remaining = current_statement.trim();
-    if !remaining.is_empty() {
-        match client.execute(remaining, &[]).await {
+    // Execute any trailing statement without a final semicolon.
+    let statement = current.trim();
+    if !statement.is_empty() {
+        match client.execute(statement, &[]).await {
             Ok(_) => ok += 1,
             Err(e) => {
-                warn!("[{}] final statement warning: {}\nStatement: {}", label, e, remaining);
-                errs += 1;
+                return Err(format!(
+                    "[{}] trailing statement failed: {}\nStatement: {}",
+                    label, e, statement
+                ));
             }
         }
     }
 
-    (ok, errs)
+    Ok(ok)
 }
 
 /// Run init.sql against the pool at startup.
@@ -132,11 +169,11 @@ pub async fn run_migrations_with_schema(pool: &Pool, init_sql: &str) -> Result<(
     let client = pool.get().await?;
 
     // --- Base schema (idempotent, runs every startup) ---
-    let (ok, errs) = exec_sql_script(&client, init_sql, "init.sql").await;
-    if errs > 0 {
-        warn!("DB init.sql: {} ok, {} warnings", ok, errs);
-    } else {
-        info!("DB init.sql: {} statements applied", ok);
+    // init.sql is deliberately lenient: everything is guarded (IF NOT EXISTS etc.)
+    // and re-runs on every boot, so a failure here is logged, not aborting.
+    match exec_sql_script(&client, init_sql, "init.sql").await {
+        Ok(n) => info!("DB init.sql: {} statements applied", n),
+        Err(msg) => warn!("DB init.sql error (continuing, idempotent): {}", msg),
     }
 
     // Ensure dynamic sharding columns exist for backward compatibility
@@ -176,12 +213,13 @@ pub async fn run_migrations_with_schema(pool: &Pool, init_sql: &str) -> Result<(
         }
 
         info!("Applying migration {}...", version);
-        let (ok, errs) = exec_sql_script(&client, sql, version).await;
-        if errs > 0 {
-            warn!("Migration {}: {} ok, {} warnings", version, ok, errs);
-        } else {
-            info!("Migration {}: {} statements applied", version, ok);
-        }
+        // A failed migration is FATAL: do not record the version and fail
+        // startup — otherwise a broken upgrade is recorded as applied and the
+        // schema is left inconsistent while the server keeps running.
+        let n = exec_sql_script(&client, sql, version).await.map_err(|msg| {
+            std::io::Error::other(format!("Database migration {} failed: {}", version, msg))
+        })?;
+        info!("Migration {}: {} statements applied", version, n);
 
         client.execute(
             "INSERT INTO schema_migrations (version) VALUES ($1)",
