@@ -26,6 +26,7 @@ pub mod ai_client;
 pub mod telemetry;
 pub mod metrics;
 pub mod openapi;
+pub mod p2p_error;
 
 pub mod duplicate_worker;
 pub mod test_utils;

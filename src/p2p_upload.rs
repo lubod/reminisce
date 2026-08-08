@@ -140,19 +140,19 @@ pub async fn retrieve_shard(
     shard_hash_hex: &str,
 ) -> Result<Vec<u8>, String> {
     let shard_hash_bytes: [u8; 32] = hex::decode(shard_hash_hex)
-        .map_err(|e| format!("Invalid shard hash {:?}: {}", shard_hash_hex, e))?
+        .map_err(|e| crate::p2p_error::P2pError::InvalidShardHash { hash: shard_hash_hex.to_string(), message: e.to_string() })?
         .try_into()
-        .map_err(|_| format!("Invalid shard hash length: {}", shard_hash_hex))?;
+        .map_err(|_| crate::p2p_error::P2pError::InvalidShardHash { hash: shard_hash_hex.to_string(), message: "wrong byte length".into() })?;
 
     let conn = p2p_service
         .connect_to_addr(addr)
         .await
-        .map_err(|e| format!("Connection to {} failed: {}", addr, e))?;
+        .map_err(|e| crate::p2p_error::P2pError::connect(addr.to_string(), e.to_string()))?;
 
     let (mut send, mut recv) = conn
         .open_bi()
         .await
-        .map_err(|e| format!("open_bi failed: {}", e))?;
+        .map_err(|e| crate::p2p_error::P2pError::open_bi(addr.to_string(), e.to_string()))?;
 
     let token = p2p_service
         .identity()
@@ -162,16 +162,16 @@ pub async fn retrieve_shard(
         token,
     })
     .await
-    .map_err(|e| format!("send RetrieveShardRequest failed: {}", e))?;
+    .map_err(|e| crate::p2p_error::P2pError::Send { message: e.to_string() })?;
 
     let result = match Protocol::receive(&mut recv).await {
         Ok(Message::RetrieveShardResponse { data: Some(data), .. }) => Ok(data),
-        Ok(_) => Err("Shard not found on node".to_string()),
-        Err(e) => Err(format!("receive failed: {}", e)),
+        Ok(_) => Err(crate::p2p_error::P2pError::ShardNotFound),
+        Err(e) => Err(crate::p2p_error::P2pError::Receive { message: e.to_string() }),
     };
     let _ = send.finish();
     conn.close(0u32.into(), if result.is_ok() { b"done" } else { b"error" });
-    result
+    result.map_err(|e| e.to_string())
 }
 
 /// Upload already-in-memory shards to rendezvous-selected nodes in parallel.
