@@ -268,8 +268,7 @@ async fn relay_message_surfaces_coordinator_error() {
 
     let err = coordinator::relay_message(coord_addr, &coord_id, &node, "t", &Message::GetPeers { namespace: "n".into() })
         .await
-        .err()
-        .expect("relay error path");
+        .expect_err("relay error path");
     assert!(err.to_string().contains("Relay error 404"), "err: {err}");
 }
 
@@ -281,8 +280,7 @@ async fn relay_message_rejects_unexpected_payload() {
 
     let err = coordinator::relay_message(coord_addr, &coord_id, &node, "t", &Message::GetPeers { namespace: "n".into() })
         .await
-        .err()
-        .expect("unexpected payload err");
+        .expect_err("unexpected payload err");
     assert!(err.to_string().contains("Unexpected relay response"), "err: {err}");
 }
 
@@ -547,11 +545,8 @@ async fn p2p_service_sends_direct_then_relay_then_falls_back() {
             if let Ok(conn) = incoming.await {
                 tokio::spawn(async move {
                     if let Ok((mut send, mut recv)) = conn.accept_bi().await {
-                        match Protocol::receive(&mut recv).await {
-                            Ok(Message::Handshake { node_id, .. }) => {
-                                let _ = Protocol::send(&mut send, &Message::HandshakeAck { node_id }).await;
-                            }
-                            _ => {}
+                        if let Ok(Message::Handshake { node_id, .. }) = Protocol::receive(&mut recv).await {
+                            let _ = Protocol::send(&mut send, &Message::HandshakeAck { node_id }).await;
                         }
                         tokio::time::sleep(Duration::from_millis(200)).await;
                     }
