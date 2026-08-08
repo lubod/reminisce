@@ -128,6 +128,52 @@ pub async fn store_shard(
     Err(last_err)
 }
 
+/// Retrieve a shard from a specific node by its 64-hex hash.
+///
+/// Shared by the audit, rebalance and restore paths: identity-authenticated
+/// RetrieveShardRequest, verifying the token is bound to the shard hash, then
+/// returning the raw bytes. Errors if the shard is missing or the token/query
+/// fails.
+pub async fn retrieve_shard(
+    p2p_service: &Arc<P2PService>,
+    addr: SocketAddr,
+    shard_hash_hex: &str,
+) -> Result<Vec<u8>, String> {
+    let shard_hash_bytes: [u8; 32] = hex::decode(shard_hash_hex)
+        .map_err(|e| format!("Invalid shard hash {:?}: {}", shard_hash_hex, e))?
+        .try_into()
+        .map_err(|_| format!("Invalid shard hash length: {}", shard_hash_hex))?;
+
+    let conn = p2p_service
+        .connect_to_addr(addr)
+        .await
+        .map_err(|e| format!("Connection to {} failed: {}", addr, e))?;
+
+    let (mut send, mut recv) = conn
+        .open_bi()
+        .await
+        .map_err(|e| format!("open_bi failed: {}", e))?;
+
+    let token = p2p_service
+        .identity()
+        .create_shard_token(np2p::crypto::ShardOp::Retrieve, &shard_hash_bytes);
+    Protocol::send(&mut send, &Message::RetrieveShardRequest {
+        shard_hash: shard_hash_bytes,
+        token,
+    })
+    .await
+    .map_err(|e| format!("send RetrieveShardRequest failed: {}", e))?;
+
+    let result = match Protocol::receive(&mut recv).await {
+        Ok(Message::RetrieveShardResponse { data: Some(data), .. }) => Ok(data),
+        Ok(_) => Err("Shard not found on node".to_string()),
+        Err(e) => Err(format!("receive failed: {}", e)),
+    };
+    let _ = send.finish();
+    conn.close(0u32.into(), if result.is_ok() { b"done" } else { b"error" });
+    result
+}
+
 /// Upload already-in-memory shards to rendezvous-selected nodes in parallel.
 /// `id_hash` drives node selection. Returns the shards that succeeded (may be fewer
 /// than requested — the caller enforces the minimum-reconstruction threshold).

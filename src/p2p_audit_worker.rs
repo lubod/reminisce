@@ -5,7 +5,7 @@
 //! Large files are repaired by streaming the local file segment-by-segment.
 
 use crate::config::Config;
-use crate::p2p_upload::{rendezvous_select, SHARD_COUNT, MIN_NODES_REQUIRED};
+use crate::p2p_upload::{retrieve_shard, rendezvous_select, SHARD_COUNT, MIN_NODES_REQUIRED};
 use crate::shard_rebalance_worker::{find_file_info, upload_shard_to_node, lookup_node_addr};
 use log::{info, warn, error};
 use crate::metrics::{
@@ -13,7 +13,7 @@ use crate::metrics::{
     P2P_SHARDS_REPAIR_FAILED_TOTAL, P2P_ORPHANED_SHARDS_CLEANED_TOTAL,
 };
 use deadpool_postgres::Pool;
-use np2p::network::{P2PService, Message, Protocol};
+use np2p::network::P2PService;
 use np2p::storage::StorageEngine;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -91,41 +91,17 @@ async fn perform_audit(
         let mut success = false;
         match connection {
             Ok(conn) => {
-                let decoded = match hex::decode(&expected_shard_hash) {
-                    Ok(d) if d.len() == 32 => d,
-                    Ok(_) => {
-                        warn!("Shard hash {} has wrong length, skipping", expected_shard_hash);
-                        conn.close(0u32.into(), b"invalid hash");
-                        continue;
-                    }
-                    Err(e) => {
-                        warn!("Invalid shard hash hex {}: {}", expected_shard_hash, e);
-                        conn.close(0u32.into(), b"invalid hash");
-                        continue;
-                    }
-                };
-                let mut shard_hash_bytes = [0u8; 32];
-                shard_hash_bytes.copy_from_slice(&decoded);
-
-                match conn.open_bi().await {
-                    Ok((mut send, mut recv)) => {
-                        let token = p2p_service.identity().create_shard_token(np2p::crypto::ShardOp::Retrieve, &shard_hash_bytes);
-                        let req = Message::RetrieveShardRequest { shard_hash: shard_hash_bytes, token };
-                        if Protocol::send(&mut send, &req).await.is_ok() {
-                            if let Ok(Message::RetrieveShardResponse { data: Some(data), .. }) = Protocol::receive(&mut recv).await {
-                                let actual_hash = blake3::hash(&data).to_hex().to_string();
-                                if actual_hash == expected_shard_hash {
-                                    success = true;
-                                } else {
-                                    warn!("Shard {} index {} on node {} is CORRUPTED!", file_hash, shard_index, node_id);
-                                }
-                            } else {
-                                warn!("Shard {} index {} on node {} is MISSING!", file_hash, shard_index, node_id);
-                            }
+                match retrieve_shard(p2p_service, addr, &expected_shard_hash).await {
+                    Ok(data) => {
+                        let actual_hash = blake3::hash(&data).to_hex().to_string();
+                        if actual_hash == expected_shard_hash {
+                            success = true;
+                        } else {
+                            warn!("Shard {} index {} on node {} is CORRUPTED!", file_hash, shard_index, node_id);
                         }
                     }
                     Err(e) => {
-                        warn!("Failed to open stream to node {} for shard {}: {}", node_id, expected_shard_hash, e);
+                        warn!("Shard {} index {} on node {} is MISSING: {}", file_hash, shard_index, node_id, e);
                     }
                 }
                 conn.close(0u32.into(), b"done");
@@ -425,36 +401,18 @@ async fn repair_file(
                     continue; // Skip the target, we're trying to send it there
                 }
 
-                if let Ok(conn) = p2p_service.connect_to_addr(*node_addr).await {
-                    let mut shard_hash_bytes = [0u8; 32];
-                    if let Ok(decoded) = hex::decode(&expected_shard_hash) {
-                        shard_hash_bytes.copy_from_slice(&decoded);
-                    } else {
-                        continue;
+                if let Ok(data) = retrieve_shard(p2p_service, *node_addr, &expected_shard_hash).await {
+                    let actual_hash = blake3::hash(&data).to_hex().to_string();
+                    if actual_hash == expected_shard_hash {
+                        let new_hash = upload_shard_to_node(p2p_service, *target_node_addr, &data).await?;
+                        client.execute(
+                            "UPDATE p2p_shards SET node_id = $1, shard_hash = $2, last_checked_at = NOW() WHERE file_hash = $3 AND shard_index = $4",
+                            &[target_node_id, &new_hash, &file_hash, &(failed_shard_index as i32)],
+                        ).await?;
+
+                        info!("Repaired shard {} of {} via fallback from node {}", failed_shard_index, file_hash, node_id);
+                        return Ok(());
                     }
-
-                    if let Ok((mut send, mut recv)) = conn.open_bi().await {
-                        let token = p2p_service.identity().create_shard_token(np2p::crypto::ShardOp::Retrieve, &shard_hash_bytes);
-                        let req = Message::RetrieveShardRequest { shard_hash: shard_hash_bytes, token };
-                        if Protocol::send(&mut send, &req).await.is_ok() {
-                            if let Ok(Message::RetrieveShardResponse { data: Some(data), .. }) = Protocol::receive(&mut recv).await {
-                                let actual_hash = blake3::hash(&data).to_hex().to_string();
-                                if actual_hash == expected_shard_hash {
-                                    conn.close(0u32.into(), b"done");
-
-                                    let new_hash = upload_shard_to_node(p2p_service, *target_node_addr, &data).await?;
-                                    client.execute(
-                                        "UPDATE p2p_shards SET node_id = $1, shard_hash = $2, last_checked_at = NOW() WHERE file_hash = $3 AND shard_index = $4",
-                                        &[target_node_id, &new_hash, &file_hash, &(failed_shard_index as i32)],
-                                    ).await?;
-
-                                    info!("Repaired shard {} of {} via fallback from node {}", failed_shard_index, file_hash, node_id);
-                                    return Ok(());
-                                }
-                            }
-                        }
-                    }
-                    conn.close(0u32.into(), b"done");
                 }
             }
 

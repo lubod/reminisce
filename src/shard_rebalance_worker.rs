@@ -383,28 +383,9 @@ async fn retrieve_shard_from_node(
     addr: SocketAddr,
     shard_hash_hex: &str,
 ) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
-    let conn = p2p_service.connect_to_addr(addr).await
-        .map_err(|e| format!("Connection to {} failed: {}", addr, e))?;
-
-    let mut shard_hash_bytes = [0u8; 32];
-    let decoded = hex::decode(shard_hash_hex)?;
-    shard_hash_bytes.copy_from_slice(&decoded);
-
-    let (mut send, mut recv) = conn.open_bi().await?;
-    let token = p2p_service.identity().create_shard_token(np2p::crypto::ShardOp::Retrieve, &shard_hash_bytes);
-    Protocol::send(&mut send, &Message::RetrieveShardRequest { shard_hash: shard_hash_bytes, token }).await
-        .map_err(|e| e.to_string())?;
-
-    match Protocol::receive(&mut recv).await.map_err(|e| e.to_string())? {
-        Message::RetrieveShardResponse { data: Some(data), .. } => {
-            conn.close(0u32.into(), b"done");
-            Ok(data)
-        }
-        _ => {
-            conn.close(0u32.into(), b"done");
-            Err("Shard not found on node".into())
-        }
-    }
+    crate::p2p_upload::retrieve_shard(p2p_service, addr, shard_hash_hex)
+        .await
+        .map_err(|e| e.into())
 }
 
 /// Upload a shard to a remote node.
