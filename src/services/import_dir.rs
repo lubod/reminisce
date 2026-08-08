@@ -94,6 +94,15 @@ pub async fn import_directory(
 
     let user_uuid = utils::parse_user_uuid(&claims.user_id)?;
 
+    // Server-side directory import reads server filesystem paths and can create
+    // media: only admins may trigger it (role is re-read from the DB per-request).
+    if claims.role != "admin" {
+        warn!("Non-admin user {} attempted server import", claims.username);
+        return Ok(HttpResponse::Forbidden().json(serde_json::json!({
+            "error": "Admin role required to import directories"
+        })));
+    }
+
     let path_string = if body.path.starts_with("~") {
         if let Ok(home) = std::env::var("HOME") {
             body.path.replacen("~", &home, 1)
@@ -193,7 +202,16 @@ async fn run_import(
             };
             while let Ok(Some(entry)) = entries.next_entry().await {
                 let p = entry.path();
-                if p.is_dir() { stack.push(p); } else { files_to_process.push(p); }
+                // Never follow symlinks: a link inside the allowed root could point
+                // outside it and import arbitrary paths (containment escape).
+                let file_type = match entry.file_type().await {
+                    Ok(ft) => ft,
+                    Err(_) => continue,
+                };
+                if file_type.is_symlink() {
+                    continue;
+                }
+                if file_type.is_dir() { stack.push(p); } else { files_to_process.push(p); }
             }
         }
     }

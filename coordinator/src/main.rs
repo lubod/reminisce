@@ -352,12 +352,14 @@ async fn relay(
             return;
         }
         let _ = ts.finish();
+        // Bound the relay wait: a stalled/unresponsive channel must release the
+        // requester instead of hanging the relay task indefinitely.
         let mut len_buf = [0u8; 4];
-        if tr.read_exact(&mut len_buf).await.is_err() { return; }
+        if tokio::time::timeout(std::time::Duration::from_secs(30), tr.read_exact(&mut len_buf)).await.is_err() { return; }
         let resp_len = u32::from_be_bytes(len_buf) as usize;
         if resp_len > MAX_RELAY_PAYLOAD { return; }
         let mut resp_payload = vec![0u8; resp_len];
-        if tr.read_exact(&mut resp_payload).await.is_err() { return; }
+        if tokio::time::timeout(std::time::Duration::from_secs(30), tr.read_exact(&mut resp_payload)).await.is_err() { return; }
         let _ = Protocol::send(send, &Message::RelayResponse { payload: resp_payload }).await;
         let _ = send.finish();
         return;
@@ -736,7 +738,14 @@ async fn main() -> anyhow::Result<()> {
                     channels.write().unwrap_or_else(|e| e.into_inner()).insert(node_id.clone(), conn.clone());
                     info!("[CHANNEL] Registered: {} from {}", node_id, remote_ip);
                     conn.closed().await;
-                    channels.write().unwrap_or_else(|e| e.into_inner()).remove(&node_id);
+                    // Only remove OUR registration: a reconnecting node may have
+                    // already inserted a fresh entry (different connection), and the
+                    // stale disconnect task must not wipe it (see tunnel path).
+                    let mut map = channels.write().unwrap_or_else(|e| e.into_inner());
+                    if map.get(&node_id).map(|c| c.stable_id() == conn.stable_id()).unwrap_or(false) {
+                        map.remove(&node_id);
+                    }
+                    drop(map);
                     info!("[CHANNEL] Disconnected: {}", node_id);
                 } else {
                     // ── Normal P2P connection ─────────────────────────────────
