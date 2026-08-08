@@ -5,7 +5,7 @@
 # assembly, telemetry.rs, src/bin, src/main.rs) plus the integration suites, and
 # fails the deploy if the line-coverage % falls below the given threshold.
 #
-# Threshold is the first argument (default 40). Set COVERAGE_BACKEND to override.
+# Threshold is the first argument (default 58). Set COVERAGE_BACKEND to override.
 #
 # Note: this re-runs the full unit+integration suites under instrumentation, so
 # it is the slowest part of the test gate. It needs the dev infra (./dev up) and
@@ -13,7 +13,7 @@
 
 set -euo pipefail
 
-THRESHOLD="${1:-${COVERAGE_BACKEND:-40}}"
+THRESHOLD="${1:-${COVERAGE_BACKEND:-58}}"
 export PATH="${HOME}/.cargo/bin:${PATH}"
 cd "$(dirname "$0")/.."
 
