@@ -57,13 +57,20 @@ impl NodeIdentity {
         self.signing_key.sign(msg).to_bytes().to_vec()
     }
 
-    /// Create a signed ShardToken for a given shard hash.
-    pub fn create_shard_token(&self, shard_hash: &[u8; 32]) -> ShardToken {
+    /// Create a signed ShardToken for a given shard hash and operation.
+    ///
+    /// The token is bound to the OPERATION it authorizes (store/retrieve/delete)
+    /// so a captured token can never be replayed for a different operation (e.g.
+    /// a retrieve token cannot delete). Combined with the shard-hash binding and
+    /// the 5-minute timestamp window, a token authorizes exactly one operation on
+    /// exactly one shard within a short window.
+    pub fn create_shard_token(&self, op: ShardOp, shard_hash: &[u8; 32]) -> ShardToken {
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::SystemTime::UNIX_EPOCH)
             .unwrap_or(std::time::Duration::from_secs(0))
             .as_secs();
         let mut msg_to_sign = Vec::new();
+        msg_to_sign.push(op.tag()); // operation binding
         msg_to_sign.extend_from_slice(shard_hash);
         msg_to_sign.extend_from_slice(&timestamp.to_be_bytes());
         let signature = self.sign(&msg_to_sign);
@@ -352,8 +359,29 @@ pub struct ShardToken {
     pub signature: Vec<u8>,
 }
 
+/// The operation a ShardToken authorizes. Tokens are signed over the operation
+/// tag, so a token cannot be replayed for a different operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum ShardOp {
+    Store,
+    Retrieve,
+    Delete,
+}
+
+impl ShardOp {
+    /// Single-byte domain tag included in the signed token message.
+    pub fn tag(self) -> u8 {
+        match self {
+            ShardOp::Store => 0x01,
+            ShardOp::Retrieve => 0x02,
+            ShardOp::Delete => 0x03,
+        }
+    }
+}
+
 pub fn verify_shard_token(
     token: &ShardToken,
+    op: ShardOp,
     shard_hash: &[u8; 32],
     allowed_owner_id: Option<&[u8; 32]>,
 ) -> bool {
@@ -375,11 +403,12 @@ pub fn verify_shard_token(
         return false;
     }
 
-    // 3. Verify Ed25519 signature
+    // 3. Verify Ed25519 signature over (op tag || shard_hash || timestamp)
     let mut msg_to_sign = Vec::new();
+    msg_to_sign.push(op.tag());
     msg_to_sign.extend_from_slice(shard_hash);
     msg_to_sign.extend_from_slice(&token.timestamp.to_be_bytes());
-    
+
     verify_signature(&token.owner_node_id, &msg_to_sign, &token.signature)
 }
 
@@ -578,10 +607,10 @@ mod tests {
     fn test_verify_shard_token_accepts_recent() {
         let identity = NodeIdentity::generate();
         let shard_hash = [7u8; 32];
-        let token = identity.create_shard_token(&shard_hash);
-        assert!(verify_shard_token(&token, &shard_hash, Some(&identity.node_id())));
+        let token = identity.create_shard_token(ShardOp::Store, &shard_hash);
+        assert!(verify_shard_token(&token, ShardOp::Store, &shard_hash, Some(&identity.node_id())));
         // Without an owner pin, a validly-signed recent token is still accepted.
-        assert!(verify_shard_token(&token, &shard_hash, None));
+        assert!(verify_shard_token(&token, ShardOp::Store, &shard_hash, None));
     }
 
     #[test]
@@ -621,13 +650,26 @@ mod tests {
     }
 
     #[test]
+    fn test_token_not_replayable_across_operations() {
+        let owner = NodeIdentity::generate();
+        let shard_hash = [9u8; 32];
+        let retrieve_token = owner.create_shard_token(ShardOp::Retrieve, &shard_hash);
+        // The retrieve token must NOT authorize a delete or store on the same shard.
+        assert!(verify_shard_token(&retrieve_token, ShardOp::Retrieve, &shard_hash, Some(&owner.node_id())));
+        assert!(!verify_shard_token(&retrieve_token, ShardOp::Delete, &shard_hash, Some(&owner.node_id())),
+            "retrieve token must not authorize delete (op-binding)");
+        assert!(!verify_shard_token(&retrieve_token, ShardOp::Store, &shard_hash, Some(&owner.node_id())),
+            "retrieve token must not authorize store (op-binding)");
+    }
+
+    #[test]
     fn test_owner_pin_rejects_wrong_owner() {
         let owner = NodeIdentity::generate();
         let other = NodeIdentity::generate();
         let shard_hash = [5u8; 32];
-        let token = owner.create_shard_token(&shard_hash);
-        assert!(verify_shard_token(&token, &shard_hash, Some(&owner.node_id())));
-        assert!(!verify_shard_token(&token, &shard_hash, Some(&other.node_id())));
+        let token = owner.create_shard_token(ShardOp::Store, &shard_hash);
+        assert!(verify_shard_token(&token, ShardOp::Store, &shard_hash, Some(&owner.node_id())));
+        assert!(!verify_shard_token(&token, ShardOp::Store, &shard_hash, Some(&other.node_id())));
     }
 
     #[test]
@@ -649,7 +691,7 @@ mod tests {
             timestamp: stale_ts,
             signature: identity.sign(&msg_to_sign).to_vec(),
         };
-        assert!(!verify_shard_token(&stale_token, &shard_hash, Some(&identity.node_id())));
+        assert!(!verify_shard_token(&stale_token, ShardOp::Store, &shard_hash, Some(&identity.node_id())));
 
         // Token signed 10 minutes in the future (clock skew abuse) must also be rejected.
         let future_ts = now + 600;
@@ -661,7 +703,7 @@ mod tests {
             timestamp: future_ts,
             signature: identity.sign(&msg_to_sign).to_vec(),
         };
-        assert!(!verify_shard_token(&future_token, &shard_hash, Some(&identity.node_id())));
+        assert!(!verify_shard_token(&future_token, ShardOp::Store, &shard_hash, Some(&identity.node_id())));
     }
 }
 

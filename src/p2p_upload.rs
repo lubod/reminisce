@@ -84,7 +84,7 @@ pub async fn store_shard(
             Err(e) => { last_err = format!("open_bi failed: {}", e); conn.close(0u32.into(), b"error"); continue; }
         };
 
-        let token = p2p_service.identity().create_shard_token(&binding);
+        let token = p2p_service.identity().create_shard_token(np2p::crypto::ShardOp::Store, &binding);
         let attempt_result: Result<bool, String> = async {
             Protocol::send(&mut send, &Message::StoreShardStreamInit {
                 file_hash: file_hash_bytes,
@@ -239,7 +239,7 @@ async fn stream_one_shard(
     let binding: [u8; 32] = blake3::hash(
         &[file_hash_bytes.as_slice(), &[idx as u8]].concat()
     ).into();
-    let token = p2p_service.identity().create_shard_token(&binding);
+    let token = p2p_service.identity().create_shard_token(np2p::crypto::ShardOp::Store, &binding);
 
     let result: Result<String, String> = async {
         Protocol::send(&mut send, &Message::StoreShardStreamInit {

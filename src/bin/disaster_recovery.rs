@@ -168,7 +168,7 @@ fn make_fetcher(svc: Arc<P2PService>) -> Box<ShardFetcher> {
     Box::new(move |node_id, shard_hash| {
         let svc = svc.clone();
         Box::pin(async move {
-            let token = svc.identity().create_shard_token(&shard_hash);
+            let token = svc.identity().create_shard_token(np2p::crypto::ShardOp::Retrieve, &shard_hash);
             match svc.send_message(&node_id, &Message::RetrieveShardRequest { shard_hash, token }).await {
                 Ok(Message::RetrieveShardResponse { data, .. }) => data,
                 _ => None,
@@ -275,7 +275,7 @@ async fn fetch_manifest_from_mesh(
     }
 
     for peer in &peers {
-        let token = svc.identity().create_shard_token(&name_hash);
+        let token = svc.identity().create_shard_token(np2p::crypto::ShardOp::Retrieve, &name_hash);
         let msg = Message::GetPinnedObject { name: name.clone(), token };
         if let Ok(Message::PinnedObjectResponse { data: Some(data) }) = svc.send_message(&peer.node_id, &msg).await {
             let json = db_restore::decrypt_from_mesh(&data, api_secret)?;

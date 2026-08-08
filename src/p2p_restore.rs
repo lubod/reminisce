@@ -45,7 +45,7 @@ pub async fn restore_file(
     restore_file_with_fetcher(pool, file_hash, move |node_id, shard_hash| {
         let svc = svc.clone();
         async move {
-            let token = svc.identity().create_shard_token(&shard_hash);
+            let token = svc.identity().create_shard_token(np2p::crypto::ShardOp::Retrieve, &shard_hash);
             match svc.send_message(&node_id, &Message::RetrieveShardRequest { shard_hash, token }).await {
                 Ok(Message::RetrieveShardResponse { data, .. }) => data,
                 _ => None,

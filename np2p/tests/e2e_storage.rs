@@ -49,7 +49,7 @@ async fn test_e2e_backup_and_restore() {
         let (mut send, mut recv) = conn.open_bi().await.unwrap();
         
         let shard_hash = blake3::hash(shard_data).into();
-        let token = client_id.create_shard_token(&shard_hash);
+        let token = client_id.create_shard_token(np2p::crypto::ShardOp::Store, &shard_hash);
         let store_req = Message::StoreShardRequest {
             shard_hash,
             data: shard_data.clone(),
@@ -74,7 +74,7 @@ async fn test_e2e_backup_and_restore() {
         let (mut send, mut recv) = conn.open_bi().await.unwrap();
         
         let shard_hash = blake3::hash(&shards[i]).into();
-        let token = client_id.create_shard_token(&shard_hash);
+        let token = client_id.create_shard_token(np2p::crypto::ShardOp::Retrieve, &shard_hash);
         let retrieve_req = Message::RetrieveShardRequest { shard_hash, token };
         
         Protocol::send(&mut send, &retrieve_req).await.unwrap();

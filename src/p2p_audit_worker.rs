@@ -109,7 +109,7 @@ async fn perform_audit(
 
                 match conn.open_bi().await {
                     Ok((mut send, mut recv)) => {
-                        let token = p2p_service.identity().create_shard_token(&shard_hash_bytes);
+                        let token = p2p_service.identity().create_shard_token(np2p::crypto::ShardOp::Retrieve, &shard_hash_bytes);
                         let req = Message::RetrieveShardRequest { shard_hash: shard_hash_bytes, token };
                         if Protocol::send(&mut send, &req).await.is_ok() {
                             if let Ok(Message::RetrieveShardResponse { data: Some(data), .. }) = Protocol::receive(&mut recv).await {
@@ -434,7 +434,7 @@ async fn repair_file(
                     }
 
                     if let Ok((mut send, mut recv)) = conn.open_bi().await {
-                        let token = p2p_service.identity().create_shard_token(&shard_hash_bytes);
+                        let token = p2p_service.identity().create_shard_token(np2p::crypto::ShardOp::Retrieve, &shard_hash_bytes);
                         let req = Message::RetrieveShardRequest { shard_hash: shard_hash_bytes, token };
                         if Protocol::send(&mut send, &req).await.is_ok() {
                             if let Ok(Message::RetrieveShardResponse { data: Some(data), .. }) = Protocol::receive(&mut recv).await {

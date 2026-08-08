@@ -391,7 +391,7 @@ async fn retrieve_shard_from_node(
     shard_hash_bytes.copy_from_slice(&decoded);
 
     let (mut send, mut recv) = conn.open_bi().await?;
-    let token = p2p_service.identity().create_shard_token(&shard_hash_bytes);
+    let token = p2p_service.identity().create_shard_token(np2p::crypto::ShardOp::Retrieve, &shard_hash_bytes);
     Protocol::send(&mut send, &Message::RetrieveShardRequest { shard_hash: shard_hash_bytes, token }).await
         .map_err(|e| e.to_string())?;
 
@@ -428,7 +428,7 @@ pub async fn upload_shard_to_node(
         let binding: [u8; 32] = blake3::hash(
             &[shard_hash_bytes.as_slice(), &[0u8]].concat()
         ).into();
-        let token = p2p_service.identity().create_shard_token(&binding);
+        let token = p2p_service.identity().create_shard_token(np2p::crypto::ShardOp::Store, &binding);
         Protocol::send(&mut send, &Message::StoreShardStreamInit {
             file_hash: shard_hash_bytes,
             shard_index: 0,
@@ -462,7 +462,7 @@ pub async fn upload_shard_to_node(
         }
     } else {
         let (mut send, mut recv) = conn.open_bi().await?;
-        let token = p2p_service.identity().create_shard_token(&shard_hash_bytes);
+        let token = p2p_service.identity().create_shard_token(np2p::crypto::ShardOp::Store, &shard_hash_bytes);
         Protocol::send(&mut send, &Message::StoreShardRequest {
             shard_hash: shard_hash_bytes,
             data: shard_data.to_vec(),

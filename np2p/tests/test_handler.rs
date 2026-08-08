@@ -47,12 +47,13 @@ async fn store_and_get_pinned_object() {
 
     let name = "latest-manifest".to_string();
     let name_hash: [u8; 32] = blake3::hash(name.as_bytes()).into();
-    let token = client_id.create_shard_token(&name_hash);
+    let store_token = client_id.create_shard_token(np2p::crypto::ShardOp::Store, &name_hash);
+    let get_token = client_id.create_shard_token(np2p::crypto::ShardOp::Retrieve, &name_hash);
     let data = b"hello pinned object".to_vec();
 
     {
         let (mut send, mut recv) = conn.open_bi().await.unwrap();
-        Protocol::send(&mut send, &Message::StorePinnedObject { name: name.clone(), data: data.clone(), token: token.clone() }).await.unwrap();
+        Protocol::send(&mut send, &Message::StorePinnedObject { name: name.clone(), data: data.clone(), token: store_token }).await.unwrap();
         let resp = Protocol::receive(&mut recv).await.unwrap();
         if let Message::StorePinnedResponse { success } = resp {
             assert!(success, "pinned store succeeded");
@@ -60,8 +61,9 @@ async fn store_and_get_pinned_object() {
     }
 
     {
+        // A *store* token must NOT authorize retrieving: only a Retrieve token can.
         let (mut send, mut recv) = conn.open_bi().await.unwrap();
-        Protocol::send(&mut send, &Message::GetPinnedObject { name: name.clone(), token }).await.unwrap();
+        Protocol::send(&mut send, &Message::GetPinnedObject { name: name.clone(), token: get_token }).await.unwrap();
         let resp = Protocol::receive(&mut recv).await.unwrap();
         if let Message::PinnedObjectResponse { data } = resp {
             assert_eq!(data.as_deref(), Some(b"hello pinned object".as_slice()), "retrieved pinned data matches");
@@ -82,7 +84,7 @@ async fn unauthorized_pinned_access_rejected() {
 
     let name = "sec manifest".to_string();
     let wrong_hash: [u8; 32] = blake3::hash(b"spoofed").into();
-    let token = client_id.create_shard_token(&wrong_hash);
+    let token = client_id.create_shard_token(np2p::crypto::ShardOp::Store, &wrong_hash);
 
     let (mut send, mut recv) = conn.open_bi().await.unwrap();
     Protocol::send(&mut send, &Message::StorePinnedObject { name: name.clone(), data: b"x".to_vec(), token: token.clone() }).await.unwrap();

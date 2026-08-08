@@ -127,7 +127,7 @@ impl ConnectionHandler {
                         hex::encode(shard_hash)
                     );
                     false
-                } else if crate::crypto::verify_shard_token(&token, &shard_hash, allowed_owner_id.as_ref()) {
+                } else if crate::crypto::verify_shard_token(&token, crate::crypto::ShardOp::Store, &shard_hash, allowed_owner_id.as_ref()) {
                     storage.store(shard_hash, &data).await.is_ok()
                 } else {
                     warn!("StoreShardRequest: token verification failed for shard {}", hex::encode(shard_hash));
@@ -155,7 +155,7 @@ impl ConnectionHandler {
                 let binding: [u8; 32] = blake3::hash(
                     &[file_hash.as_slice(), &[shard_index]].concat()
                 ).into();
-                if !crate::crypto::verify_shard_token(&token, &binding, allowed_owner_id.as_ref()) {
+                if !crate::crypto::verify_shard_token(&token, crate::crypto::ShardOp::Store, &binding, allowed_owner_id.as_ref()) {
                     warn!("[CONN] StoreShardStreamInit token verification failed (shard {}) — rejecting", shard_index);
                     let _ = Protocol::send(&mut send, &Message::Error {
                         code: 401,
@@ -216,7 +216,7 @@ impl ConnectionHandler {
             }
 
             Message::RetrieveShardRequest { shard_hash, token } => {
-                if crate::crypto::verify_shard_token(&token, &shard_hash, allowed_owner_id.as_ref()) {
+                if crate::crypto::verify_shard_token(&token, crate::crypto::ShardOp::Retrieve, &shard_hash, allowed_owner_id.as_ref()) {
                     let data = storage.get(shard_hash).await?;
                     let response = Message::RetrieveShardResponse { shard_hash, data };
                     Protocol::send(&mut send, &response).await?;
@@ -235,7 +235,7 @@ impl ConnectionHandler {
             }
 
             Message::DeleteShardRequest { shard_hash, token } => {
-                let success = if crate::crypto::verify_shard_token(&token, &shard_hash, allowed_owner_id.as_ref()) {
+                let success = if crate::crypto::verify_shard_token(&token, crate::crypto::ShardOp::Delete, &shard_hash, allowed_owner_id.as_ref()) {
                     storage.delete(shard_hash).await.is_ok()
                 } else {
                     warn!("DeleteShardRequest: token verification failed for shard {}", hex::encode(shard_hash));
@@ -247,7 +247,7 @@ impl ConnectionHandler {
 
             Message::StorePinnedObject { name, data, token } => {
                 let name_hash: [u8; 32] = blake3::hash(name.as_bytes()).into();
-                let success = if crate::crypto::verify_shard_token(&token, &name_hash, allowed_owner_id.as_ref()) {
+                let success = if crate::crypto::verify_shard_token(&token, crate::crypto::ShardOp::Store, &name_hash, allowed_owner_id.as_ref()) {
                     storage.store_pinned(&name, &data).await.is_ok()
                 } else {
                     warn!("StorePinnedObject: token verification failed for '{}'", name);
@@ -258,7 +258,7 @@ impl ConnectionHandler {
 
             Message::GetPinnedObject { name, token } => {
                 let name_hash: [u8; 32] = blake3::hash(name.as_bytes()).into();
-                if crate::crypto::verify_shard_token(&token, &name_hash, allowed_owner_id.as_ref()) {
+                if crate::crypto::verify_shard_token(&token, crate::crypto::ShardOp::Retrieve, &name_hash, allowed_owner_id.as_ref()) {
                     let data = storage.get_pinned(&name).await?;
                     Protocol::send(&mut send, &Message::PinnedObjectResponse { data }).await?;
                 } else {

@@ -321,7 +321,7 @@ async fn publish_manifest_to_mesh(
     for (node_id, addr) in nodes {
         for name in &names {
             let name_hash: [u8; 32] = blake3::hash(name.as_bytes()).into();
-            let token = p2p_service.identity().create_shard_token(&name_hash);
+            let token = p2p_service.identity().create_shard_token(np2p::crypto::ShardOp::Store, &name_hash);
             let msg = Message::StorePinnedObject { name: name.clone(), data: encrypted.clone(), token };
             match p2p_service.send_message(node_id, &msg).await {
                 Ok(Message::StorePinnedResponse { success: true }) => { stored += 1; }
@@ -420,7 +420,7 @@ async fn delete_shard_remote(
     let result: Result<bool, String> = async {
         let conn = p2p_service.connect_to_addr(addr).await.map_err(|e| e.to_string())?;
         let (mut send, mut recv) = conn.open_bi().await.map_err(|e| e.to_string())?;
-        let token = p2p_service.identity().create_shard_token(&shard_hash_bytes);
+        let token = p2p_service.identity().create_shard_token(np2p::crypto::ShardOp::Delete, &shard_hash_bytes);
         Protocol::send(&mut send, &Message::DeleteShardRequest { shard_hash: shard_hash_bytes, token }).await.map_err(|e| e.to_string())?;
         let msg = Protocol::receive(&mut recv).await.map_err(|e| e.to_string())?;
         let _ = send.finish();

@@ -336,7 +336,7 @@ async fn channel_registers_relays_requests_and_validates_tokens() {
     let channel_identity = NodeIdentity::generate();
     let name = "relayed-name".to_string();
     let wrong_hash: [u8; 32] = blake3::hash(b"attacker").into();
-    let wrong_token = channel_identity.create_shard_token(&wrong_hash);
+    let wrong_token = channel_identity.create_shard_token(np2p::crypto::ShardOp::Retrieve, &wrong_hash);
 
     let (coord_id, coord_addr, mut rx) = spawn_channel_coordinator(vec![
         Message::Handshake {
