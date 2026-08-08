@@ -133,7 +133,7 @@ impl ConnectionHandler {
                     warn!("StoreShardRequest: token verification failed for shard {}", hex::encode(shard_hash));
                     false
                 };
-                let response = Message::StoreShardResponse { shard_hash, success };
+                let response = Message::StoreShardResponse { shard_hash, success, available_space_bytes: storage.available_space() };
                 Protocol::send(&mut send, &response).await?;
             }
 
@@ -178,14 +178,14 @@ impl ConnectionHandler {
                             if received_bytes > crate::storage::MAX_SHARD_BYTES {
                                 warn!("[CONN] Shard {} exceeded max size ({} bytes) — aborting stream", shard_index, received_bytes);
                                 let _ = tokio::fs::remove_file(&temp_path).await;
-                                let _ = Protocol::send(&mut send, &Message::StoreShardStreamResponse { success: false }).await;
+                                let _ = Protocol::send(&mut send, &Message::StoreShardStreamResponse { success: false, available_space_bytes: storage.available_space() }).await;
                                 break;
                             }
                             hasher.update(&data);
                             if let Err(e) = storage.store_stream_chunk(&temp_path, &data).await {
                                 error!("[CONN] Chunk write failed for shard {}: {}", shard_index, e);
                                 let _ = tokio::fs::remove_file(&temp_path).await;
-                                Protocol::send(&mut send, &Message::StoreShardStreamResponse { success: false }).await?;
+                                Protocol::send(&mut send, &Message::StoreShardStreamResponse { success: false, available_space_bytes: storage.available_space() }).await?;
                                 break;
                             }
                         }
@@ -204,7 +204,7 @@ impl ConnectionHandler {
                                 let _ = tokio::fs::remove_file(&temp_path).await;
                                 false
                             };
-                            Protocol::send(&mut send, &Message::StoreShardStreamResponse { success: ok }).await?;
+                            Protocol::send(&mut send, &Message::StoreShardStreamResponse { success: ok, available_space_bytes: storage.available_space() }).await?;
                             break;
                         }
                         Ok(_) | Err(_) => {

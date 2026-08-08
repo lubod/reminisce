@@ -4,8 +4,9 @@
 // events and behaviors beyond standard HTTP metrics.
 
 use prometheus::{
-    IntCounter, IntGauge, Gauge, Histogram, HistogramOpts,
-    register_int_counter, register_int_gauge, register_gauge, register_histogram,
+    IntCounter, IntCounterVec, IntGauge, IntGaugeVec, Gauge, GaugeVec, Histogram,
+    HistogramOpts, Opts, register_gauge, register_gauge_vec, register_int_counter,
+    register_int_counter_vec, register_int_gauge, register_int_gauge_vec, register_histogram,
 };
 use std::sync::LazyLock as Lazy;
 
@@ -728,6 +729,57 @@ pub static P2P_ORPHANED_SHARDS_CLEANED_TOTAL: Lazy<IntCounter> = Lazy::new(|| {
 });
 
 // ============================================================================
+// Per-Peer Storage Node Health Metrics
+// ============================================================================
+
+/// Available bytes on each storage node, echoed back in store responses.
+/// Surfaced per node_id so the GUI can show disk pressure on peers (Raspberry Pi)
+/// WITHOUT running node_exporter on them.
+pub static P2P_PEER_AVAILABLE_SPACE_BYTES: Lazy<GaugeVec> = Lazy::new(|| {
+    register_gauge_vec!(
+        Opts::new(
+            "p2p_peer_available_space_bytes",
+            "Remaining bytes on a storage node, reported by the node in store responses"
+        ),
+        &["node_id"]
+    ).expect("Failed to register p2p_peer_available_space_bytes metric")
+});
+
+/// 1 if the last shard write to this peer succeeded, 0 if it failed.
+/// A peer that is present in the mesh but stuck at 0 is "present but failing writes".
+pub static P2P_PEER_WRITE_LAST_STATUS: Lazy<IntGaugeVec> = Lazy::new(|| {
+    register_int_gauge_vec!(
+        Opts::new(
+            "p2p_peer_write_last_status",
+            "1 if the most recent shard write to this peer succeeded, else 0"
+        ),
+        &["node_id"]
+    ).expect("Failed to register p2p_peer_write_last_status metric")
+});
+
+/// Total successful shard writes per peer.
+pub static P2P_PEER_WRITE_SUCCESS_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
+    register_int_counter_vec!(
+        Opts::new(
+            "p2p_peer_write_success_total",
+            "Total successful shard writes per storage node"
+        ),
+        &["node_id"]
+    ).expect("Failed to register p2p_peer_write_success_total metric")
+});
+
+/// Total failed shard writes per peer (includes disk-full rejections).
+pub static P2P_PEER_WRITE_FAILURES_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
+    register_int_counter_vec!(
+        Opts::new(
+            "p2p_peer_write_failures_total",
+            "Total failed shard writes per storage node (e.g. disk full)"
+        ),
+        &["node_id"]
+    ).expect("Failed to register p2p_peer_write_failures_total metric")
+});
+
+// ============================================================================
 // Startup Registration
 // ============================================================================
 
@@ -802,6 +854,10 @@ pub fn init_metrics() {
     Lazy::force(&P2P_SHARDS_REPAIRED_TOTAL);
     Lazy::force(&P2P_SHARDS_REPAIR_FAILED_TOTAL);
     Lazy::force(&P2P_ORPHANED_SHARDS_CLEANED_TOTAL);
+    Lazy::force(&P2P_PEER_AVAILABLE_SPACE_BYTES);
+    Lazy::force(&P2P_PEER_WRITE_LAST_STATUS);
+    Lazy::force(&P2P_PEER_WRITE_SUCCESS_TOTAL);
+    Lazy::force(&P2P_PEER_WRITE_FAILURES_TOTAL);
 }
 
 #[cfg(test)]

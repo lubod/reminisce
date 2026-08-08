@@ -211,6 +211,26 @@ groups:
           summary: "P2P backup failures detected"
           description: "{{ $value | humanize }} backup failures/sec in the last hour"
 
+      - alert: StorageNodeDiskFull
+        expr: p2p_peer_available_space_bytes < 5 * 1024 * 1024 * 1024
+        for: 15m
+        labels:
+          severity: warning
+          component: storage
+        annotations:
+          summary: "Storage node {{ $labels.node_id }} is low on disk"
+          description: "Node {{ $labels.node_id }} has less than 5 GiB free ({{ $value | humanize1024 }}B available). Shard writes will fail once disk is exhausted."
+
+      - alert: StorageNodeFailingWrites
+        expr: p2p_peer_write_last_status == 0
+        for: 15m
+        labels:
+          severity: critical
+          component: storage
+        annotations:
+          summary: "Storage node {{ $labels.node_id }} is present but failing writes"
+          description: "Node {{ $labels.node_id }} is reachable but its most recent shard write failed (e.g. disk full). Photos/videos are not being backed up to it."
+
       - alert: DatabaseBackupsStalled
         expr: db_backup_snapshots_kept == 0
         for: 30m

@@ -71,6 +71,13 @@ impl DiskStorage {
         Ok(Self { base_path })
     }
 
+    /// Reports free bytes on the storage volume (0 if it cannot be determined).
+    /// Used to echo remaining space back in store responses so the home server can
+    /// surface peer disk health without node_exporter on storage nodes.
+    pub fn available_space(&self) -> u64 {
+        get_available_space(&self.base_path).unwrap_or(0)
+    }
+
     /// Returns the path to a shard file based on its hash.
     /// Uses the first 2 characters of the hex hash as a subdirectory.
     fn get_shard_path(&self, shard_hash: &[u8; 32]) -> PathBuf {

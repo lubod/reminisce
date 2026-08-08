@@ -9,7 +9,10 @@ pub enum Message {
 
     /// Request to store an encrypted shard.
     StoreShardRequest { shard_hash: [u8; 32], data: Vec<u8>, token: ShardToken },
-    StoreShardResponse { shard_hash: [u8; 32], success: bool },
+    /// `available_space_bytes` is the node's remaining storage after this write; it lets
+    /// the home server surface per-peer disk health without running node_exporter on
+    /// storage nodes (Raspberry Pi).
+    StoreShardResponse { shard_hash: [u8; 32], success: bool, available_space_bytes: u64 },
 
     /// Request to retrieve an encrypted shard.
     RetrieveShardRequest { shard_hash: [u8; 32], token: ShardToken },
@@ -75,7 +78,7 @@ pub enum Message {
     StoreShardStreamAck { ready: bool },
     StoreShardChunk { data: Vec<u8> },
     StoreShardStreamFinal { shard_hash: [u8; 32] },
-    StoreShardStreamResponse { success: bool },
+    StoreShardStreamResponse { success: bool, available_space_bytes: u64 },
 
     /// Request to delete a shard (e.g. retention pruning of old DB snapshots).
     /// Appended last to preserve bincode wire indices of all earlier variants.

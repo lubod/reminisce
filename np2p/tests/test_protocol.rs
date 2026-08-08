@@ -53,10 +53,11 @@ fn rt_store_shard_request() {
 
 #[test]
 fn rt_store_shard_response_success() {
-    let msg = Message::StoreShardResponse { shard_hash: [0xFFu8; 32], success: true };
+    let msg = Message::StoreShardResponse { shard_hash: [0xFFu8; 32], success: true, available_space_bytes: 1024 };
     let rt = roundtrip(&msg);
-    if let Message::StoreShardResponse { success, .. } = rt {
+    if let Message::StoreShardResponse { success, available_space_bytes, .. } = rt {
         assert!(success);
+        assert_eq!(available_space_bytes, 1024);
     } else { panic!("wrong variant"); }
 }
 
@@ -280,10 +281,11 @@ fn rt_store_shard_stream_final() {
 
 #[test]
 fn rt_store_shard_stream_response() {
-    let msg = Message::StoreShardStreamResponse { success: false };
+    let msg = Message::StoreShardStreamResponse { success: false, available_space_bytes: 512 };
     let rt = roundtrip(&msg);
-    if let Message::StoreShardStreamResponse { success } = rt {
+    if let Message::StoreShardStreamResponse { success, available_space_bytes } = rt {
         assert!(!success);
+        assert_eq!(available_space_bytes, 512);
     } else { panic!("wrong variant"); }
 }
 

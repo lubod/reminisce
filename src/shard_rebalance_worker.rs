@@ -451,7 +451,7 @@ pub async fn upload_shard_to_node(
             .await.map_err(|e| e.to_string())?;
 
         match Protocol::receive(&mut recv).await.map_err(|e| e.to_string())? {
-            Message::StoreShardStreamResponse { success: true } => {
+            Message::StoreShardStreamResponse { success: true, .. } => {
                 conn.close(0u32.into(), b"done");
                 Ok(shard_hash_hex)
             }
