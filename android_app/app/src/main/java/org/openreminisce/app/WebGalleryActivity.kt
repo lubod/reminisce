@@ -459,7 +459,31 @@ class WebGalleryActivity : AppCompatActivity() {
         webView.loadDataWithBaseURL(null, errorHtml, "text/html", "UTF-8", null)
     }
 
+    private fun sameOrigin(a: String, b: String): Boolean {
+        return try {
+            val u1 = java.net.URL(a)
+            val u2 = java.net.URL(b)
+            val p1 = if (u1.port != -1) u1.port else u1.defaultPort
+            val p2 = if (u2.port != -1) u2.port else u2.defaultPort
+            u1.protocol.equals(u2.protocol, ignoreCase = true) &&
+                u1.host.equals(u2.host, ignoreCase = true) &&
+                p1 == p2
+        } catch (e: Exception) {
+            false
+        }
+    }
+
     private fun injectAuthToken() {
+        // Inject the auth token only into pages served by the configured server
+        // origin. A redirect, compromised gallery page, or injected iframe must
+        // never receive the JWT (previously it was written to localStorage on
+        // every onPageFinished regardless of origin).
+        val currentUrl = webView.url
+        val configuredUrl = PreferenceHelper.getServerUrl(this)
+        if (currentUrl == null || !sameOrigin(currentUrl, configuredUrl)) {
+            Log.w(TAG, "Skipping auth token injection: origin mismatch (url=$currentUrl server=$configuredUrl)")
+            return
+        }
         // Inject the auth token into localStorage so the React app can use it
         authToken?.let { token ->
             val deviceId = AuthHelper.getDeviceId(this)
@@ -529,17 +553,7 @@ class WebGalleryActivity : AppCompatActivity() {
         private fun isTrustedOrigin(): Boolean {
             val currentUrl = webView.url ?: return false
             val configuredUrl = PreferenceHelper.getServerUrl(this@WebGalleryActivity)
-            return try {
-                val u1 = java.net.URL(currentUrl)
-                val u2 = java.net.URL(configuredUrl)
-                val p1 = if (u1.port != -1) u1.port else u1.defaultPort
-                val p2 = if (u2.port != -1) u2.port else u2.defaultPort
-                u1.protocol.equals(u2.protocol, ignoreCase = true) &&
-                u1.host.equals(u2.host, ignoreCase = true) &&
-                p1 == p2
-            } catch (e: Exception) {
-                false
-            }
+            return sameOrigin(currentUrl, configuredUrl)
         }
 
         @JavascriptInterface

@@ -82,7 +82,7 @@ class AuthHelper {
          * Endpoint: POST /auth/register
          */
         fun registerUser(username: String, email: String, password: String, baseUrl: String): Boolean {
-            LogCollector.d(TAG, "Registering user: $username at $baseUrl/api/auth/register")
+            LogCollector.d(TAG, "Registering user at $baseUrl/api/auth/register")
 
             val client = createHttpClient(baseUrl)
 
@@ -109,7 +109,7 @@ class AuthHelper {
 
                 if (response.isSuccessful) {
                     val responseBody = response.body?.string()
-                    LogCollector.d(TAG, "Registration successful: $responseBody")
+                    LogCollector.d(TAG, "Registration successful") // body redacted (may contain account data)
                     true
                 } else {
                     val errorBody = response.body?.string()
@@ -126,7 +126,7 @@ class AuthHelper {
          * Login with username and password credentials via HTTP.
          */
         fun loginWithCredentials(context: Context, username: String, password: String, baseUrl: String): Boolean {
-            LogCollector.i(TAG, "Login attempt for user: $username at $baseUrl")
+            LogCollector.i(TAG, "Login attempt at $baseUrl") // username redacted
 
             if (baseUrl.isEmpty()) {
                 LogCollector.e(TAG, "No server URL configured")

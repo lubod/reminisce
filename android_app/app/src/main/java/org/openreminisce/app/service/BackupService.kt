@@ -105,7 +105,9 @@ class BackupService : Service() {
                         val workInfo = WorkManager.getInstance(this@BackupService).getWorkInfoById(workId).get()
                         if (workInfo != null && workInfo.state.isFinished) {
                             Log.d(TAG, "Polling detected finished work: ${workInfo.state}")
-                            handleWorkCompletion(workInfo)
+                            // WorkManager LiveData (and removeObserver) are main-thread-only;
+                            // hopping back here prevents IllegalStateException from the poller.
+                            handler.post { handleWorkCompletion(workInfo) }
                         } else {
                             // Continue polling if not finished
                             handler.postDelayed(this, 5000) // Check every 5 seconds
