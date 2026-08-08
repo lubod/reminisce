@@ -8,7 +8,6 @@ use std::sync::Arc;
 
 pub const DEFAULT_DISCOVERY_PORT: u16 = 5066;
 const BROADCAST_INTERVAL_SECS: u64 = 10;
-const PEER_TTL_SECS: u64 = 90;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct DiscoveryAnnouncement {
@@ -141,16 +140,6 @@ pub fn start_listener(registry: PeerRegistry, discovery_port: u16, our_node_id: 
                 }
                 Err(e) => warn!("[DISCOVERY] Recv error: {}", e),
             }
-        }
-    });
-}
-
-/// Periodically removes peers not seen within PEER_TTL_SECS.
-pub fn start_cleanup(registry: PeerRegistry) {
-    tokio::spawn(async move {
-        loop {
-            tokio::time::sleep(std::time::Duration::from_secs(PEER_TTL_SECS)).await;
-            registry.remove_stale(PEER_TTL_SECS);
         }
     });
 }

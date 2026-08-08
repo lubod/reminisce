@@ -1,5 +1,4 @@
 use log::error;
-use std::path::PathBuf;
 
 pub use crate::system_utils::{
     WorkerConcurrencyLimits, get_load_average, get_gpu_load, get_cpu_count,
@@ -22,45 +21,6 @@ pub async fn get_db_client(pool: &deadpool_postgres::Pool) -> Result<deadpool_po
         error!("Failed to get DB client: {}", e);
         actix_web::error::ErrorInternalServerError("Database connection failed")
     })
-}
-
-/// Helper to dump DB to a file
-pub fn perform_db_dump(config: &crate::config::Config) -> Result<PathBuf, String> {
-    let database_url = config.database_url.as_ref().ok_or("Database URL not configured")?;
-
-    let password = url::Url::parse(database_url)
-        .ok()
-        .and_then(|url| url.password().map(|p| p.to_string()))
-        .unwrap_or_else(|| "postgres".to_string());
-
-    let output_path = PathBuf::from(format!("db_dump_temp_{}.sql", chrono::Utc::now().timestamp()));
-
-    let file = std::fs::File::create(&output_path).map_err(|e| e.to_string())?;
-
-    let mut command = std::process::Command::new("pg_dump");
-    command
-        .arg("--format=plain")
-        .env("PGPASSWORD", password)
-        .arg(database_url)
-        .stdout(file);
-
-    match command.status() {
-        Ok(status) if status.success() => Ok(output_path),
-        Ok(_) => Err("pg_dump failed".to_string()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err("pg_dump missing".to_string()),
-        Err(e) => Err(e.to_string()),
-    }
-}
-
-/// Parse a peer address string into a SocketAddr.
-/// Handles both "ip:port" and bare "ip" (defaults to port 5050).
-pub fn parse_peer_addr(peer: &str) -> Result<std::net::SocketAddr, String> {
-    if let Ok(addr) = peer.parse::<std::net::SocketAddr>() {
-        return Ok(addr);
-    }
-    format!("{}:5050", peer)
-        .parse::<std::net::SocketAddr>()
-        .map_err(|e| format!("Invalid peer address '{}': {}", peer, e))
 }
 
 /// Assert that the given table name is one of the strictly whitelisted database tables.
@@ -141,15 +101,3 @@ pub fn decrypt_key(encrypted_key: &[u8], api_secret: &str) -> Result<Vec<u8>, St
 
 /// Global lock to coordinate rebalance and audit background tasks to avoid race conditions.
 pub static P2P_WORKER_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
-static HTTP_CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
-
-/// Get a globally shared reqwest::Client to enable HTTP connection pooling.
-pub fn get_http_client() -> &'static reqwest::Client {
-    HTTP_CLIENT.get_or_init(|| {
-        reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(60))
-            .build()
-            .unwrap_or_else(|_| reqwest::Client::new())
-    })
-}

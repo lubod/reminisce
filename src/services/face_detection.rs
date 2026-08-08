@@ -1,4 +1,4 @@
-use log::{error, info};
+use log::info;
 use pgvector::Vector;
 use crate::config::Config;
 
@@ -167,30 +167,4 @@ pub async fn cluster_faces_for_user(
 
     info!("Clustered {} faces for user {}", clustered, user_id);
     Ok(clustered)
-}
-
-/// Run clustering for all users with unclustered faces
-pub async fn cluster_all_users(
-    client: &tokio_postgres::Client,
-) -> Result<usize, String> {
-    // Get all users with unclustered faces
-    let rows = client
-        .query(
-            "SELECT DISTINCT user_id FROM faces WHERE person_id IS NULL",
-            &[],
-        )
-        .await
-        .map_err(|e| format!("Failed to query users: {}", e))?;
-
-    let mut total_clustered = 0;
-
-    for row in rows {
-        let user_id: uuid::Uuid = row.get(0);
-        match cluster_faces_for_user(&user_id, client).await {
-            Ok(count) => total_clustered += count,
-            Err(e) => error!("Failed to cluster faces for user {}: {}", user_id, e),
-        }
-    }
-
-    Ok(total_clustered)
 }

@@ -94,7 +94,7 @@ async fn run_channel(
                 let storage = storage.clone();
                 let identity = identity_arc.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = ConnectionHandler::handle_stream(send, recv, storage, identity, None, authorized_owner_id).await {
+                    if let Err(e) = ConnectionHandler::handle_stream(send, recv, storage, identity, authorized_owner_id).await {
                         warn!("[CHANNEL] Stream error: {}", e);
                     }
                 });

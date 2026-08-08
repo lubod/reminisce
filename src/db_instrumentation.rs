@@ -9,23 +9,6 @@ use crate::metrics::{DB_QUERY_DURATION, SLOW_QUERIES_TOTAL};
 /// Threshold in milliseconds for logging slow queries
 const SLOW_QUERY_THRESHOLD_MS: u128 = 100;
 
-/// Execute a query and log performance metrics
-#[instrument(skip(client, query, params), fields(operation = %operation_name, elapsed_ms, query_preview, status))]
-pub async fn instrumented_query(
-    client: &tokio_postgres::Client,
-    query: &str,
-    params: &[&(dyn tokio_postgres::types::ToSql + Sync)],
-    operation_name: &str,
-) -> Result<Vec<Row>, tokio_postgres::Error> {
-    let start = Instant::now();
-    let result = client.query(query, params).await;
-    let elapsed = start.elapsed();
-
-    log_query_performance(operation_name, query, elapsed.as_millis(), result.is_ok());
-
-    result
-}
-
 /// Execute a query_one and log performance metrics
 #[instrument(skip(client, query, params), fields(operation = %operation_name, elapsed_ms, query_preview, status))]
 pub async fn instrumented_query_one(
@@ -70,57 +53,6 @@ pub async fn instrumented_execute(
 ) -> Result<u64, tokio_postgres::Error> {
     let start = Instant::now();
     let result = client.execute(query, params).await;
-    let elapsed = start.elapsed();
-
-    log_query_performance(operation_name, query, elapsed.as_millis(), result.is_ok());
-
-    result
-}
-
-/// Execute a transaction query and log performance metrics
-#[instrument(skip(transaction, query, params), fields(operation = %operation_name, elapsed_ms, query_preview, status))]
-pub async fn instrumented_transaction_query(
-    transaction: &tokio_postgres::Transaction<'_>,
-    query: &str,
-    params: &[&(dyn tokio_postgres::types::ToSql + Sync)],
-    operation_name: &str,
-) -> Result<Vec<Row>, tokio_postgres::Error> {
-    let start = Instant::now();
-    let result = transaction.query(query, params).await;
-    let elapsed = start.elapsed();
-
-    log_query_performance(operation_name, query, elapsed.as_millis(), result.is_ok());
-
-    result
-}
-
-/// Execute a transaction query_opt and log performance metrics
-#[instrument(skip(transaction, query, params), fields(operation = %operation_name, elapsed_ms, query_preview, status))]
-pub async fn instrumented_transaction_query_opt(
-    transaction: &tokio_postgres::Transaction<'_>,
-    query: &str,
-    params: &[&(dyn tokio_postgres::types::ToSql + Sync)],
-    operation_name: &str,
-) -> Result<Option<Row>, tokio_postgres::Error> {
-    let start = Instant::now();
-    let result = transaction.query_opt(query, params).await;
-    let elapsed = start.elapsed();
-
-    log_query_performance(operation_name, query, elapsed.as_millis(), result.is_ok());
-
-    result
-}
-
-/// Execute a transaction execute and log performance metrics
-#[instrument(skip(transaction, query, params), fields(operation = %operation_name, elapsed_ms, query_preview, status))]
-pub async fn instrumented_transaction_execute(
-    transaction: &tokio_postgres::Transaction<'_>,
-    query: &str,
-    params: &[&(dyn tokio_postgres::types::ToSql + Sync)],
-    operation_name: &str,
-) -> Result<u64, tokio_postgres::Error> {
-    let start = Instant::now();
-    let result = transaction.execute(query, params).await;
     let elapsed = start.elapsed();
 
     log_query_performance(operation_name, query, elapsed.as_millis(), result.is_ok());

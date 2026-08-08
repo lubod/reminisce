@@ -915,6 +915,10 @@ mod tests {
             P2P_SHARDS_REPAIRED_TOTAL.inc();
             P2P_SHARDS_REPAIR_FAILED_TOTAL.inc();
             P2P_ORPHANED_SHARDS_CLEANED_TOTAL.inc();
+            P2P_PEER_WRITE_SUCCESS_TOTAL.with_label_values(&["node-a"]).inc();
+            P2P_PEER_WRITE_FAILURES_TOTAL.with_label_values(&["node-a"]).inc();
+            P2P_PEER_WRITE_LAST_STATUS.with_label_values(&["node-a"]).set(1);
+            P2P_PEER_AVAILABLE_SPACE_BYTES.with_label_values(&["node-a"]).set(1024.0 * i as f64);
 
             ACTIVE_SESSIONS.set(i);
             DB_POOL_SIZE.set(i);
