@@ -2,10 +2,10 @@ import { useState } from "react";
 import { observer } from "mobx-react-lite";
 import { useStore } from "../stores/RootStore";
 import { Outlet, Link, useNavigate, useLocation } from "react-router-dom";
-import { LogOut, Activity, Menu, X, RefreshCw, MonitorPlay, Users, Folder, Copy, Trash2, ScanLine, Wrench } from "lucide-react";
+import { LogOut, Activity, Menu, X, RefreshCw, MonitorPlay, Users, Folder, Copy, Trash2, ScanLine } from "lucide-react";
 
 export const Layout = observer(() => {
-    const { authStore, statsStore, mediaStore, uiStore, personStore, duplicatesStore, trashStore, systemStore } = useStore();
+    const { authStore, statsStore, mediaStore, uiStore, personStore, duplicatesStore, trashStore } = useStore();
     const navigate = useNavigate();
     const location = useLocation();
     const [isMobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -24,7 +24,6 @@ export const Layout = observer(() => {
         if (location.pathname.startsWith('/duplicates')) return { title: 'Duplicates', icon: <Copy className="w-5 h-5" /> };
         if (location.pathname.startsWith('/orientation')) return { title: 'Orientation Check', icon: <ScanLine className="w-5 h-5" /> };
         if (location.pathname.startsWith('/trash')) return { title: 'Trash', icon: <Trash2 className="w-5 h-5" /> };
-        if (location.pathname.startsWith('/system')) return { title: 'System', icon: <Wrench className="w-5 h-5" /> };
         return { title: 'Reminisce', icon: null };
     };
 
@@ -42,8 +41,6 @@ export const Layout = observer(() => {
             mediaStore.fetchNoExifImages(1, 50, false);
         } else if (location.pathname.startsWith('/trash')) {
             trashStore.fetchTrash();
-        } else if (location.pathname.startsWith('/system')) {
-            void systemStore.refreshAll();
         }
     };
 
@@ -55,7 +52,6 @@ export const Layout = observer(() => {
         if (location.pathname.startsWith('/duplicates')) return duplicatesStore.isLoading;
         if (location.pathname.startsWith('/orientation')) return mediaStore.isLoadingNoExif;
         if (location.pathname.startsWith('/trash')) return trashStore.isLoading;
-        if (location.pathname.startsWith('/system')) return systemStore.isLoading;
         return false;
     };
 
@@ -129,9 +125,6 @@ export const Layout = observer(() => {
                                     <Link to="/trash" className={getLinkClass('/trash')}>
                                         Trash
                                     </Link>
-                                    <Link to="/system" className={getLinkClass('/system')}>
-                                        System
-                                    </Link>
                                 </div>
                             </div>
                             <div className="flex items-center">
@@ -204,13 +197,6 @@ export const Layout = observer(() => {
                                     className={getMobileLinkClass('/trash')}
                                 >
                                     Trash
-                                </Link>
-                                <Link
-                                    to="/system"
-                                    onClick={() => setMobileMenuOpen(false)}
-                                    className={getMobileLinkClass('/system')}
-                                >
-                                    System
                                 </Link>
                                 <button
                                     onClick={() => {

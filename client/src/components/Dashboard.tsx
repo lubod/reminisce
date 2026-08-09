@@ -2,14 +2,15 @@ import { useEffect, useState } from "react";
 import { observer } from "mobx-react-lite";
 import { useStore } from "../stores/RootStore";
 import { logger } from "../utils/logger";
-import { Image, Video, Users, CheckCircle, FileText, Database, Activity, Settings, Brain, Cpu, HardDrive, MemoryStick, Zap, Upload, Folder, Network, Shield, TrendingUp, RefreshCw, AlertTriangle, Server, Clock, X, Shuffle, Trash2, Smartphone } from "lucide-react";
+import { Image, Video, Users, CheckCircle, FileText, Database, Activity, Settings, Brain, Cpu, HardDrive, MemoryStick, Zap, Upload, Folder, Network, Shield, TrendingUp, RefreshCw, AlertTriangle, Server, Clock, X, Shuffle, Trash2, Smartphone, ShieldAlert } from "lucide-react";
 import { DirectoryImportModal } from "./DirectoryImportModal";
 import { ServerImportModal } from "./ServerImportModal";
 import { AndroidConnectionQR } from "./AndroidConnectionQR";
 import { UserManagement } from "./UserManagement";
+import { LogViewer } from "./System/LogViewer";
 
 export const Dashboard = observer(() => {
-    const { statsStore, authStore, uiStore } = useStore();
+    const { statsStore, authStore, uiStore, systemStore } = useStore();
     const isAdmin = authStore.user?.role === "admin";
 
     const [activeTab, setActiveTab] = useState<'overview' | 'import' | 'system' | 'backup' | 'settings' | 'app' | 'users'>('overview');
@@ -32,16 +33,27 @@ export const Dashboard = observer(() => {
         if (isAdmin) {
             statsStore.fetchAllStats();
 
+            void systemStore.loadLogs();
+            void systemStore.loadErrors();
+            void systemStore.loadAlerts();
+            void systemStore.loadGpu();
+            void systemStore.loadPipeline();
+
             const interval = setInterval(() => {
                 statsStore.fetchPoolStats();
                 statsStore.fetchSystemStats();
                 statsStore.fetchP2PBackupStatus();
                 statsStore.fetchDiscoveredPeers();
+                void systemStore.loadLogs();
+                void systemStore.loadErrors();
+                void systemStore.loadAlerts();
+                void systemStore.loadGpu();
+                void systemStore.loadPipeline();
             }, 30000);
 
             return () => clearInterval(interval);
         }
-    }, [statsStore, isAdmin]);
+    }, [statsStore, systemStore, isAdmin]);
 
     // Update local state when settings are loaded
     useEffect(() => {
@@ -499,6 +511,65 @@ export const Dashboard = observer(() => {
                         {activeTab === 'system' && (
                             <div className="space-y-6">
                                 <div className="bg-gray-800 shadow-xl rounded-xl p-8 border border-gray-700">
+                                    <h2 className="text-xl font-bold text-gray-100 mb-6 flex items-center"><ShieldAlert className="w-6 h-6 text-amber-400 mr-3" /> Health Alerts</h2>
+                                    {systemStore.alerts.length === 0 ? (
+                                        <div className="text-gray-500 italic">No alert data yet.</div>
+                                    ) : (
+                                        <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+                                            {systemStore.alerts.map((a) => (
+                                                <div
+                                                    key={a.id}
+                                                    className={`flex items-start gap-3 rounded-lg border px-4 py-3 text-sm ${
+                                                        a.status === 'firing'
+                                                            ? a.severity === 'critical'
+                                                                ? 'bg-red-900/40 border-red-700 text-red-200'
+                                                                : 'bg-amber-900/40 border-amber-700 text-amber-200'
+                                                            : 'bg-emerald-900/30 border-emerald-800 text-emerald-200'
+                                                    }`}
+                                                >
+                                                    <span className={`mt-1.5 w-2 h-2 rounded-full shrink-0 ${a.status === 'firing' ? (a.severity === 'critical' ? 'bg-red-500' : 'bg-amber-400') : 'bg-emerald-400'}`} />
+                                                    <div className="min-w-0">
+                                                        <div className="font-semibold">{a.message}</div>
+                                                        <div className="text-xs opacity-80 truncate">{a.detail}</div>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+
+                                <div className="bg-gray-800 shadow-xl rounded-xl p-8 border border-gray-700">
+                                    <h2 className="text-xl font-bold text-gray-100 mb-6 flex items-center"><AlertTriangle className="w-6 h-6 text-red-400 mr-3" /> Recent Errors</h2>
+                                    <div className="grid grid-cols-3 gap-4 mb-6 max-w-md">
+                                        <div className="p-4 bg-red-950/50 rounded-xl border border-red-800 text-center">
+                                            <div className="text-3xl font-black text-red-400">{systemStore.errorCounts.error}</div>
+                                            <div className="text-[10px] text-gray-400 uppercase font-bold mt-1">errors / 5m</div>
+                                        </div>
+                                        <div className="p-4 bg-amber-950/50 rounded-xl border border-amber-800 text-center">
+                                            <div className="text-3xl font-black text-amber-400">{systemStore.errorCounts.warn}</div>
+                                            <div className="text-[10px] text-gray-400 uppercase font-bold mt-1">warnings / 5m</div>
+                                        </div>
+                                        <div className="p-4 bg-purple-950/50 rounded-xl border border-purple-800 text-center">
+                                            <div className="text-3xl font-black text-purple-400">{systemStore.errorCounts.panic}</div>
+                                            <div className="text-[10px] text-gray-400 uppercase font-bold mt-1">panics / 5m</div>
+                                        </div>
+                                    </div>
+                                    <div className="space-y-1">
+                                        {systemStore.errors.length === 0 ? (
+                                            <div className="text-gray-500 italic">No errors in the recent window.</div>
+                                        ) : (
+                                            systemStore.errors.slice(0, 8).map((e, i) => (
+                                                <div key={`${e.timestamp}-${i}`} className="flex gap-2 text-xs font-mono border-b border-gray-700/60 pb-1">
+                                                    <span className="text-red-400 shrink-0">{e.level}</span>
+                                                    <span className="text-gray-500 shrink-0">{e.target}</span>
+                                                    <span className="text-gray-200 break-all">{e.message}</span>
+                                                </div>
+                                            ))
+                                        )}
+                                    </div>
+                                </div>
+
+                                <div className="bg-gray-800 shadow-xl rounded-xl p-8 border border-gray-700">
                                     <h2 className="text-xl font-bold text-gray-100 mb-8 flex items-center"><Activity className="w-6 h-6 text-blue-400 mr-3" /> System Resources</h2>
                                     {systemStats ? (
                                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8">
@@ -612,6 +683,99 @@ export const Dashboard = observer(() => {
                                             <div className="border-l-4 border-indigo-500 pl-6"><dt className="text-xs font-black text-gray-500 uppercase mb-1">Free Connections</dt><dd className="text-3xl font-black text-white">{poolStats.available}</dd></div>
                                         </div>
                                     ) : <div className="text-gray-500 italic">Connecting to pool metrics...</div>}
+                                </div>
+
+                                <div className="bg-gray-800 shadow-xl rounded-xl p-8 border border-gray-700">
+                                    <h2 className="text-xl font-bold text-gray-100 mb-6 flex items-center"><Zap className="w-6 h-6 text-yellow-400 mr-3" /> Pipeline Timing</h2>
+                                    {systemStore.pipeline ? (
+                                        <div className="overflow-x-auto">
+                                            <table className="w-full text-sm">
+                                                <thead>
+                                                    <tr className="text-left text-gray-500 uppercase text-xs">
+                                                        <th className="pb-2 pr-4">Worker</th>
+                                                        <th className="pb-2 pr-4">Samples</th>
+                                                        <th className="pb-2 pr-4">mean</th>
+                                                        <th className="pb-2 pr-4">p50</th>
+                                                        <th className="pb-2 pr-4">p90</th>
+                                                        <th className="pb-2 pr-4">p95</th>
+                                                        <th className="pb-2">p99</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {[...systemStore.pipeline.workers, systemStore.pipeline.db_query_ms].filter(Boolean).map((w) => (
+                                                        <tr key={w.id} className="border-b border-gray-700/60">
+                                                            <td className="py-2 pr-4 text-gray-200 font-medium">{w.name}</td>
+                                                            <td className="py-2 pr-4 text-gray-400 font-mono">{w.count.toLocaleString()}</td>
+                                                            <td className="py-2 pr-4 text-gray-200 font-mono">{fmtMs(w.mean_ms)}</td>
+                                                            <td className="py-2 pr-4 text-gray-200 font-mono">{fmtMs(w.p50_ms)}</td>
+                                                            <td className="py-2 pr-4 text-gray-200 font-mono">{fmtMs(w.p90_ms)}</td>
+                                                            <td className="py-2 pr-4 text-gray-200 font-mono">{fmtMs(w.p95_ms)}</td>
+                                                            <td className="py-2 text-amber-300 font-mono">{fmtMs(w.p99_ms)}</td>
+                                                        </tr>
+                                                    ))}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    ) : (
+                                        <div className="text-gray-500 italic">Waiting for pipeline telemetry...</div>
+                                    )}
+                                </div>
+
+                                <div className="bg-gray-800 shadow-xl rounded-xl p-8 border border-gray-700">
+                                    <h2 className="text-xl font-bold text-gray-100 mb-6 flex items-center"><Network className="w-6 h-6 text-blue-400 mr-3" /> HTTP Traffic</h2>
+                                    {systemStore.pipeline ? (() => {
+                                        const h = systemStore.pipeline.http;
+                                        const statuses = [
+                                            { label: '2xx', value: h.status.http_2xx, cls: 'bg-green-500' },
+                                            { label: '3xx', value: h.status.http_3xx, cls: 'bg-blue-500' },
+                                            { label: '4xx', value: h.status.http_4xx, cls: 'bg-amber-500' },
+                                            { label: '5xx', value: h.status.http_5xx, cls: 'bg-red-500' },
+                                        ];
+                                        const max = Math.max(1, ...statuses.map((s) => s.value));
+                                        return (
+                                            <div className="space-y-4">
+                                                <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+                                                    <div className="border-l-4 border-blue-500 pl-4">
+                                                        <dt className="text-xs font-black text-gray-500 uppercase mb-1">Total requests</dt>
+                                                        <dd className="text-2xl font-black text-white">{h.total.toLocaleString()}</dd>
+                                                    </div>
+                                                    <div className="border-l-4 border-indigo-500 pl-4">
+                                                        <dt className="text-xs font-black text-gray-500 uppercase mb-1">Requests / sec</dt>
+                                                        <dd className="text-2xl font-black text-white">{h.per_second.toFixed(2)}</dd>
+                                                    </div>
+                                                    <div className="border-l-4 border-purple-500 pl-4">
+                                                        <dt className="text-xs font-black text-gray-500 uppercase mb-1">HTTP p95</dt>
+                                                        <dd className="text-2xl font-black text-white">{fmtMs(h.duration_ms.p95_ms)}</dd>
+                                                    </div>
+                                                    <div className="border-l-4 border-teal-500 pl-4">
+                                                        <dt className="text-xs font-black text-gray-500 uppercase mb-1">HTTP p99</dt>
+                                                        <dd className="text-2xl font-black text-white">{fmtMs(h.duration_ms.p99_ms)}</dd>
+                                                    </div>
+                                                </div>
+                                                <div className="space-y-2">
+                                                    {statuses.map((s) => (
+                                                        <div key={s.label} className="flex items-center gap-3">
+                                                            <span className="w-8 text-xs text-gray-400">{s.label}</span>
+                                                            <div className="flex-1 h-2.5 bg-gray-900/60 rounded-full overflow-hidden">
+                                                                <div className={`h-full rounded-full ${s.cls}`} style={{ width: `${(s.value / max) * 100}%` }} />
+                                                            </div>
+                                                            <span className="w-20 text-right text-xs font-mono text-gray-300">{s.value.toLocaleString()}</span>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                                <p className="text-[11px] text-gray-500">
+                                                    Duration percentiles: p50 {fmtMs(h.duration_ms.p50_ms)} · p90 {fmtMs(h.duration_ms.p90_ms)} · p95 {fmtMs(h.duration_ms.p95_ms)} · p99 {fmtMs(h.duration_ms.p99_ms)}
+                                                </p>
+                                            </div>
+                                        );
+                                    })() : (
+                                        <div className="text-gray-500 italic">Waiting for HTTP telemetry...</div>
+                                    )}
+                                </div>
+
+                                <div className="bg-gray-800 shadow-xl rounded-xl p-8 border border-gray-700">
+                                    <h2 className="text-xl font-bold text-gray-100 mb-6 flex items-center"><Activity className="w-6 h-6 text-teal-400 mr-3" /> Live Logs</h2>
+                                    <LogViewer />
                                 </div>
                             </div>
                         )}
@@ -753,3 +917,8 @@ export const Dashboard = observer(() => {
         </div>
     );
 });
+
+function fmtMs(ms: number | null | undefined): string {
+    if (ms === null || ms === undefined) return "—";
+    return ms < 1000 ? `${ms.toFixed(0)} ms` : `${(ms / 1000).toFixed(2)} s`;
+}

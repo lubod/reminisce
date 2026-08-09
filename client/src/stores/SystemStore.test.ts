@@ -89,6 +89,21 @@ describe("SystemStore", () => {
         expect(s.lastError).toBeNull();
     });
 
+    it("loads pipeline timings", async () => {
+        mockedGet.mockResolvedValueOnce({
+            data: {
+                workers: [{ id: "embedding", name: "Embedding", count: 5, mean_ms: 120, p50_ms: 100, p90_ms: 200, p95_ms: 250, p99_ms: 300 }],
+                http: { total: 100, per_second: 0.4, status: { http_2xx: 90, http_3xx: 0, http_4xx: 8, http_5xx: 2 }, duration_ms: { id: "http", name: "HTTP", count: 100, mean_ms: 25, p50_ms: 10, p90_ms: 40, p95_ms: 50, p99_ms: 80 } },
+                db_query_ms: { id: "db", name: "DB", count: 10, mean_ms: 5, p50_ms: 3, p90_ms: 8, p95_ms: 9, p99_ms: 10 },
+            },
+        });
+        const s = makeStore();
+        await s.loadPipeline();
+        expect(s.pipeline?.workers[0].p95_ms).toBe(250);
+        expect(s.pipeline?.http.status.http_5xx).toBe(2);
+        expect(s.pipeline?.db_query_ms.p99_ms).toBe(10);
+    });
+
     it("records errors without throwing", async () => {
         mockedGet.mockRejectedValueOnce(new Error("boom"));
         const s = makeStore();
@@ -104,8 +119,8 @@ describe("SystemStore", () => {
         const p2 = s.refreshAll();
         await Promise.all([p1, p2]);
         expect(s.isLoading).toBe(false);
-        // Deduped: the second refreshAll did not re-run the 7 loaders.
-        expect(mockedGet).toHaveBeenCalledTimes(7);
+        // Deduped: the second refreshAll did not re-run the 8 loaders.
+        expect(mockedGet).toHaveBeenCalledTimes(8);
     });
 
     it("startAutoRefresh polls on an interval and cleans up", async () => {

@@ -92,6 +92,30 @@ export interface PoolStats {
     };
 }
 
+export interface WorkerStats {
+    id: string;
+    name: string;
+    count: number;
+    mean_ms: number | null;
+    p50_ms: number | null;
+    p90_ms: number | null;
+    p95_ms: number | null;
+    p99_ms: number | null;
+}
+
+export interface HttpStats {
+    total: number;
+    per_second: number;
+    status: { http_2xx: number; http_3xx: number; http_4xx: number; http_5xx: number };
+    duration_ms: WorkerStats;
+}
+
+export interface PipelineResponse {
+    workers: WorkerStats[];
+    http: HttpStats;
+    db_query_ms: WorkerStats;
+}
+
 export class SystemStore {
     root: RootStore;
 
@@ -104,6 +128,7 @@ export class SystemStore {
     pool: PoolStats | null = null;
     backup: BackupStatus | null = null;
     gpu: GpuResponse | null = null;
+    pipeline: PipelineResponse | null = null;
 
     isLoading = false;
     lastError: string | null = null;
@@ -190,6 +215,16 @@ export class SystemStore {
         }
     }
 
+    async loadPipeline(): Promise<void> {
+        try {
+            const resp = await axios.get<PipelineResponse>("/admin/pipeline");
+            this.pipeline = resp.data;
+            this.lastError = null;
+        } catch (e) {
+            this.recordError("loadPipeline", e);
+        }
+    }
+
     /** Refreshes everything exactly once (single-flight). */
     async refreshAll(): Promise<void> {
         if (this.refreshPromise) {
@@ -204,6 +239,7 @@ export class SystemStore {
             this.loadPool(),
             this.loadBackup(),
             this.loadGpu(),
+            this.loadPipeline(),
         ])
             .then(() => {
                 this.isLoading = false;
