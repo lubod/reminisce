@@ -10,6 +10,7 @@ import { OrientationCheck } from "./components/OrientationCheck";
 import { People } from "./components/People";
 import { DuplicatesBrowser } from "./components/DuplicatesBrowser";
 import { TrashBrowser } from "./components/TrashBrowser";
+import { SystemPage } from "./components/System/SystemPage";
 import { useStore } from "./stores/RootStore";
 import { observer } from "mobx-react-lite";
 import { Loader } from "lucide-react";
@@ -61,6 +62,7 @@ const App = observer(() => {
             <Route path="duplicates" element={<DuplicatesBrowser />} />
             <Route path="orientation" element={<OrientationCheck />} />
             <Route path="trash" element={<TrashBrowser />} />
+            <Route path="system" element={<SystemPage />} />
           </Route>
         </Routes>
       </Router>

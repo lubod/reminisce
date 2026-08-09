@@ -13,7 +13,6 @@ NC='\033[0m' # No Color
 # --- CONFIG ---
 PROJECT_NAME="reminisce-dev"
 COMPOSE_FILE="docker/docker-compose-dev.yml"
-OBS_FILE="docker/docker-compose-observability.yml"
 DEV_CONFIG="config-dev.yaml"
 FULL_CONFIG="config-fullstack.yaml"
 
@@ -111,7 +110,7 @@ function show_help {
     echo "  up, start              Start infra containers (DBs, AI, Nginx)"
     echo "  down, stop             Stop ALL containers and projects"
     echo "  recreate [svc...]      Force recreate infra containers"
-    echo "  start-obs              Start observability stack (Grafana, Prometheus)"
+    echo "  start-obs              Phased out: observability is in-app (/system page)"
     echo "  ps                     Show status of all containers"
     echo "  logs [svc...]          Follow logs"
     echo ""
@@ -178,8 +177,6 @@ case "$COMMAND" in
         docker compose --project-directory . -p "$PROJECT_NAME" -f "$COMPOSE_FILE" down 2>/dev/null || true
         # Stop under the old project name (to fix conflicts)
         docker compose --project-directory . -p "reminisce-fullstack" -f "$COMPOSE_FILE" down 2>/dev/null || true
-        # Stop observability
-        docker compose --project-directory . -p "$PROJECT_NAME" -f "$OBS_FILE" down 2>/dev/null || true
         # Force remove any remaining containers by name
         docker rm -f $ALL_CONTAINERS 2>/dev/null || true
         success "Stopped and cleaned everything."
@@ -286,9 +283,7 @@ case "$COMMAND" in
         RUST_LOG=info cargo run --bin reminisce -- restore "$DEV_CONFIG" "$1"
         ;;
     start-obs)
-        info "Starting observability..."
-        docker compose --project-directory . -p "$PROJECT_NAME" -f "$OBS_FILE" up -d
-        success "Grafana: http://localhost:3000"
+        info "Observability is now built into the app — open the /system page in the client (no Grafana/Prometheus/Loki stack)."
         ;;
     install-hooks)
         info "Installing git hooks (core.hooksPath → githooks)..."

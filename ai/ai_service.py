@@ -14,10 +14,13 @@ Endpoints:
 - POST /describe/qwen - Generate image description (Qwen2.5-VL-3B, ~29s, higher quality)
 - POST /detect       - Detect faces in image
 - GET  /health       - Health check endpoint
+- GET  /gpu-metrics  - ROCm GPU metrics (used by the app's /system page)
 """
 
 import logging
 import sys
+import json
+import subprocess
 
 import torch
 from flask import Flask, jsonify
@@ -270,6 +273,57 @@ def health():
             'orientation': orientation_model is not None
         }
     })
+
+
+@app.route('/gpu-metrics', methods=['GET'])
+def gpu_metrics():
+    """Lightweight ROCm GPU metrics for the in-app /system page (no exporter sidecar).
+
+    Consumed by the Reminisce server's GET /api/admin/gpu (ProxyFetch).
+    """
+    cards = []
+    data = {}
+    mem_data = {}
+    try:
+        out = subprocess.check_output(
+            ["/opt/rocm/bin/rocm-smi", "--json", "--showuse", "--showmemuse", "--showtemp"],
+            timeout=10, stderr=subprocess.DEVNULL,
+        )
+        data = json.loads(out)
+    except Exception:
+        data = {}
+    try:
+        mem_out = subprocess.check_output(
+            ["/opt/rocm/bin/rocm-smi", "--json", "--showmeminfo", "vram"],
+            timeout=10, stderr=subprocess.DEVNULL,
+        )
+        mem_data = json.loads(mem_out)
+    except Exception:
+        mem_data = {}
+
+    for card, info in data.items():
+        if not card.startswith("card"):
+            continue
+        gpu = card.lstrip("card")
+        util = info.get("GPU use (%)", info.get("GPU Use (%)"))
+        mem_pct = info.get("GPU Memory Allocated (VRAM%)")
+        temp = info.get("Temperature (Sensor edge) (C)", info.get("Temperature (C)"))
+        mem = mem_data.get(card, {})
+        mem_used = mem.get("VRAM Total Used Memory (B)")
+        mem_total = mem.get("VRAM Total Memory (B)")
+        try:
+            cards.append({
+                "gpu": gpu,
+                "utilization_percent": float(util) if util is not None else None,
+                "memory_usage_percent": float(mem_pct) if mem_pct is not None else None,
+                "memory_used_bytes": float(mem_used) if mem_used is not None else None,
+                "memory_total_bytes": float(mem_total) if mem_total is not None else None,
+                "temperature_celsius": float(temp) if temp is not None else None,
+            })
+        except (TypeError, ValueError):
+            continue
+
+    return jsonify({"available": len(cards) > 0, "cards": cards})
 
 
 @app.route('/', methods=['GET'])

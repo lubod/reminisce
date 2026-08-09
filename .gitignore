@@ -48,3 +48,6 @@ geodb_builder/pgdata/
 
 # Per-clone marker of the last successfully built image commit (see ./dev)
 .docker-last-built
+
+# In-app rotating logs (runtime)
+/logs

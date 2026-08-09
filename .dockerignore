@@ -30,3 +30,5 @@ node_modules/
 
 # Per-clone build marker (not part of the image)
 .docker-last-built
+
+/logs

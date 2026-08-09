@@ -7,6 +7,7 @@ import { PersonStore } from "./PersonStore";
 import { LabelStore } from "./LabelStore";
 import { DuplicatesStore } from "./DuplicatesStore";
 import { TrashStore } from "./TrashStore";
+import { SystemStore } from "./SystemStore";
 
 export class RootStore {
     authStore: AuthStore;
@@ -17,6 +18,7 @@ export class RootStore {
     labelStore: LabelStore;
     duplicatesStore: DuplicatesStore;
     trashStore: TrashStore;
+    systemStore: SystemStore;
 
     constructor() {
         this.authStore = new AuthStore(this);
@@ -27,6 +29,7 @@ export class RootStore {
         this.labelStore = new LabelStore(this);
         this.duplicatesStore = new DuplicatesStore(this);
         this.trashStore = new TrashStore(this);
+        this.systemStore = new SystemStore(this);
     }
 }
 

@@ -35,6 +35,7 @@ enable_external_geocoding_fallback: true
 # If the backend runs inside the compose network (not host), use http://ai-server:50051
 ai_grpc_url: "http://localhost:50051"
 
-# Observability (OpenTelemetry - port-mapped to host)
-otlp_endpoint: "http://localhost:4317"
+# Observability (in-app: rotating logs under /app/logs; GPU proxied from the AI container)
+log_dir: "/app/logs"
+ai_http_url: "http://ai-server:8081"
 environment: "production"

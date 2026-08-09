@@ -104,6 +104,7 @@ services:
       - ./config-fullstack.yaml:/app/config.yaml:ro
       - ./uploaded_images:/app/uploaded_images
       - ./uploaded_videos:/app/uploaded_videos
+      - ./logs:/app/logs
       - reminisce_dev_p2p_data:/app/data/p2p
     environment:
       - RUST_LOG=info

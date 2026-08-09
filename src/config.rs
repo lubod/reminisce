@@ -56,9 +56,13 @@ pub struct Config {
     #[serde(skip)]
     pub orientation_detection_parallel_count: Arc<AtomicUsize>,
 
-    // Observability configuration
+    // Observability configuration (in-app; no external stack)
     #[serde(default)]
-    pub otlp_endpoint: Option<String>,
+    pub log_dir: Option<String>,
+    /// Where the AI container's HTTP endpoint lives (e.g. http://ai-server:8081),
+    /// used to proxy GPU metrics into `/api/admin/gpu`.
+    #[serde(default)]
+    pub ai_http_url: Option<String>,
     #[serde(default)]
     pub environment: Option<String>,
 

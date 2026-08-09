@@ -25,6 +25,8 @@ pub mod ai_worker;
 pub mod ai_client;
 pub mod telemetry;
 pub mod metrics;
+pub mod logtail;
+pub mod alerts;
 pub mod openapi;
 pub mod p2p_error;
 
@@ -60,6 +62,7 @@ pub mod p2p_restore;
     pub mod duplicates;
     pub mod quality;
     pub mod user_management;
+    pub mod observability;
 }
 
 use crate::config::Config;
@@ -595,6 +598,10 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
                     .service(services::duplicates::trigger_duplicate_scan)
                     .service(enhance_image)
                     .service(save_enhanced_image)
+                    .service(services::observability::get_admin_logs)
+                    .service(services::observability::get_admin_errors)
+                    .service(services::observability::get_admin_alerts)
+                    .service(services::observability::get_admin_gpu)
             )
     })
     .bind(format!("0.0.0.0:{}", config.port))?

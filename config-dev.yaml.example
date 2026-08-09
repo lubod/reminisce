@@ -31,7 +31,7 @@ enable_external_geocoding_fallback: true
 # only for container healthchecks and is not configured here.
 ai_grpc_url: "http://localhost:50051"
 
-# Observability (OpenTelemetry)
-# Points to Grafana Alloy (OTLP Receiver)
-otlp_endpoint: "http://localhost:4317"
+# Observability (in-app: rotating logs under /app/logs; GPU via the AI container)
+log_dir: "/app/logs"
+ai_http_url: "http://localhost:8081"
 environment: "development"
