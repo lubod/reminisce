@@ -1,0 +1,11 @@
+# BuildKit daemon settings for the dedicated Reminisce build-cache builder
+# (`devcache`, created on demand by `./dev docker-build`).
+# keepStorage retains the layer cache and the cache mounts (cargo registry) so
+# repeated image builds are incremental instead of cold, even under host load.
+[worker.oci]
+  gc = true
+  keepStorage = 50000   # MB (50 GB) of build cache to keep before GC
+
+[worker.containerd]
+  gc = true
+  keepStorage = 50000

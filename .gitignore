@@ -45,3 +45,6 @@ p2p_keys.escrow
 
 # Local geocoding DB data (runtime only)
 geodb_builder/pgdata/
+
+# Per-clone marker of the last successfully built image commit (see ./dev)
+.docker-last-built

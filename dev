@@ -17,6 +17,21 @@ OBS_FILE="docker/docker-compose-observability.yml"
 DEV_CONFIG="config-dev.yaml"
 FULL_CONFIG="config-fullstack.yaml"
 
+# Dedicated long-lived builder whose state volume keeps the BuildKit layer cache
+# and the cargo-registry cache mount across builds (see docker/buildkitd.toml).
+DOCKER_BUILDER="${DOCKER_BUILDER:-devcache}"
+# Keep cargo parallel compilation modest so the shared host/container stays
+# responsive (the NVR/AI stack runs on the same CPUs).
+CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-16}"
+export CARGO_BUILD_JOBS
+
+# Marker recording the git HEAD each successful image build, used to build only
+# images whose source changed. Git-ignored.
+DOCKER_LAST_BUILT=".docker-last-built"
+
+# All images docker-compose-build.yml can build.
+ALL_IMAGES="postgres reminisce client ai-server p2p-node coordinator"
+
 # List of all possible container names to avoid naming conflicts
 ALL_CONTAINERS="reminisce-dev-db reminisce-dev-geotagging reminisce-dev-ai-server reminisce-dev-server reminisce-dev-client p2p-dev-node-1 p2p-dev-node-2 p2p-dev-node-3 p2p-dev-node-4 p2p-dev-node-5"
 
@@ -30,6 +45,56 @@ check_tool() {
     if ! command -v "$1" &>/dev/null; then
         error "Required tool '$1' is not installed."
     fi
+}
+
+# --- DOCKER BUILD CACHE HELPERS ---
+
+# Create the long-lived cache builder once (idempotent). Its state volume
+# persists layer cache + cache mounts across builds and container restarts.
+ensure_build_builder() {
+    if ! docker buildx inspect "$DOCKER_BUILDER" >/dev/null 2>&1; then
+        info "Creating persistent docker buildx builder '$DOCKER_BUILDER' (caches live in its state volume)"
+        docker buildx create --name "$DOCKER_BUILDER" --driver docker-container \
+            --config docker/buildkitd.toml \
+            --buildkitd-flags '--allow-insecure-entitlement network.host' || \
+            error "failed to create builder '$DOCKER_BUILDER'"
+    fi
+}
+
+# Echo the compose service names whose image source changed since the last
+# build (`.docker-last-built`), defaulting to a sane subset when unknown.
+docker_changed_services() {
+    local base="" changed=""
+    if [ -f "$DOCKER_LAST_BUILT" ]; then
+        base="$(cat "$DOCKER_LAST_BUILT" 2>/dev/null || true)"
+    fi
+    changed="$(git diff --name-only "${base:+$base..}HEAD" 2>/dev/null || true) $(git ls-files --others --exclude-standard 2>/dev/null || true)"
+    local server=0 client=0 postgres=0 ai=0 p2p=0 coord=0 unknown=0 p
+    while IFS= read -r p; do
+        [ -z "$p" ] && continue
+        case "$p" in
+            src/*|Cargo.toml|Cargo.lock|Dockerfile) server=1 ;;
+            np2p/*)                           server=1; p2p=1 ;;
+            coordinator/*)                    server=1; coord=1 ;;
+            client/*)                         client=1 ;;
+            ai/*)                             ai=1 ;;
+            docker/Dockerfile.postgres|db/*)  postgres=1 ;;
+            docker/Dockerfile.p2p)            p2p=1; coord=1 ;;
+            docker/*|*)                       unknown=1 ;;
+        esac
+    done <<< "$changed"
+    if [ "$unknown" = "1" ]; then
+        echo "$ALL_IMAGES"
+        return
+    fi
+    local out=""
+    [ "$server" = "1" ]   && out="$out reminisce"
+    [ "$client" = "1" ]   && out="$out client"
+    [ "$postgres" = "1" ] && out="$out postgres"
+    [ "$ai" = "1" ]       && out="$out ai-server"
+    [ "$p2p" = "1" ]      && out="$out p2p-node"
+    [ "$coord" = "1" ]    && out="$out coordinator"
+    echo "$out"
 }
 
 # --- LOAD ENVIRONMENT ---
@@ -62,8 +127,9 @@ function show_help {
     echo "  fullstack-recreate     Force recreate everything in Docker"
     echo ""
     echo "Docker & CI cache:"
-    echo "  docker-build [imgs...] Build all or specific images"
-    echo "  docker-rebuild [imgs...] Rebuild from scratch (no-cache)"
+    echo "  docker-build [imgs...] Build changed images (or specified) on the persistent"
+    echo "                        devcache builder; cargo parallel jobs capped (CARGO_BUILD_JOBS)"
+    echo "  docker-rebuild [imgs...] Rebuild from scratch (no-cache, same builder)"
     echo "  docker-push [imgs...]  Push images to registry"
     echo ""
     echo "Maintenance:"
@@ -177,12 +243,31 @@ case "$COMMAND" in
         docker compose --project-directory . -p "$PROJECT_NAME" -f "$COMPOSE_FILE" up -d --force-recreate "$@"
         ;;
     docker-build)
-        info "Building Docker images..."
-        docker compose --project-directory . -f docker/docker-compose-build.yml build "$@"
+        ensure_build_builder
+        if [ $# -eq 0 ]; then
+            local targets
+            targets="$(docker_changed_services)"
+            [ -n "$targets" ] || targets="reminisce client"
+            info "Building changed images: $targets"
+            set -- $targets
+        fi
+        info "Building Docker images (builder=$DOCKER_BUILDER, CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS)..."
+        docker compose --project-directory . -f docker/docker-compose-build.yml \
+            build --builder "$DOCKER_BUILDER" "$@"
+        git rev-parse --short HEAD > "$DOCKER_LAST_BUILT" 2>/dev/null || true
         ;;
     docker-rebuild)
-        info "Rebuilding Docker images from scratch..."
-        docker compose --project-directory . -f docker/docker-compose-build.yml build --no-cache "$@"
+        ensure_build_builder
+        if [ $# -eq 0 ]; then
+            local targets
+            targets="$(docker_changed_services)"
+            [ -n "$targets" ] || targets="$ALL_IMAGES"
+            set -- $targets
+        fi
+        info "Rebuilding Docker images from scratch (builder=$DOCKER_BUILDER)..."
+        docker compose --project-directory . -f docker/docker-compose-build.yml \
+            build --no-cache --builder "$DOCKER_BUILDER" "$@"
+        git rev-parse --short HEAD > "$DOCKER_LAST_BUILT" 2>/dev/null || true
         ;;
     docker-push)
         info "Pushing images to registry..."

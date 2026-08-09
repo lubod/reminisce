@@ -1,4 +1,4 @@
-FROM rocm/pytorch:rocm7.2_ubuntu24.04_py3.12_pytorch_release_2.9.1
+FROM rocm/pytorch:rocm7.2_ubuntu24.04_py3.12_pytorch_release_2.9.1@sha256:a3b65813621095e3389269417e963725b59310184588c9d2490d44e6e83fa01c
 
 LABEL maintainer="reminisce"
 LABEL description="Unified AI service: SigLIP2 embeddings, Qwen2.5-VL descriptions, InsightFace detection with ROCm 7.2"

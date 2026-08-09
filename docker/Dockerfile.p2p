@@ -1,6 +1,8 @@
 # Stage 1: Build all binaries in a single cached environment
-FROM rust:bookworm as builder
+FROM rust:bookworm@sha256:14bc9c5966e7b3a385794b3d5389a8765668342025fbcc7b2e3d2866ac4bd8c3 as builder
 WORKDIR /usr/src/app
+
+ARG CARGO_BUILD_JOBS=24
 
 # 1. Copy workspace manifests
 COPY Cargo.lock Cargo.toml ./
@@ -15,7 +17,7 @@ RUN mkdir -p np2p/src/bin coordinator/src && \
     echo "fn main() {}" > coordinator/src/main.rs
 
 # Build dependencies only
-RUN cargo build -p np2p -p coordinator --release
+RUN cargo build -p np2p -p coordinator --release -j ${CARGO_BUILD_JOBS}
 
 # 3. Copy actual source code
 COPY np2p/src ./np2p/src
@@ -28,12 +30,12 @@ RUN rm -f target/release/deps/np2p* target/release/deps/libnp2p* \
 
 # 4. Build all binaries
 RUN cargo build --bin np2pd --bin e2e_client -p np2p \
-                --bin coordinator -p coordinator --release
+                --bin coordinator -p coordinator --release -j ${CARGO_BUILD_JOBS}
 
 # --- Runtime Stages ---
 
 # Storage Node (Daemon)
-FROM debian:bookworm-slim as storage
+FROM debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241 as storage
 RUN apt-get update && apt-get install -y ca-certificates procps && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /usr/src/app/target/release/np2pd /usr/local/bin/
 RUN mkdir -p /data
@@ -43,13 +45,13 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 CMD ["np2pd", "--listen", "0.0.0.0:5050", "--data-dir", "/data"]
 
 # E2E Client Simulator
-FROM debian:bookworm-slim as client
+FROM debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241 as client
 RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /usr/src/app/target/release/e2e_client /usr/local/bin/
 CMD ["e2e_client"]
 
 # Coordinator (VPS relay + tunnel server)
-FROM debian:bookworm-slim as coordinator
+FROM debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241 as coordinator
 RUN apt-get update && apt-get install -y ca-certificates procps && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /usr/src/app/target/release/coordinator /usr/local/bin/
 RUN mkdir -p /data

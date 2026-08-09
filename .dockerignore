@@ -27,3 +27,6 @@ node_modules/
 *.log
 *.tmp
 .DS_Store
+
+# Per-clone build marker (not part of the image)
+.docker-last-built

@@ -1,6 +1,10 @@
 # Build all Docker images
 # Run from repo root: docker compose --project-directory . -f docker/docker-compose-build.yml build
 # Or push:           docker compose --project-directory . -f docker/docker-compose-build.yml push
+#
+# For faster incremental builds use the dedicated long-lived cache builder via
+# `./dev docker-build [imgs...]` (creates it on first use: docker/buildkitd.toml),
+# or explicitly: docker compose ... build --builder devcache [imgs...]
 
 services:
   postgres:
@@ -14,6 +18,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        CARGO_BUILD_JOBS: ${CARGO_BUILD_JOBS:-24}
     image: lubod/reminisce:latest
     container_name: reminisce-build
 
@@ -36,6 +42,8 @@ services:
       context: .
       dockerfile: docker/Dockerfile.p2p
       target: storage
+      args:
+        CARGO_BUILD_JOBS: ${CARGO_BUILD_JOBS:-24}
     image: lubod/reminisce-p2p:latest
     container_name: reminisce-p2p-build
 
@@ -44,5 +52,7 @@ services:
       context: .
       dockerfile: docker/Dockerfile.p2p
       target: coordinator
+      args:
+        CARGO_BUILD_JOBS: ${CARGO_BUILD_JOBS:-24}
     image: lubod/reminisce-coordinator:latest
     container_name: reminisce-coordinator-build

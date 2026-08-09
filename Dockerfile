@@ -1,41 +1,47 @@
 # Stage 1: Planner - Generate recipe for dependencies
-FROM rust:slim-bookworm AS planner
+FROM rust:slim-bookworm@sha256:96c0af8cf054fd006435089f0076729716784ec9be485bd655de59c55df105ce AS planner
 WORKDIR /app
-RUN cargo install cargo-chef 
+RUN cargo install cargo-chef
 COPY . .
 RUN cargo chef prepare --recipe-path recipe.json
 
-# Stage 2: Cacher - Build dependencies only
-FROM rust:slim-bookworm AS cacher
+# Stage 2: Cacher - Build dependencies only. The compiled dependency tree is
+# committed to this layer (no /app/target cache mount), so BuildKit layer cache
+# reuses it whenever the recipe (Cargo.toml/lock) and compiler are unchanged.
+FROM rust:slim-bookworm@sha256:96c0af8cf054fd006435089f0076729716784ec9be485bd655de59c55df105ce AS cacher
 WORKDIR /app
 RUN cargo install cargo-chef
 COPY --from=planner /app/recipe.json recipe.json
 # Install build dependencies including mold linker
 RUN apt-get update && apt-get install -y libssl-dev pkg-config mold clang protobuf-compiler && rm -rf /var/lib/apt/lists/*
 
-# Build dependencies with cache mounts for cargo registry and target
+# Keep compiler parallelism capped so the shared host/container stays responsive.
+ARG CARGO_BUILD_JOBS=24
+# Cache mount only for the cargo registry to avoid re-downloading crates.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/app/target \
-    cargo chef cook --release --recipe-path recipe.json
+    cargo chef cook --release -j ${CARGO_BUILD_JOBS} --recipe-path recipe.json
 
-# Stage 3: Builder - Build the actual application
-FROM rust:slim-bookworm AS builder
+# Stage 3: Builder - Build the actual application on top of the cacher's deps
+FROM rust:slim-bookworm@sha256:96c0af8cf054fd006435089f0076729716784ec9be485bd655de59c55df105ce AS builder
 WORKDIR /app
 # Install build dependencies including mold linker
 RUN apt-get update && apt-get install -y libssl-dev pkg-config mold clang protobuf-compiler && rm -rf /var/lib/apt/lists/*
 
+# Reuse the precompiled dependency artifacts from the cacher (layer-cached), so a
+# source change only recompiles the workspace crates instead of all ~490 deps.
+COPY --from=cacher /app/target /app/target
+
 # Copy source
 COPY . .
 
-# Final build with cache mounts. Copy binary out of mount after build.
+ARG CARGO_BUILD_JOBS=24
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/app/target \
-    cargo build --release && \
+    cargo build --release -j ${CARGO_BUILD_JOBS} && \
     mkdir -p /app/bin && \
     cp target/release/reminisce /app/bin/reminisce
 
 # Stage 4: Runtime
-FROM debian:bookworm-slim
+FROM debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241
 
 # PostgreSQL 16 client (matches the server; Debian bookworm ships v15 which cannot
 # pg_dump a v16 server). PGDG repo provides postgresql-client-16.
