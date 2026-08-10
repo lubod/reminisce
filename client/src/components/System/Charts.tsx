@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { observer } from "mobx-react-lite";
 import type { SystemStore, Series } from "../../stores/SystemStore";
 
@@ -61,6 +62,35 @@ function ChartCard({ spec, store }: { spec: ChartSpec; store: SystemStore }) {
 
     const fmt = (v: number) => (Math.abs(v) >= 100 ? Math.round(v).toLocaleString() : v.toFixed(1));
 
+    // Hover tooltip: track the time under the cursor and the nearest value per series.
+    const [hoverT, setHoverT] = useState<number | null>(null);
+    const xOf = (t: number) => PAD_X + ((t - minT) / (maxT - minT || 1)) * (W - PAD_X * 2);
+    const timeOfX = (x: number) => minT + ((x - PAD_X) / (W - PAD_X * 2)) * (maxT - minT);
+
+    const hoveredSeries = present
+        .map((s) => {
+            // nearest point in time
+            let best = s.points[0];
+            for (const p of s.points) if (Math.abs(p.t - hoverT!) < Math.abs(best.t - hoverT!)) best = p;
+            return { s, p: best };
+        })
+        .sort((a, b) => (a.p.t - b.p.t) as number);
+
+    const fmtTime = (t: number) =>
+        new Date(t * 1000).toLocaleString(undefined, {
+            month: "short",
+            day: "numeric",
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
+        });
+
+    const handleMove = (e: React.MouseEvent<SVGSVGElement>) => {
+        const rect = e.currentTarget.getBoundingClientRect();
+        const fx = (e.clientX - rect.left) / rect.width;
+        setHoverT(timeOfX(fx * W));
+    };
+
     return (
         <div className="bg-gray-900/40 rounded-xl border border-gray-700 p-4">
             <div className="flex items-center justify-between mb-2">
@@ -69,18 +99,88 @@ function ChartCard({ spec, store }: { spec: ChartSpec; store: SystemStore }) {
                     min {fmt(minV)} · max {fmt(maxV)} {spec.unit}
                 </span>
             </div>
-            <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-36" preserveAspectRatio="none">
-                {present.map((s, i) => (
-                    <polyline
-                        key={s.name}
-                        points={toSvg(s, minT, maxT, minV, maxV)}
-                        fill="none"
-                        stroke={PALETTE[i % PALETTE.length]}
-                        strokeWidth={1.5}
-                        vectorEffect="non-scaling-stroke"
-                    />
-                ))}
-            </svg>
+            <div
+                className="relative"
+                onMouseLeave={() => setHoverT(null)}
+            >
+                <svg
+                    viewBox={`0 0 ${W} ${H}`}
+                    className="w-full h-36 cursor-crosshair"
+                    preserveAspectRatio="none"
+                    onMouseMove={handleMove}
+                >
+                    {hoverT !== null && (
+                        <line
+                            x1={xOf(hoverT)}
+                            y1={PAD_Y}
+                            x2={xOf(hoverT)}
+                            y2={H - PAD_Y}
+                            stroke="#e5e7eb"
+                            strokeOpacity={0.5}
+                            strokeWidth={1}
+                            vectorEffect="non-scaling-stroke"
+                        />
+                    )}
+                    {present.map((s, i) => (
+                        <polyline
+                            key={s.name}
+                            points={toSvg(s, minT, maxT, minV, maxV)}
+                            fill="none"
+                            stroke={PALETTE[i % PALETTE.length]}
+                            strokeWidth={1.5}
+                            vectorEffect="non-scaling-stroke"
+                        />
+                    ))}
+                    {hoverT !== null &&
+                        hoveredSeries.map(({ s, p }) => (
+                            <circle
+                                key={s.name}
+                                cx={xOf(p.t)}
+                                cy={
+                                    H -
+                                    PAD_Y -
+                                    ((p.v - minV) / (maxV - minV || 1)) * (H - PAD_Y * 2)
+                                }
+                                r={3}
+                                fill={PALETTE[present.indexOf(s) % PALETTE.length]}
+                                stroke="#0f172a"
+                                strokeWidth={1}
+                                vectorEffect="non-scaling-stroke"
+                            />
+                        ))}
+                </svg>
+
+                {hoverT !== null && (
+                    <div
+                        className="pointer-events-none absolute z-10 -translate-x-1/2 top-0 bg-gray-950/95 border border-gray-700 rounded-md px-2 py-1.5 shadow-lg"
+                        style={{
+                            left: `${(xOf(hoverT) / W) * 100}%`,
+                            maxWidth: "15rem",
+                        }}
+                    >
+                        <div className="text-[10px] text-gray-400 font-medium mb-0.5 whitespace-nowrap">
+                            {fmtTime(hoverT)}
+                        </div>
+                        {hoveredSeries.map(({ s, p }) => (
+                            <div
+                                key={s.name}
+                                className="flex items-center gap-1.5 text-[11px] text-gray-200 whitespace-nowrap"
+                            >
+                                <span
+                                    className="w-2 h-2 rounded-full shrink-0"
+                                    style={{
+                                        background: PALETTE[present.indexOf(s) % PALETTE.length],
+                                    }}
+                                />
+                                <span className="text-gray-400">{shortName(s.name)}</span>
+                                <span className="ml-auto font-semibold tabular-nums">
+                                    {fmt(p.v)} {spec.unit}
+                                </span>
+                            </div>
+                        ))}
+                    </div>
+                )}
+            </div>
             <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-1.5">
                 {present.map((s, i) => (
                     <span key={s.name} className="flex items-center gap-1 text-[10px] text-gray-400">
