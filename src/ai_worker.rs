@@ -25,6 +25,13 @@ use tokio::time::Duration;
 use futures::stream::{self, StreamExt};
 use chrono::{DateTime, Utc};
 
+/// Cap on consecutive recoverable (e.g. transport / AI-process-crash) description
+/// failures per row before the row is permanently parked as `[skipped]`. Guards
+/// against a single deterministic poison image re-triggering the AI crash loop
+/// indefinitely, while a genuine full-service outage is handled separately (no
+/// successes anywhere -> attempts aren't counted, see the error handler).
+const DESC_FAIL_CAP: i32 = 5;
+
 #[allow(dead_code)]
 struct AiTask {
     hash: String,
@@ -104,6 +111,45 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
     if should_update {
         if let Ok(client) = pool.0.get().await {
             let _ = update_status_metrics(&client).await;
+        }
+    }
+
+    // Un-park description rows that were left at the [__processing__] marker by a
+    // process that crashed hard mid AI call (the marker is written BEFORE the gRPC
+    // call, so a fault that aborts the process never resets it and the row is never
+    // re-selected). The gate uses `description_started_at` (when the marker was
+    // written) so only rows idle at the marker for 15 minutes are touched — not the
+    // ingestion timestamp, which in an established library is always in the past.
+    // Rows that have already exhausted DESC_FAIL_CAP attempts are parked as
+    // [skipped] instead of being re-un-parked for yet another doomed attempt.
+    static LAST_UNPARK: Lazy<std::sync::Mutex<Option<Instant>>> = Lazy::new(|| std::sync::Mutex::new(None));
+    let unpark_due = {
+        let mut last = LAST_UNPARK.lock().unwrap_or_else(|e| e.into_inner());
+        match *last {
+            Some(t) if t.elapsed() < Duration::from_secs(300) => false,
+            _ => {
+                *last = Some(Instant::now());
+                true
+            }
+        }
+    };
+    if unpark_due {
+        if let Ok(client) = pool.0.get().await {
+            for table in ["images", "videos"] {
+                let _ = client
+                    .execute(
+                        &format!(
+                            "UPDATE {} SET description = \
+                             CASE WHEN description_failed_attempts >= $2 THEN '[skipped]' ELSE NULL END, \
+                             description_started_at = NULL \
+                             WHERE description = $1 AND description_started_at < NOW() - INTERVAL '15 minutes'",
+                            table
+                        ),
+                        &[&"[__processing__]", &DESC_FAIL_CAP],
+                    )
+                    .await;
+            }
+            info!("AI description marker sweep: un-parked stale [__processing__] rows");
         }
     }
 
@@ -500,7 +546,7 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
                     }
                     let _ = client
                         .execute(
-                            &format!("UPDATE {} SET description = $1 WHERE hash = $2 AND user_id = $3", table_name),
+                            &format!("UPDATE {} SET description = $1, description_started_at = NOW() WHERE hash = $2 AND user_id = $3", table_name),
                             &[&"[__processing__]", &hash, &user_id],
                         )
                         .await;
@@ -516,7 +562,7 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
                                 error!("Table name validation failed for {}: {}", table_name, e);
                                 return;
                             }
-                            let query = format!("UPDATE {} SET description = $1 WHERE hash = $2 AND user_id = $3", table_name);
+                            let query = format!("UPDATE {} SET description = $1, description_failed_attempts = 0, description_started_at = NULL WHERE hash = $2 AND user_id = $3", table_name);
                             if let Err(e) = client.execute(&query, &[&desc, &hash, &user_id]).await {
                                 error!("Failed to update description for {} {}: {}", file_type, hash, e);
                             }
@@ -530,7 +576,7 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
                                 return;
                             }
                             warn!("AI returned empty description for {} {}, marking as skipped to avoid infinite retry", file_type, hash);
-                            let query = format!("UPDATE {} SET description = $1 WHERE hash = $2 AND user_id = $3", table_name);
+                            let query = format!("UPDATE {} SET description = $1, description_failed_attempts = 0, description_started_at = NULL WHERE hash = $2 AND user_id = $3", table_name);
                             let _ = client.execute(&query, &[&"[skipped]", &hash, &user_id]).await;
                         }
                         Err(e) => {
@@ -538,21 +584,48 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
                             AI_DESCRIPTION_DURATION.observe(duration.as_secs_f64());
                             AI_DESCRIPTION_FAILURES_TOTAL.inc();
                             error!("Failed to get AI description for {} {} (took {:.2}s): {}", file_type, hash, duration.as_secs_f64(), e);
-                            // Mark permanent failures (invalid input / auth errors) so
-                            // they aren't retried forever, and reset the in-progress
-                            // marker to NULL for recoverable ones so they are retried.
+                            // Permanent failures (invalid input / auth errors) are parked
+                            // immediately so they aren't retried forever.
                             if crate::ai_client::is_permanent_failure(&e) {
                                 if let Err(e) = crate::utils::validate_table_name(table_name) {
                                     error!("Table name validation failed for {}: {}", table_name, e);
                                     return;
                                 }
-                                let query = format!("UPDATE {} SET description = $1 WHERE hash = $2 AND user_id = $3", table_name);
+                                let query = format!("UPDATE {} SET description = $1, description_failed_attempts = 0, description_started_at = NULL WHERE hash = $2 AND user_id = $3", table_name);
                                 let _ = client.execute(&query, &[&"[skipped]", &hash, &user_id]).await;
-                            } else if let Err(e) = crate::utils::validate_table_name(table_name) {
+                                return;
+                            }
+                            if let Err(e) = crate::utils::validate_table_name(table_name) {
                                 error!("Table name validation failed for {}: {}", table_name, e);
-                            } else {
-                                let query = format!("UPDATE {} SET description = NULL WHERE hash = $2 AND user_id = $3", table_name);
+                                return;
+                            }
+                            if e.contains("gRPC connect failed") {
+                                // The AI service itself was unreachable (a full outage, not a
+                                // problem with this image). Never count this toward the poison
+                                // cap, otherwise a weekend outage would bulk-park the whole
+                                // library as [skipped]. Just clear the marker for retry.
+                                let query = format!("UPDATE {} SET description = NULL, description_failed_attempts = 0, description_started_at = NULL WHERE hash = $2 AND user_id = $3", table_name);
                                 let _ = client.execute(&query, &[&hash, &user_id]).await;
+                            } else {
+                                // A mid-call transport failure (e.g. the AI process crashed on
+                                // THIS image, ROCm HSA fault, or a hung call that timed out).
+                                // This is image-specific, so count it toward the park cap.
+                                let bump = format!(
+                                    "UPDATE {} SET description_failed_attempts = description_failed_attempts + 1, description_started_at = NULL \
+                                     WHERE hash = $2 AND user_id = $3 RETURNING description_failed_attempts",
+                                    table_name
+                                );
+                                let attempts: Option<i32> = client.query_opt(&bump, &[&hash, &user_id]).await
+                                    .ok().flatten().map(|row| row.get(0));
+                                if attempts.is_some() && attempts.unwrap() >= DESC_FAIL_CAP {
+                                    warn!("AI description failed {} times consecutively for {} {} — parking as [skipped]", DESC_FAIL_CAP, file_type, hash);
+                                    let query = format!("UPDATE {} SET description = $1, description_failed_attempts = 0, description_started_at = NULL WHERE hash = $2 AND user_id = $3", table_name);
+                                    let _ = client.execute(&query, &[&"[skipped]", &hash, &user_id]).await;
+                                } else {
+                                    // Keep retrying: clear the in-progress marker for re-selection.
+                                    let query = format!("UPDATE {} SET description = NULL WHERE hash = $2 AND user_id = $3", table_name);
+                                    let _ = client.execute(&query, &[&hash, &user_id]).await;
+                                }
                             }
                         }
                     }

@@ -127,6 +127,17 @@ The backend talks to the AI service over **gRPC (`:50051`)** for all inference (
 - **SmolVLM-500M & Qwen2.5-VL-3B**: Generates visual scene descriptions (captions). Visual tokens are capped at 256 (`max_pixels=256*28*28`) for fast processing.
 - **InsightFace** (`buffalo_l`): Extracts bounding boxes `[x, y, w, h]` and 512-dimensional face recognition vectors on CPU.
 
+### Description Processing Resilience (`ai_worker.rs` / `ai_client.rs`)
+Descriptions are the one AI path that can hard-crash the service: a ROCm fault (e.g. `HSA_STATUS_ERROR_EXCEPTION 0x1016` on the AMD iGPU) aborts the Python process mid-call. To survive that without a crash-loop:
+- An in-progress marker `[__processing__]` is written **before** the gRPC call, plus `description_started_at`, so a row left mid-flight is parked, not re-selected.
+- Each gRPC call has a **180s deadline** (`RPC_TIMEOUT`) so a hung (alive) inference can't wedge a worker semaphore permit forever.
+- Mid-call transport failures (the process crashed on this specific image) increment `description_failed_attempts`; after `DESC_FAIL_CAP = 5` the row is permanently parked as `[skipped]`. A pure `gRPC connect failed` (the whole service is down) never counts — otherwise a weekend outage would bulk-skip the library.
+- A periodic un-park sweep resets `[__processing__]` rows idle at the marker for >15 min (gated on `description_started_at`, not ingestion time), parking any that already exhausted the retry cap.
+- The dashboard "AI Description In Progress" count (`stats.rs` `images_description_pending`) mirrors the worker's selection predicate (verified, non-SVG, description null/processing) so it can't show a permanent stale count.
+
+### Location/Radius Search
+Location (`lat`/`lon`/radius) filters apply to **images only** — `videos` have no `location` column. `text_search.rs`, `embedding.rs`, and `map.rs` all guard the location SQL with an images-only (`alias == "i"`) condition and emit `NULL` distance for the video arm, so a radius query doesn't 500 against video rows.
+
 ### Video Semantic Search
 The AI worker extracts keyframes from each video with ffmpeg (every ~5s, capped), embeds each keyframe via `EmbedImage`, stores per-keyframe vectors in `video_keyframes` (with `timestamp_secs`), and writes the normalized centroid into `videos.embedding`. Semantic search in `embedding.rs` then runs per-branch KNN over both `images` and `videos` and merges the results.
 

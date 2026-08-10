@@ -124,6 +124,7 @@ pub async fn requeue_under_replicated(
         let query = format!(
             "UPDATE {} SET p2p_synced_at = NULL
              WHERE deleted_at IS NULL AND p2p_synced_at IS NOT NULL
+               AND (p2p_last_attempt_at IS NULL OR p2p_last_attempt_at < NOW() - INTERVAL '10 minutes')
                AND hash IN (
                  SELECT i.hash FROM {} i
                  LEFT JOIN (
@@ -165,6 +166,7 @@ async fn replicate_batch(
         "SELECT hash, name, ext
          FROM {}
          WHERE p2p_synced_at IS NULL
+           AND (p2p_last_attempt_at IS NULL OR p2p_last_attempt_at < NOW() - INTERVAL '10 minutes')
          ORDER BY created_at ASC
          LIMIT $1",
         table
@@ -257,6 +259,16 @@ async fn replicate_single_file(
 
     if !file_path.exists() {
         warn!("File {} not found on disk — skipping replication (will retry next cycle)", file.hash);
+        // Record the attempt so batch selection backs off for a cooldown window
+        // instead of selecting this permanently-missing file on every cycle and
+        // head-of-line blocking the rest of the queue.
+        if let Ok(client) = pool.get().await {
+            crate::utils::validate_table_name(table)?;
+            let _ = client.execute(
+                &format!("UPDATE {} SET p2p_last_attempt_at = NOW() WHERE hash = $1", table),
+                &[&file.hash],
+            ).await;
+        }
         return Ok(());
     }
 
@@ -332,7 +344,7 @@ async fn replicate_single_file(
 
     crate::utils::validate_table_name(table)?;
     let update_query = format!(
-        "UPDATE {} SET p2p_synced_at = NOW(), p2p_shard_hash = $1, p2p_encryption_key = $2, p2p_encrypted_size = $3, p2p_data_shards = $4, p2p_parity_shards = $5 WHERE hash = $6",
+        "UPDATE {} SET p2p_synced_at = NOW(), p2p_last_attempt_at = NOW(), p2p_shard_hash = $1, p2p_encryption_key = $2, p2p_encrypted_size = $3, p2p_data_shards = $4, p2p_parity_shards = $5 WHERE hash = $6",
         table
     );
     trans.execute(&update_query, &[&manifest_hash, &encrypted_key, &enc_size_i32, &data_shards_i32, &parity_shards_i32, &file.hash]).await?;
@@ -406,7 +418,7 @@ async fn replicate_large_file(
 
     let segment_count = segment_enc_sizes.len() as i32;
     let update_query = format!(
-        "UPDATE {} SET p2p_synced_at = NOW(), p2p_encryption_key = $2, \
+        "UPDATE {} SET p2p_synced_at = NOW(), p2p_last_attempt_at = NOW(), p2p_encryption_key = $2, \
          p2p_encrypted_size = 0, p2p_segment_count = $3, p2p_segment_enc_sizes = $4, \
          p2p_data_shards = $5, p2p_parity_shards = $6 WHERE hash = $1",
         table

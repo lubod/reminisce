@@ -603,6 +603,7 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
                     .service(services::observability::get_admin_alerts)
                     .service(services::observability::get_admin_gpu)
                     .service(services::observability::get_admin_pipeline)
+                    .service(services::observability::get_admin_series)
             )
     })
     .bind(format!("0.0.0.0:{}", config.port))?

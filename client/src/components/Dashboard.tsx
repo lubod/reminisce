@@ -8,6 +8,7 @@ import { ServerImportModal } from "./ServerImportModal";
 import { AndroidConnectionQR } from "./AndroidConnectionQR";
 import { UserManagement } from "./UserManagement";
 import { LogViewer } from "./System/LogViewer";
+import { Charts } from "./System/Charts";
 
 export const Dashboard = observer(() => {
     const { statsStore, authStore, uiStore, systemStore } = useStore();
@@ -38,6 +39,7 @@ export const Dashboard = observer(() => {
             void systemStore.loadAlerts();
             void systemStore.loadGpu();
             void systemStore.loadPipeline();
+            void systemStore.loadSeries();
 
             const interval = setInterval(() => {
                 statsStore.fetchPoolStats();
@@ -49,6 +51,7 @@ export const Dashboard = observer(() => {
                 void systemStore.loadAlerts();
                 void systemStore.loadGpu();
                 void systemStore.loadPipeline();
+                void systemStore.loadSeries();
             }, 30000);
 
             return () => clearInterval(interval);
@@ -771,6 +774,11 @@ export const Dashboard = observer(() => {
                                     })() : (
                                         <div className="text-gray-500 italic">Waiting for HTTP telemetry...</div>
                                     )}
+                                </div>
+
+                                <div className="bg-gray-800 shadow-xl rounded-xl p-8 border border-gray-700">
+                                    <h2 className="text-xl font-bold text-gray-100 mb-6 flex items-center"><TrendingUp className="w-6 h-6 text-blue-400 mr-3" /> History (1D / 30D / 90D)</h2>
+                                    <Charts store={systemStore} />
                                 </div>
 
                                 <div className="bg-gray-800 shadow-xl rounded-xl p-8 border border-gray-700">

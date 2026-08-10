@@ -76,6 +76,8 @@ Runs on an adaptive backoff loop (config `workers.replication_min_secs`/`max_sec
 3. Upload each shard via QUIC (`Message::StoreShardRequest`)
 4. On success: set `p2p_synced_at = NOW()`, insert 5 rows into `p2p_shards`
 
+**Attempt backoff (`p2p_last_attempt_at`):** every attempt (success, missing-on-disk, or failure) stamps `p2p_last_attempt_at = NOW()`. Batch selection and `requeue_under_replicated` only pick files whose last attempt is older than 10 minutes. This prevents a node outage from re-encrypting and re-uploading the same files every cycle, and stops a permanently-missing file from occupying every batch slot (head-of-line blocking).
+
 ### Audit Worker (`p2p_audit_worker.rs`)
 
 Runs on an adaptive backoff loop (config `workers.audit_min_secs`/`max_secs`, default 60–3600 s). Audits shards that haven't been verified in 7 days (batches of 50) and repairs each lost shard:

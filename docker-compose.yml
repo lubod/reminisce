@@ -53,10 +53,11 @@ services:
       - "8081"
       - "50051"
     volumes:
-      - ai_model_cache:/root/.cache/huggingface
-      - face_model_cache:/root/.insightface
+      - ai_model_cache:/home/ai_user/.cache/huggingface
+      - face_model_cache:/app/.insightface
     environment:
       - API_SECRET_KEY=${API_SECRET_KEY:-}
+      - HF_HOME=/home/ai_user/.cache/huggingface
     #GPU#devices:
     #GPU#  - /dev/dri:/dev/dri
     #GPU#environment:

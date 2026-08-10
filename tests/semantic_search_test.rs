@@ -263,3 +263,52 @@ async fn test_text_search_media_type_and_label() {
     assert!(labeled.iter().any(|r| r.hash == "timg1"), "labeled image must match");
     assert!(!labeled.iter().any(|r| r.hash == "tvid1"), "unlabeled video must be excluded: {:?}", labeled.iter().map(|r| r.hash.clone()).collect::<Vec<_>>());
 }
+
+#[tokio::test]
+#[serial(db)]
+async fn test_semantic_search_location_filter_does_not_500_on_videos() {
+    // Regression: the semantic images+videos UNION arm used to emit
+    // `v.location IS NOT NULL` / `ST_DWithin(v.location, ...)` for the video
+    // arm, but `videos` has no location column -> Postgres rejected the query
+    // and every semantic search with a location filter 500'd (even with zero
+    // video rows, since column resolution happens at plan time). The fix guards
+    // location clauses with `alias == "i"`.
+    use reminisce::services::embedding::perform_semantic_search;
+
+    let (pool, _db) = setup_test_database_with_instance().await;
+    let client = pool.get().await.unwrap();
+
+    // Image with a location inside the radius AND with an embedding so the
+    // semantic WHERE clause (`i.embedding IS NOT NULL`) matches.
+    client.execute(
+        "INSERT INTO images (user_id, deviceid, hash, name, ext, embedding, location) \
+         VALUES ($1, 'dev', 'loc_img', 'loc.jpg', 'jpg', $2, ST_SetSRID(ST_MakePoint(14.42, 50.08), 4326))",
+        &[&user_uuid(), &Vector::from(vec_with_sim(1.0, 0.0))],
+    ).await.unwrap();
+    // A video with an embedding — this is the arm that previously crashed the query.
+    insert_video(&pool, "loc_vid", 0.7, 0.1).await;
+
+    let pool_data = web::Data::new(MainDbPool(pool));
+
+    let (in_radius, _) = perform_semantic_search(
+        &query_vec(), &user_uuid(), None, false, 0.0, 10, 0,
+        Some(50.08), Some(14.42), Some(20.0), None, None, None, "all", &pool_data,
+    ).await.expect("semantic search with location must not fail (video arm)");
+
+    assert!(in_radius.iter().any(|r| r.hash == "loc_img"),
+        "in-radius image must be returned: {:?}", in_radius.iter().map(|r| r.hash.clone()).collect::<Vec<_>>());
+    // Videos are returned unfiltered (videos have no location), distance NULL.
+    assert!(in_radius.iter().any(|r| r.hash == "loc_vid"),
+        "videos should still be returned under a location filter");
+    let vid = in_radius.iter().find(|r| r.hash == "loc_vid").unwrap();
+    assert!(vid.distance_km.is_none(), "video must have NULL distance_km");
+    let img = in_radius.iter().find(|r| r.hash == "loc_img").unwrap();
+    assert!(img.distance_km.is_some(), "image must have a real distance_km");
+
+    // Outside radius: the image is excluded but the video (unfiltered) remains.
+    let (outside, _) = perform_semantic_search(
+        &query_vec(), &user_uuid(), None, false, 0.0, 10, 0,
+        Some(60.0), Some(30.0), Some(20.0), None, None, None, "all", &pool_data,
+    ).await.expect("semantic search outside radius must not fail");
+    assert!(!outside.iter().any(|r| r.hash == "loc_img"), "out-of-radius image must be excluded");
+}

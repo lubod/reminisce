@@ -295,15 +295,32 @@ export class MediaStore {
 
             // The server pages /map/media (capped at 10000/page); collect all
             // pages so supercluster can cluster the full geotagged library.
+            // Use a keyset cursor (created_at + hash tiebreaker) so concurrent
+            // inserts can't cause duplicate/missed points across pages.
             let collected: MapPoint[] = [];
             let total = 0;
             let page = 1;
+            let afterCreatedAt: string | undefined;
+            let afterHash: string | undefined;
             do {
-                params.set("page", String(page));
+                if (afterCreatedAt !== undefined && afterHash !== undefined) {
+                    params.set("after_created_at", afterCreatedAt);
+                    params.set("after_hash", afterHash);
+                    params.delete("page");
+                } else {
+                    params.set("page", String(page));
+                    params.delete("after_created_at");
+                    params.delete("after_hash");
+                }
                 const response = await axios.get<{ points: MapPoint[]; total: number }>(`/map/media?${params}`);
                 if (seq !== this.requestSeq) return; // stale response — discard
                 total = response.data.total;
-                collected = [...collected, ...response.data.points];
+                const points = response.data.points;
+                if (points.length === 0) break;
+                const last = points[points.length - 1];
+                afterCreatedAt = last.created_at;
+                afterHash = last.hash;
+                collected = [...collected, ...points];
                 page += 1;
             } while (collected.length < total && page <= MAP_MAX_PAGES);
 

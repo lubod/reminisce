@@ -82,8 +82,11 @@ All migrations are idempotent (`ADD COLUMN IF NOT EXISTS`, `CREATE INDEX IF NOT 
 | `005_add_segmented_sharding.sql` | `p2p_segment_count` + `p2p_segment_enc_sizes` for large-file P2P support |
 | `006_backfill_orientation.sql` | Backfills `orientation` for pre-existing images from their EXIF JSON |
 | `007_add_orientation_detection.sql` | `orientation_detected_at` on `images`; tracks AI-fallback rotation detection for EXIF-less images |
+| `008_metric_series.sql` | `metric_samples` time-series store backing the in-app 1D/30D/90D charts |
+| `009_replication_attempt.sql` | `p2p_last_attempt_at` on `images`/`videos`; drives replication backoff so transient failures can't retry-storm or head-of-line-block the queue |
+| `010_ai_poison.sql` | `description_failed_attempts` + `description_started_at` on `images`/`videos`; parks crash-poison images as `[skipped]` after a retry cap and gates the un-park sweep on when a description actually started |
 
-All seven are embedded in the server (`src/db.rs`) and run once on startup, tracked in `schema_migrations`.
+All ten are embedded in the server (`src/db.rs`) and run once on startup, tracked in `schema_migrations`.
 
 To apply manually:
 ```bash

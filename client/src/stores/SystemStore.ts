@@ -116,6 +116,24 @@ export interface PipelineResponse {
     db_query_ms: WorkerStats;
 }
 
+export interface SeriesPoint {
+    t: number;
+    v: number;
+}
+
+export interface Series {
+    name: string;
+    unit: string;
+    points: SeriesPoint[];
+}
+
+export interface SeriesResponse {
+    range: string;
+    series: Series[];
+}
+
+export type SeriesRange = "1d" | "30d" | "90d";
+
 export class SystemStore {
     root: RootStore;
 
@@ -129,6 +147,8 @@ export class SystemStore {
     backup: BackupStatus | null = null;
     gpu: GpuResponse | null = null;
     pipeline: PipelineResponse | null = null;
+    series: Series[] = [];
+    seriesRange: SeriesRange = "1d";
 
     isLoading = false;
     lastError: string | null = null;
@@ -225,6 +245,24 @@ export class SystemStore {
         }
     }
 
+    async loadSeries(): Promise<void> {
+        try {
+            const resp = await axios.get<SeriesResponse>("/admin/series", {
+                params: { range: this.seriesRange },
+            });
+            this.series = resp.data.series;
+            this.lastError = null;
+        } catch (e) {
+            this.recordError("loadSeries", e);
+        }
+    }
+
+    setRange(range: SeriesRange): void {
+        if (range === this.seriesRange) return;
+        this.seriesRange = range;
+        void this.loadSeries();
+    }
+
     /** Refreshes everything exactly once (single-flight). */
     async refreshAll(): Promise<void> {
         if (this.refreshPromise) {
@@ -240,6 +278,7 @@ export class SystemStore {
             this.loadBackup(),
             this.loadGpu(),
             this.loadPipeline(),
+            this.loadSeries(),
         ])
             .then(() => {
                 this.isLoading = false;

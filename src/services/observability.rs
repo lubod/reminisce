@@ -204,6 +204,95 @@ pub async fn get_admin_pipeline(
     }))
 }
 
+#[derive(Serialize)]
+struct SeriesPoint {
+    t: i64,
+    v: f64,
+}
+
+#[derive(Serialize)]
+struct Series {
+    name: String,
+    unit: &'static str,
+    points: Vec<SeriesPoint>,
+}
+
+#[derive(Serialize)]
+struct SeriesResponse {
+    range: String,
+    series: Vec<Series>,
+}
+
+fn series_unit(name: &str) -> &'static str {
+    match name {
+        "system_cpu_percent" | "system_mem_percent" | "system_disk_used_percent" | "db_pool_util_percent" => "%",
+        "system_disk_free_gb" => "GB",
+        "backup_peers_available" => "peers",
+        "backlog_description" | "backlog_embedding" | "backlog_face" => "images",
+        "ai_descriptions_per_hr" | "ai_embeddings_per_hr" | "ai_faces_per_hr" | "ai_errors_per_hr" | "http_requests_per_hr" => "/hr",
+        _ => "ms",
+    }
+}
+
+#[get("/admin/series")]
+pub async fn get_admin_series(
+    req: HttpRequest,
+    cfg: web::Data<Config>,
+    pool: web::Data<MainDbPool>,
+    query: web::Query<HashMap<String, String>>,
+) -> Result<HttpResponse, actix_web::Error> {
+    if let Err(resp) = require_admin(&req, &cfg, "get_admin_series").await {
+        return Ok(resp);
+    }
+
+    let range = query.get("range").map(|s| s.as_str()).unwrap_or("1d").to_string();
+    let (lookback, bucket) = match range.as_str() {
+        "30d" => ("720 hours", "3600 seconds"),
+        "90d" => ("2160 hours", "21600 seconds"),
+        _ => ("24 hours", "300 seconds"),
+    };
+
+    let q = "WITH s AS (
+                SELECT date_bin($1::text::interval, ts, '2000-01-01 00:00:00+00') AS b,
+                       name, avg(value) AS v
+                FROM metric_samples
+                WHERE ts > now() - $2::text::interval
+                GROUP BY name, b
+             )
+             SELECT name, EXTRACT(EPOCH FROM b)::bigint, v FROM s ORDER BY name, b";
+
+    let db = match pool.0.get().await {
+        Ok(db) => db,
+        Err(e) => return Ok(HttpResponse::ServiceUnavailable().json(serde_json::json!({"error": e.to_string()}))),
+    };
+    let points_by_name: HashMap<String, Vec<SeriesPoint>> =
+        match db.query(q, &[&bucket, &lookback]).await {
+        Ok(rows) => {
+            let mut map: HashMap<String, Vec<SeriesPoint>> = HashMap::new();
+            for row in rows {
+                let name: String = row.get(0);
+                let t: i64 = row.get(1);
+                let v: f64 = row.get(2);
+                map.entry(name).or_default().push(SeriesPoint { t, v });
+            }
+            map
+        }
+        Err(e) => return Ok(HttpResponse::ServiceUnavailable().json(serde_json::json!({"error": e.to_string()}))),
+    };
+
+    let mut series: Vec<Series> = points_by_name
+        .into_iter()
+        .map(|(name, mut points)| {
+            points.sort_by_key(|p| p.t);
+            let unit = series_unit(&name);
+            Series { name, unit, points }
+        })
+        .collect();
+    series.sort_by(|a, b| a.name.cmp(&b.name));
+
+    Ok(HttpResponse::Ok().json(SeriesResponse { range, series }))
+}
+
 /// Authenticate + require an admin role (mirrors `get_system_stats`).
 async fn require_admin(
     req: &HttpRequest,

@@ -535,22 +535,29 @@ pub async fn perform_semantic_search(
         if let Some(p) = end_param {
             conds.push(format!("{}.created_at < ${}", alias, p));
         }
-        if let (Some(lon), Some(lat)) = (lon_param, lat_param) {
-            conds.push(format!("{}.location IS NOT NULL", alias));
-            conds.push(format!(
-                "ST_DWithin({}.location, ST_MakePoint(${}, ${})::geography, {})",
-                alias, lon, lat, radius_meters
-            ));
+        // Location filters only apply to images; `videos` has no location column.
+        if alias == "i" {
+            if let (Some(lon), Some(lat)) = (lon_param, lat_param) {
+                conds.push(format!("{}.location IS NOT NULL", alias));
+                conds.push(format!(
+                    "ST_DWithin({}.location, ST_MakePoint(${}, ${})::geography, {})",
+                    alias, lon, lat, radius_meters
+                ));
+            }
         }
         conds.join(" AND ")
     };
 
     let build_distance = |alias: &str| -> String {
-        if let (Some(lon), Some(lat)) = (lon_param, lat_param) {
-            format!(
-                "ST_Distance({}.location, ST_MakePoint(${}, ${})::geography) / 1000.0",
-                alias, lon, lat
-            )
+        if alias == "i" {
+            if let (Some(lon), Some(lat)) = (lon_param, lat_param) {
+                format!(
+                    "ST_Distance({}.location, ST_MakePoint(${}, ${})::geography) / 1000.0",
+                    alias, lon, lat
+                )
+            } else {
+                "NULL::double precision".to_string()
+            }
         } else {
             "NULL::double precision".to_string()
         }

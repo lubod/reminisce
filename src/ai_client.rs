@@ -6,8 +6,15 @@ use proto::ai_service_client::AiServiceClient;
 use proto::*;
 use tonic::transport::Channel;
 use tonic::Request;
+use std::time::Duration;
 
 const MAX_MESSAGE_SIZE: usize = 64 * 1024 * 1024;
+
+/// Deadline for each individual gRPC call. Guards against a ROCm-poisoned-but-alive
+/// AI service that hangs inside `generate()` indefinitely, which would otherwise
+/// hold an AI worker semaphore permit until gunicorn's `--timeout` (300s) kills the
+/// worker.
+const RPC_TIMEOUT: Duration = Duration::from_secs(180);
 
 /// Result of an AI orientation detection call.
 #[derive(Debug, Clone)]
@@ -86,6 +93,7 @@ impl AiClient {
 
     fn make_request<T>(&self, message: T) -> Request<T> {
         let mut req = Request::new(message);
+        req.set_timeout(RPC_TIMEOUT);
         if let Ok(key_val) = self.api_key.parse() {
             req.metadata_mut().insert("x-api-key", key_val);
         }

@@ -119,8 +119,27 @@ describe("SystemStore", () => {
         const p2 = s.refreshAll();
         await Promise.all([p1, p2]);
         expect(s.isLoading).toBe(false);
-        // Deduped: the second refreshAll did not re-run the 8 loaders.
-        expect(mockedGet).toHaveBeenCalledTimes(8);
+        // Deduped: the second refreshAll did not re-run the 9 loaders.
+        expect(mockedGet).toHaveBeenCalledTimes(9);
+    });
+
+    it("loads series and changes range", async () => {
+        mockedGet.mockResolvedValueOnce({
+            data: { range: "1d", series: [{ name: "system_cpu_percent", unit: "%", points: [{ t: 1, v: 12.5 }] }] },
+        });
+        const s = makeStore();
+        await s.loadSeries();
+        expect(mockedGet).toHaveBeenCalledWith("/admin/series", { params: { range: "1d" } });
+        expect(s.series[0].name).toBe("system_cpu_percent");
+        expect(s.series[0].points[0].v).toBe(12.5);
+
+        mockedGet.mockResolvedValueOnce({ data: { range: "30d", series: [] } });
+        s.setRange("30d");
+        expect(s.seriesRange).toBe("30d");
+        expect(mockedGet).toHaveBeenLastCalledWith("/admin/series", { params: { range: "30d" } });
+        // same range is a no-op
+        s.setRange("30d");
+        expect(mockedGet).toHaveBeenCalledTimes(2);
     });
 
     it("startAutoRefresh polls on an interval and cleans up", async () => {

@@ -66,12 +66,13 @@ services:
       - "127.0.0.1:8081:8081"
       - "127.0.0.1:50051:50051"
     volumes:
-      - ai_dev_model_cache:/root/.cache/huggingface
-      - face_dev_model_cache:/root/.insightface
+      - ai_dev_model_cache:/home/ai_user/.cache/huggingface
+      - face_dev_model_cache:/app/.insightface
       - ./ai/ai_service.py:/app/ai_service.py
       - ./ai/ai_service_grpc.py:/app/ai_service_grpc.py
     environment:
       - API_SECRET_KEY=${API_SECRET_KEY:-}
+      - HF_HOME=/home/ai_user/.cache/huggingface
       - HSA_OVERRIDE_GFX_VERSION=11.5.0
       - TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1
       - ROCBLAS_USE_HIPBLASLT=1

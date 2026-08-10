@@ -53,13 +53,6 @@ impl MediaQueryBuilder {
         }
     }
 
-    /// Add media type filter condition
-    pub fn with_media_type(&mut self) -> QueryParam {
-        self.param_count += 1;
-        self.conditions.push(format!("t.type = ${}", self.param_count));
-        QueryParam { position: self.param_count }
-    }
-
     /// Add starred-only filter condition
     pub fn with_starred_only(&mut self) {
         self.conditions.push("s.hash IS NOT NULL".to_string());
@@ -307,12 +300,11 @@ mod tests {
     fn test_build_query_with_all_filters() {
         let mut builder = MediaQueryBuilder::new(tables::IMAGES);
         builder.with_device_id();
-        builder.with_media_type();
         builder.with_starred_only();
-        let query = builder.build_select_query(3, 4, None, None, None, None);
+        let query = builder.build_select_query(2, 3, None, None, None, None);
 
-        assert!(query.contains("WHERE t.deleted_at IS NULL AND t.deviceid = $1 AND t.type = $2 AND s.hash IS NOT NULL"));
-        assert!(query.contains("LIMIT $3 OFFSET $4"));
+        assert!(query.contains("WHERE t.deleted_at IS NULL AND t.deviceid = $1 AND s.hash IS NOT NULL"));
+        assert!(query.contains("LIMIT $2 OFFSET $3"));
     }
 
     #[test]

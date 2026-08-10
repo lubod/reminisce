@@ -60,6 +60,15 @@ pub struct MapQuery {
     /// Points per page (capped at MAP_LIMIT_MAX)
     #[serde(default = "default_limit")]
     pub limit: usize,
+    /// Keyset cursor: fetch points strictly older than this created_at (with
+    /// `after_hash` as the tiebreaker). When set, `page` is ignored — this gives
+    /// drift-free pagination under concurrent inserts (no duplicate/missed points).
+    #[serde(default)]
+    pub after_created_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Keyset cursor tiebreaker: the hash of the last point returned on the
+    /// previous page. Required when `after_created_at` is set.
+    #[serde(default)]
+    pub after_hash: Option<String>,
 }
 
 fn default_page() -> usize {
@@ -80,7 +89,9 @@ fn default_limit() -> usize {
         ("end_date" = Option<String>, Query, description = "created_at < date+1d"),
         ("device_id" = Option<String>, Query, description = "Only media from this device"),
         ("page" = Option<usize>, Query, description = "Page number, 1-based"),
-        ("limit" = Option<usize>, Query, description = "Points per page (capped)")
+        ("limit" = Option<usize>, Query, description = "Points per page (capped)"),
+        ("after_created_at" = Option<String>, Query, description = "Keyset cursor: resume after this created_at (requires after_hash)"),
+        ("after_hash" = Option<String>, Query, description = "Keyset cursor tiebreaker: hash of the last returned point")
     ),
     responses(
         (status = 200, description = "Geotagged media points", body = MapPointsResponse),
@@ -148,6 +159,25 @@ pub async fn get_map_points(
         conditions.push(format!("i.created_at < ${}", param_count));
     }
 
+    // Keyset cursor: resume right after the last point from the previous page,
+    // ordered by (created_at DESC, hash DESC). Fall back to OFFSET paging only
+    // when no cursor is supplied (backward compatibility).
+    let use_cursor = query.after_created_at.is_some();
+    if use_cursor {
+        if query.after_hash.is_none() {
+            return Ok(HttpResponse::BadRequest().json(serde_json::json!({
+                "error": "after_hash is required when after_created_at is set"
+            })));
+        }
+        param_count += 2;
+        let cursor_ts = format!("${}", param_count - 1);
+        let cursor_hash = format!("${}", param_count);
+        conditions.push(format!(
+            "(i.created_at < {} OR (i.created_at = {} AND i.hash < {}))",
+            cursor_ts, cursor_ts, cursor_hash
+        ));
+    }
+
     let where_clause = conditions.join(" AND ");
 
     // Total match count (bounded by the same filters) — enables pagination.
@@ -160,6 +190,11 @@ pub async fn get_map_points(
         where_clause
     );
 
+    let select_order = if use_cursor {
+        format!("ORDER BY i.created_at DESC, i.hash DESC LIMIT ${}", param_count + 1)
+    } else {
+        format!("ORDER BY i.created_at DESC, i.hash DESC LIMIT ${} OFFSET ${}", param_count + 1, param_count + 2)
+    };
     let select_sql = format!(
         "SELECT i.hash, ST_X(i.location::geometry) AS lon, ST_Y(i.location::geometry) AS lat, \
                 i.created_at, i.place, \
@@ -168,11 +203,8 @@ pub async fn get_map_points(
          FROM images i \
          LEFT JOIN starred_images s ON i.hash = s.hash AND s.user_id = $1 \
          WHERE {} \
-         ORDER BY i.created_at DESC \
-         LIMIT ${} OFFSET ${}",
-        where_clause,
-        param_count + 1,
-        param_count + 2
+         {}",
+        where_clause, select_order
     );
 
     let user_uuid = utils::parse_user_uuid(&claims.user_id)?;
@@ -198,6 +230,17 @@ pub async fn get_map_points(
         params.push(ed);
     }
 
+    // Keyset cursor values go last among the WHERE params (after start/end dates)
+    // so the COUNT query (which uses `params[..param_count]`) stays consistent.
+    let after_created_at_dt;
+    let after_hash_val;
+    if use_cursor {
+        after_created_at_dt = query.after_created_at.unwrap();
+        after_hash_val = query.after_hash.as_deref().unwrap().to_string();
+        params.push(&after_created_at_dt);
+        params.push(&after_hash_val);
+    }
+
     let total: i64 = match client.query(&count_sql, &params[..param_count]).await {
         Ok(rows) => rows[0].get::<_, i64>(0),
         Err(e) => {
@@ -215,7 +258,9 @@ pub async fn get_map_points(
     let limit_i64 = limit as i64;
     let offset_i64 = offset as i64;
     params.push(&limit_i64);
-    params.push(&offset_i64);
+    if !use_cursor {
+        params.push(&offset_i64);
+    }
 
     let rows = match client.query(&select_sql, &params).await {
         Ok(r) => r,

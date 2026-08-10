@@ -63,11 +63,11 @@ pub async fn get_stats(
         WITH img AS (
             SELECT
                 COUNT(*) FILTER (WHERE deleted_at IS NULL)                                                  AS total_images,
-                COUNT(*) FILTER (WHERE description IS NOT NULL AND description != '' AND deleted_at IS NULL) AS images_with_description,
+                COUNT(*) FILTER (WHERE description IS NOT NULL AND description != '' AND description NOT IN ('[__processing__]','[skipped]') AND deleted_at IS NULL) AS images_with_description,
                 COUNT(*) FILTER (WHERE embedding_generated_at IS NOT NULL AND deleted_at IS NULL)           AS images_with_embedding,
                 COUNT(*) FILTER (WHERE verification_status = 1 AND deleted_at IS NULL)                     AS verified_images,
                 COUNT(*) FILTER (WHERE face_detection_completed_at IS NULL AND deleted_at IS NULL)          AS images_face_pending,
-                COUNT(*) FILTER (WHERE (description IS NULL OR description = '') AND deleted_at IS NULL)    AS images_description_pending,
+                COUNT(*) FILTER (WHERE verification_status = 1 AND deleted_at IS NULL AND lower(ext) != 'svg' AND (description IS NULL OR description = '[__processing__]')) AS images_description_pending,
                 COUNT(*) FILTER (WHERE p2p_synced_at IS NOT NULL AND deleted_at IS NULL)                   AS p2p_synced,
                 COUNT(*) FILTER (WHERE has_thumbnail = true AND deleted_at IS NULL)                         AS with_thumbnail
             FROM images

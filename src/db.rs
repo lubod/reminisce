@@ -200,6 +200,9 @@ pub async fn run_migrations_with_schema(pool: &Pool, init_sql: &str) -> Result<(
         ("005", include_str!("../db/migrations/005_add_segmented_sharding.sql")),
         ("006", include_str!("../db/migrations/006_backfill_orientation.sql")),
         ("007", include_str!("../db/migrations/007_add_orientation_detection.sql")),
+        ("008", include_str!("../db/migrations/008_metric_series.sql")),
+        ("009", include_str!("../db/migrations/009_replication_attempt.sql")),
+        ("010", include_str!("../db/migrations/010_ai_poison.sql")),
     ];
 
     for (version, sql) in migrations {

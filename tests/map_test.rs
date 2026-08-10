@@ -271,6 +271,58 @@ async fn test_map_points_pagination_and_clamping() {
 
 #[actix_web::test]
 #[serial]
+async fn test_map_points_keyset_cursor_matches_offset_paging() {
+    // Keyset pagination (after_created_at + after_hash) must yield the exact same
+    // set and order as OFFSET pagination, and be robust to identical created_at
+    // values (the hash tiebreaker decides ordering deterministically).
+    let (pool, _test_db) = setup_test_database_with_instance().await;
+    // Two points share the same created_at to force the hash tiebreaker.
+    insert_image_at(&pool, "k1", user_uuid(), "dev_a", 1.0, 1.0, false, None, "2024-05-01T00:00:00Z").await;
+    insert_image_at(&pool, "k2", user_uuid(), "dev_a", 2.0, 2.0, false, None, "2024-05-01T00:00:00Z").await;
+    insert_image_at(&pool, "k3", user_uuid(), "dev_a", 3.0, 3.0, false, None, "2024-05-02T00:00:00Z").await;
+
+    let config = common::utils::create_test_config();
+    let main_pool = common::utils::wrap_main_pool(pool.clone());
+    let geotagging_pool = common::utils::create_geotagging_pool().await;
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(main_pool.clone()))
+            .app_data(web::Data::new(geotagging_pool.clone()))
+            .app_data(web::Data::new(config.clone()))
+            .service(services::map::get_map_points)
+    ).await;
+    let token = common::utils::create_test_jwt_token().await;
+
+    // Full set from OFFSET paging (limit 100 → one page).
+    let body: serde_json::Value = get_points!(&app, "/map/media?page=1&limit=100", &token);
+    let offset_order: Vec<String> = body["points"].as_array().unwrap()
+        .iter().map(|p| p["hash"].as_str().unwrap().to_string()).collect();
+    assert_eq!(offset_order, vec!["k3", "k2", "k1"]); // k3 newest; k2/k1 tie on hash DESC
+
+    // Re-derive the same set via keyset cursor page-by-page (limit 1).
+    let mut cursor_collected: Vec<String> = Vec::new();
+    let mut after: Option<(String, String)> = None; // (created_at, hash)
+    loop {
+        let uri = match &after {
+            Some((ts, h)) => format!("/map/media?limit=1&after_created_at={}&after_hash={}", ts, h),
+            None => "/map/media?limit=1".to_string(),
+        };
+        let body: serde_json::Value = get_points!(&app, &uri, &token);
+        let pts = body["points"].as_array().unwrap();
+        if pts.is_empty() { break; }
+        let last = pts.last().unwrap();
+        cursor_collected.push(last["hash"].as_str().unwrap().to_string());
+        after = Some((
+            last["created_at"].as_str().unwrap().to_string(),
+            last["hash"].as_str().unwrap().to_string(),
+        ));
+    }
+
+    assert_eq!(cursor_collected, offset_order, "keyset cursor paging must match OFFSET paging order exactly");
+}
+
+#[actix_web::test]
+#[serial]
 async fn test_map_points_date_filters_and_empty() {
     let (pool, _test_db) = setup_test_database_with_instance().await;
     insert_image_at(&pool, "jan", user_uuid(), "dev_a", 1.0, 1.0, false, None, "2024-01-01T00:00:00Z").await;

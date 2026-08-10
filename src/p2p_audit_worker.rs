@@ -86,28 +86,22 @@ async fn perform_audit(
                 continue;
             }
         };
-        let connection = p2p_service.connect_to_addr(addr).await;
 
+        // retrieve_shard opens (and closes) its own QUIC connection, so we do not
+        // open a second "probe" connection here — that would double the handshake
+        // load on low-power peers during a large audit batch.
         let mut success = false;
-        match connection {
-            Ok(conn) => {
-                match retrieve_shard(p2p_service, addr, &expected_shard_hash).await {
-                    Ok(data) => {
-                        let actual_hash = blake3::hash(&data).to_hex().to_string();
-                        if actual_hash == expected_shard_hash {
-                            success = true;
-                        } else {
-                            warn!("Shard {} index {} on node {} is CORRUPTED!", file_hash, shard_index, node_id);
-                        }
-                    }
-                    Err(e) => {
-                        warn!("Shard {} index {} on node {} is MISSING: {}", file_hash, shard_index, node_id, e);
-                    }
+        match retrieve_shard(p2p_service, addr, &expected_shard_hash).await {
+            Ok(data) => {
+                let actual_hash = blake3::hash(&data).to_hex().to_string();
+                if actual_hash == expected_shard_hash {
+                    success = true;
+                } else {
+                    warn!("Shard {} index {} on node {} is CORRUPTED!", file_hash, shard_index, node_id);
                 }
-                conn.close(0u32.into(), b"done");
             }
             Err(e) => {
-                warn!("Failed to reach node {} for audit: {}", node_id, e);
+                warn!("Shard {} index {} on node {} is MISSING: {}", file_hash, shard_index, node_id, e);
             }
         }
 

@@ -56,12 +56,29 @@ const api = vi.hoisted(() => {
             const u = new URL(url, "http://localhost");
             if (url.includes("/map/media")) {
                 state.mapParams = u.searchParams.toString();
-                const page = Number(u.searchParams.get("page") || 1);
                 const limit = Number(u.searchParams.get("limit") || 10000);
-                const start = (page - 1) * limit;
+                // Keyset cursor: filter to strictly newer? No — the endpoint is ordered
+                // created_at DESC, so the cursor means "strictly older than (after_created_at,
+                // after_hash)". Emulate by slicing the pool (already newest-first) from the
+                // first index whose point sorts after the cursor.
+                const afterCreatedAt = u.searchParams.get("after_created_at");
+                const afterHash = u.searchParams.get("after_hash");
+                const sorted = [...state.mapPool].sort((a, b) =>
+                    a.created_at === b.created_at
+                        ? (a.hash < b.hash ? 1 : -1)
+                        : (a.created_at < b.created_at ? 1 : -1)
+                );
+                let start = 0;
+                if (afterCreatedAt && afterHash) {
+                    start = sorted.findIndex((p) =>
+                        p.created_at < afterCreatedAt ||
+                        (p.created_at === afterCreatedAt && p.hash < afterHash)
+                    );
+                    if (start < 0) start = sorted.length;
+                }
                 return {
                     data: {
-                        points: state.mapPool.slice(start, start + limit),
+                        points: sorted.slice(start, start + limit),
                         total: state.mapPool.length,
                     },
                     status: 200,
@@ -299,7 +316,12 @@ describe("map points (fetchMapPoints)", () => {
 
         expect(s.mapPoints.length).toBe(12000);
         expect(s.mapTotal).toBe(12000);
-        expect(new URL("http://localhost?" + api.state.mapParams).searchParams.get("page")).toBe("2");
+        // Pagination advances via the keyset cursor (latest page request carried
+        // after_created_at + after_hash rather than an OFFSET page number).
+        const url = new URL("http://localhost?" + api.state.mapParams);
+        expect(url.searchParams.get("page")).toBeNull();
+        expect(url.searchParams.get("after_created_at")).not.toBeNull();
+        expect(url.searchParams.get("after_hash")).not.toBeNull();
     });
 });
 
