@@ -90,17 +90,21 @@ object ServerValidator {
     }
 
     /**
-     * Validates if the URL has a proper format (starts with http:// or https://).
+     * Validates if the URL has a proper format (starts with http:// or https://)
+     * and carries a non-empty host (e.g. rejects "http://").
      */
     fun isValidUrl(url: String): Boolean {
         val trimmedUrl = url.trim()
-        if (!trimmedUrl.startsWith("http://") && !trimmedUrl.startsWith("https://")) {
+        val lower = trimmedUrl.lowercase()
+        if (!lower.startsWith("http://") && !lower.startsWith("https://")) {
             return false
         }
 
         return try {
-            java.net.URL(trimmedUrl)
-            true
+            // java.net.URL accepts an empty host on some JVM versions (e.g. "http://"),
+            // so we additionally require a non-empty host.
+            val parsed = java.net.URL(trimmedUrl)
+            !parsed.host.isNullOrBlank()
         } catch (e: Exception) {
             false
         }
