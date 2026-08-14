@@ -1,3 +1,4 @@
+mod common;
 /// Integration tests for p2p_restore::restore_file_with_fetcher.
 ///
 /// These tests use a real (ephemeral) Postgres DB spun up by TestDatabase,
@@ -381,4 +382,40 @@ async fn test_restore_multi_segment_one_shard_missing() {
     let mut expected = seg0.clone();
     expected.extend_from_slice(&seg1);
     assert_eq!(restored.data, expected);
+}
+
+#[actix_web::test]
+#[serial_test::serial]
+async fn test_restore_p2p_file_http_endpoint() {
+    use actix_web::{http, test, web, App};
+    use reminisce::services::p2p_restore::restore_p2p_file;
+
+    let (pool, _test_db) = setup_test_database_with_instance().await;
+    let config = common::utils::create_test_config();
+    let main_pool = common::utils::wrap_main_pool(pool.clone());
+    let addr: std::net::SocketAddr = "127.0.0.1:0".parse().unwrap();
+    let identity = np2p::crypto::NodeIdentity::generate();
+    let p2p = std::sync::Arc::new(np2p::network::P2PService::new(addr, identity).await.expect("test P2P service"));
+
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(main_pool))
+            .app_data(web::Data::new(config.clone()))
+            .app_data(web::Data::new(p2p.clone()))
+            .service(restore_p2p_file)
+    ).await;
+    let token = common::utils::create_test_jwt_token().await;
+
+    // 1. Unauthenticated request -> 401
+    let req_unauth = test::TestRequest::post().uri("/p2p/restore/nonexistent").to_request();
+    let resp_unauth = test::call_service(&app, req_unauth).await;
+    assert_eq!(resp_unauth.status(), http::StatusCode::UNAUTHORIZED);
+
+    // 2. Non-existent hash -> 404
+    let req_auth = test::TestRequest::post()
+        .uri("/p2p/restore/nonexistent_12345")
+        .insert_header(("Authorization", format!("Bearer {}", token)))
+        .to_request();
+    let resp_auth = test::call_service(&app, req_auth).await;
+    assert_eq!(resp_auth.status(), http::StatusCode::NOT_FOUND);
 }

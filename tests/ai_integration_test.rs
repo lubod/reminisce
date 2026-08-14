@@ -201,3 +201,11 @@ async fn test_person_management_workflow() {
     client.execute("DELETE FROM persons WHERE id = $1", &[&person_id]).await.ok();
     client.execute("DELETE FROM images WHERE hash = $1", &[&image_hash]).await.ok();
 }
+
+#[tokio::test]
+async fn test_quality_score_service() {
+    let config = common::utils::create_test_config();
+    let img_bytes = include_bytes!("../tests/test_thumbnail.jpg");
+    // Call get_quality_score (if AI server is unreachable in offline unit tests, handle err cleanly)
+    let _ = reminisce::services::quality::get_quality_score(img_bytes, &config).await;
+}

@@ -141,3 +141,66 @@ async fn test_invite_status() {
     let body: serde_json::Value = test::read_body_json(resp).await;
     assert_eq!(body["is_member"], true);
 }
+
+async fn make_test_p2p_helper() -> std::sync::Arc<np2p::network::P2PService> {
+    let addr: std::net::SocketAddr = "127.0.0.1:0".parse().unwrap();
+    let identity = np2p::crypto::NodeIdentity::generate();
+    std::sync::Arc::new(np2p::network::P2PService::new(addr, identity).await.expect("test P2P service"))
+}
+
+#[actix_web::test]
+#[serial]
+async fn test_p2p_status_connection_and_peers() {
+    let (pool, _test_db) = setup_test_database_with_instance().await;
+    let config = common::utils::create_test_config();
+    let main_pool = common::utils::wrap_main_pool(pool.clone());
+    let p2p = make_test_p2p_helper().await;
+
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(main_pool))
+            .app_data(web::Data::new(config.clone()))
+            .app_data(web::Data::new(p2p.clone()))
+            .service(services::p2p_status::get_p2p_backup_status)
+            .service(services::p2p_status::get_p2p_connection_info)
+            .service(services::p2p_status::get_discovered_peers)
+            .service(services::p2p_status::remove_p2p_node)
+            .service(services::p2p_status::trigger_rebalance)
+    ).await;
+    let token = common::utils::create_test_jwt_token().await;
+
+    // 1. /p2p/backup/status
+    let resp = authed_get!(&app, "/p2p/backup/status", &token).await;
+    assert_eq!(resp.status(), http::StatusCode::OK);
+    let body: serde_json::Value = test::read_body_json(resp).await;
+    assert!(body["total_shards_stored"].is_number());
+    assert!(body["health_status"].is_string());
+
+    // 2. /p2p/connection
+    let resp_conn = authed_get!(&app, "/p2p/connection", &token).await;
+    assert_eq!(resp_conn.status(), http::StatusCode::OK);
+    let body_conn: serde_json::Value = test::read_body_json(resp_conn).await;
+    assert!(body_conn["node_id"].is_string());
+
+    // 3. /p2p-discovered-peers
+    let resp_peers = authed_get!(&app, "/p2p-discovered-peers", &token).await;
+    assert_eq!(resp_peers.status(), http::StatusCode::OK);
+    let body_peers: serde_json::Value = test::read_body_json(resp_peers).await;
+    assert!(body_peers["peers"].is_array());
+
+    // 4. Force rebalance
+    let req_reb = test::TestRequest::post()
+        .uri("/p2p/backup/rebalance")
+        .insert_header(("Authorization", format!("Bearer {}", token)))
+        .to_request();
+    let resp_reb = test::call_service(&app, req_reb).await;
+    assert_eq!(resp_reb.status(), http::StatusCode::ACCEPTED);
+
+    // 5. Remove node (non-existent returns 404)
+    let req_del = test::TestRequest::delete()
+        .uri("/p2p/nodes/non_existent_node_id")
+        .insert_header(("Authorization", format!("Bearer {}", token)))
+        .to_request();
+    let resp_del = test::call_service(&app, req_del).await;
+    assert_eq!(resp_del.status(), http::StatusCode::NOT_FOUND);
+}
