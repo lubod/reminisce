@@ -175,7 +175,7 @@ impl Sampler {
     }
 }
 
-pub(crate) fn pool_util(pool: &web::Data<MainDbPool>) -> f64 {
+pub fn pool_util(pool: &web::Data<MainDbPool>) -> f64 {
     let status = pool.0.status();
     let size = status.size as f64;
     let available = status.available.max(0) as f64;
@@ -228,7 +228,7 @@ fn hist_percentile_ms(h: &prometheus::proto::Histogram, q: f64) -> Option<f64> {
     Some(prev * 1000.0)
 }
 
-pub(crate) fn collect_pool_metrics(pool: &web::Data<MainDbPool>, max_size: usize) {
+pub fn collect_pool_metrics(pool: &web::Data<MainDbPool>, max_size: usize) {
     let status = pool.0.status();
     let size = status.size;
     let available = status.available; // Available connections
