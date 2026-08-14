@@ -35,6 +35,9 @@ function toSvg(series: Series, minT: number, maxT: number, minV: number, maxV: n
 }
 
 function ChartCard({ spec, store }: { spec: ChartSpec; store: SystemStore }) {
+    // Hover tooltip: track the time under the cursor and the nearest value per series.
+    const [hoverT, setHoverT] = useState<number | null>(null);
+
     const present = spec.names
         .map((n) => store.series.find((s) => s.name === n))
         .filter((s): s is Series => !!s && s.points.length > 0);
@@ -61,9 +64,6 @@ function ChartCard({ spec, store }: { spec: ChartSpec; store: SystemStore }) {
     if (maxT === minT) maxT += 1;
 
     const fmt = (v: number) => (Math.abs(v) >= 100 ? Math.round(v).toLocaleString() : v.toFixed(1));
-
-    // Hover tooltip: track the time under the cursor and the nearest value per series.
-    const [hoverT, setHoverT] = useState<number | null>(null);
     const xOf = (t: number) => PAD_X + ((t - minT) / (maxT - minT || 1)) * (W - PAD_X * 2);
     const timeOfX = (x: number) => minT + ((x - PAD_X) / (W - PAD_X * 2)) * (maxT - minT);
 
