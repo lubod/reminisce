@@ -280,9 +280,13 @@ pub async fn sync_db_nodes_to_registry(pool: &Pool, p2p_service: &Arc<P2PService
     }
 }
 
-/// Resolve a node's socket address: check DB public_addr and update in-memory registry, then fallback to in-memory registry.
+/// Resolve a node's socket address: check in-memory registry first, then DB public_addr (upserting on DB hit).
 pub async fn lookup_node_addr(pool: &Pool, p2p_service: &Arc<P2PService>, node_id: &str) -> Option<SocketAddr> {
-    // 1. Check DB first (canonical active IP)
+    // 1. Fast path: in-memory registry
+    if let Some(peer) = p2p_service.registry.get(node_id) {
+        return Some(peer.addr);
+    }
+    // 2. Slow path: DB
     if let Ok(client) = pool.get().await {
         if let Ok(Some(row)) = client.query_opt(
             "SELECT public_addr FROM p2p_nodes WHERE node_id = $1 AND is_active = true",
@@ -294,10 +298,6 @@ pub async fn lookup_node_addr(pool: &Pool, p2p_service: &Arc<P2PService>, node_i
                 return Some(addr);
             }
         }
-    }
-    // 2. Fallback to in-memory registry
-    if let Some(peer) = p2p_service.registry.get(node_id) {
-        return Some(peer.addr);
     }
     None
 }
