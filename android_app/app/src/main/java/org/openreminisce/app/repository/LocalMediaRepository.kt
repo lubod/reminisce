@@ -27,15 +27,16 @@ class LocalMediaRepository {
             Log.d(TAG, "Loading local media...")
 
             val databaseHelper = DatabaseHelper(context)
+            val backedUpIds = databaseHelper.getAllBackedUpFileIds()
 
-            // Load images and videos with media type tags
+            // Load images and videos with media type tags and confirmed backup status
             val images = MediaHelper.getAllImages(context).map { info ->
-                val isBackedUp = checkBackupStatus(info, databaseHelper)
+                val isBackedUp = backedUpIds.contains(info.id)
                 info.copy(mediaType = "image", isBackedUp = isBackedUp)
             }
 
             val videos = MediaHelper.getAllVideos(context).map { info ->
-                val isBackedUp = checkBackupStatus(info, databaseHelper)
+                val isBackedUp = backedUpIds.contains(info.id)
                 info.copy(mediaType = "video", isBackedUp = isBackedUp)
             }
 
@@ -61,24 +62,11 @@ class LocalMediaRepository {
         imageInfo: ImageInfo,
         databaseHelper: DatabaseHelper
     ): Boolean {
-        try {
-            val uri = Uri.parse(imageInfo.id)
-            val fileId = uri.toString()
-
-            // Check if hash exists in database
-            val cachedHash = databaseHelper.getHash(fileId)
-            if (cachedHash != null) {
-                Log.d(TAG, "File $fileId is backed up (hash found in cache)")
-                return true
-            }
-
-            // If not in cache, we could calculate hash and check server,
-            // but that's expensive. For now, just return false.
-            // TODO: Implement lazy hash calculation and server check
-            return false
+        return try {
+            databaseHelper.isMediaBackedUp(imageInfo.id)
         } catch (e: Exception) {
             Log.e(TAG, "Error checking backup status for ${imageInfo.id}", e)
-            return false
+            false
         }
     }
 

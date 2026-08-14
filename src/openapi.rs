@@ -88,6 +88,7 @@ use utoipa::OpenApi;
         crate::services::user_management::update_user,
         crate::services::user_management::delete_user,
         crate::services::media::save_enhanced_image,
+        crate::services::observability::get_admin_ai_models,
         crate::services::label::get_video_labels,
         crate::services::label::add_video_label,
         crate::services::label::remove_video_label
@@ -170,7 +171,9 @@ use utoipa::OpenApi;
             crate::services::user_management::UserRecord,
             crate::services::user_management::CreateUserRequest,
             crate::services::user_management::UpdateUserRequest,
-            crate::services::media::SaveEnhancedRequest
+            crate::services::media::SaveEnhancedRequest,
+            crate::services::observability::AiModelsResponse,
+            crate::services::observability::AiModelInfo
         )
     ),
     tags((name = "reminisce", description = "Reminisce: Self-hosted photo and video memory vault."))

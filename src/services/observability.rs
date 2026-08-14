@@ -7,7 +7,8 @@
 use std::collections::HashMap;
 
 use actix_web::{get, web, HttpRequest, HttpResponse};
-use serde::Serialize;
+use serde::{Serialize, Deserialize};
+use utoipa::ToSchema;
 
 use crate::alerts;
 use crate::config::Config;
@@ -429,4 +430,104 @@ pub async fn get_admin_gpu(
             "available": false, "reason": "ai-server unreachable"
         }))),
     }
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct AiModelInfo {
+    pub id: String,
+    pub name: String,
+    pub model_id: String,
+    pub task: String,
+    pub loaded: bool,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dim: Option<u32>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct AiModelsResponse {
+    pub status: String,
+    pub device: String,
+    pub models: Vec<AiModelInfo>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/admin/ai-models",
+    responses(
+        (status = 200, description = "AI models runtime status", body = AiModelsResponse),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Forbidden")
+    ),
+    tag = "Admin"
+)]
+#[get("/admin/ai-models")]
+pub async fn get_admin_ai_models(
+    req: HttpRequest,
+    cfg: web::Data<Config>,
+) -> Result<HttpResponse, actix_web::Error> {
+    if let Err(resp) = require_admin(&req, &cfg, "get_admin_ai_models").await {
+        return Ok(resp);
+    }
+
+    let client = crate::ai_client::AiClient::shared(&cfg);
+    let (models, device) = match client.health_check().await {
+        Ok(h) => {
+            let list = vec![
+                AiModelInfo {
+                    id: "siglip2".to_string(),
+                    name: "SigLIP2 (Embeddings)".to_string(),
+                    model_id: "google/siglip2-so400m-patch14-384".to_string(),
+                    task: "Semantic Vector Search".to_string(),
+                    loaded: h.siglip_loaded,
+                    status: if h.siglip_loaded { "active" } else { "standby" }.to_string(),
+                    dim: Some(1152),
+                },
+                AiModelInfo {
+                    id: "smolvlm".to_string(),
+                    name: "SmolVLM-500M (Captions)".to_string(),
+                    model_id: "HuggingFaceTB/SmolVLM-500M-Instruct".to_string(),
+                    task: "Automatic Image Descriptions".to_string(),
+                    loaded: h.smolvlm_loaded,
+                    status: if h.smolvlm_loaded { "active" } else { "standby" }.to_string(),
+                    dim: None,
+                },
+                AiModelInfo {
+                    id: "insightface".to_string(),
+                    name: "InsightFace (Buffalo_L)".to_string(),
+                    model_id: "insightface/buffalo_l".to_string(),
+                    task: "Face Detection & Recognition".to_string(),
+                    loaded: h.face_loaded,
+                    status: if h.face_loaded { "active" } else { "standby" }.to_string(),
+                    dim: Some(512),
+                },
+                AiModelInfo {
+                    id: "orientation".to_string(),
+                    name: "BEiT Orientation Fixer".to_string(),
+                    model_id: "amaye15/Beit-Base-Image-Orientation-Fixer".to_string(),
+                    task: "EXIF Orientation Auto-heal".to_string(),
+                    loaded: h.orientation_loaded,
+                    status: if h.orientation_loaded { "active" } else { "standby" }.to_string(),
+                    dim: None,
+                },
+                AiModelInfo {
+                    id: "quality".to_string(),
+                    name: "Quality Scorer".to_string(),
+                    model_id: "SigLIP2 Zero-Shot Aesthetic Scoring".to_string(),
+                    task: "Sharpness & Aesthetics".to_string(),
+                    loaded: h.siglip_loaded,
+                    status: if h.siglip_loaded { "active" } else { "standby" }.to_string(),
+                    dim: None,
+                },
+            ];
+            (list, h.device)
+        }
+        Err(_) => (Vec::new(), "unreachable".to_string()),
+    };
+
+    Ok(HttpResponse::Ok().json(AiModelsResponse {
+        status: if models.is_empty() { "unavailable".to_string() } else { "healthy".to_string() },
+        device,
+        models,
+    }))
 }

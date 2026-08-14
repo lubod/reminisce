@@ -120,7 +120,7 @@ describe("SystemStore", () => {
         await Promise.all([p1, p2]);
         expect(s.isLoading).toBe(false);
         // Deduped: the second refreshAll did not re-run the 9 loaders.
-        expect(mockedGet).toHaveBeenCalledTimes(9);
+        expect(mockedGet).toHaveBeenCalledTimes(10);
     });
 
     it("loads series and changes range", async () => {
@@ -158,4 +158,22 @@ describe("SystemStore", () => {
             vi.useRealTimers();
         }
     });
+
+    it("loads AI models runtime status", async () => {
+        mockedGet.mockResolvedValueOnce({
+            data: {
+                status: "healthy",
+                device: "cuda:0",
+                models: [
+                    { id: "siglip2", name: "SigLIP2", model_id: "google/siglip2", task: "Search", loaded: true, status: "active", dim: 1152 },
+                ],
+            },
+        });
+        const s = makeStore();
+        await s.loadAiModels();
+        expect(mockedGet).toHaveBeenCalledWith("/admin/ai-models");
+        expect(s.aiModels?.status).toBe("healthy");
+        expect(s.aiModels?.models[0].name).toBe("SigLIP2");
+    });
+
 });

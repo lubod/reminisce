@@ -10,6 +10,7 @@ import { UserManagement } from "./UserManagement";
 import { LogViewer } from "./System/LogViewer";
 import { ErrorsViewer } from "./System/ErrorsViewer";
 import { Charts } from "./System/Charts";
+import { AiModelsViewer } from "./System/AiModelsViewer";
 
 export const Dashboard = observer(() => {
     const { statsStore, authStore, uiStore, systemStore } = useStore();
@@ -39,6 +40,7 @@ export const Dashboard = observer(() => {
             void systemStore.loadErrors();
             void systemStore.loadAlerts();
             void systemStore.loadGpu();
+            void systemStore.loadAiModels();
             void systemStore.loadPipeline();
             void systemStore.loadSeries();
 
@@ -51,6 +53,7 @@ export const Dashboard = observer(() => {
                 void systemStore.loadErrors();
                 void systemStore.loadAlerts();
                 void systemStore.loadGpu();
+            void systemStore.loadAiModels();
                 void systemStore.loadPipeline();
                 void systemStore.loadSeries();
             }, 30000);
@@ -514,6 +517,7 @@ export const Dashboard = observer(() => {
                         {/* --- System Tab --- */}
                         {activeTab === 'system' && (
                             <div className="space-y-6">
+                                <AiModelsViewer />
                                 <div className="bg-gray-800 shadow-xl rounded-xl p-8 border border-gray-700">
                                     <h2 className="text-xl font-bold text-gray-100 mb-6 flex items-center"><ShieldAlert className="w-6 h-6 text-amber-400 mr-3" /> Health Alerts</h2>
                                     {systemStore.alerts.length === 0 ? (

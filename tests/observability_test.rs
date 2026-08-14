@@ -36,6 +36,7 @@ async fn test_observability_logs_and_errors() {
             .service(services::observability::get_admin_alerts)
             .service(services::observability::get_admin_pipeline)
             .service(services::observability::get_admin_gpu)
+            .service(services::observability::get_admin_ai_models)
     ).await;
     let token = common::utils::create_test_jwt_token().await;
 
@@ -74,9 +75,17 @@ async fn test_observability_logs_and_errors() {
     assert!(body_pipe["http"].is_object());
     assert!(body_pipe["db_query_ms"].is_object());
 
+
     // 5. GPU endpoint
     let resp_gpu = authed_get!(&app, "/admin/gpu", &token).await;
     assert_eq!(resp_gpu.status(), http::StatusCode::OK);
+
+    // 5b. AI Models endpoint
+    let resp_ai = authed_get!(&app, "/admin/ai-models", &token).await;
+    assert_eq!(resp_ai.status(), http::StatusCode::OK);
+    let body_ai: serde_json::Value = test::read_body_json(resp_ai).await;
+    assert!(body_ai["models"].is_array());
+
 
     // 6. Unauthenticated rejection
     let unauthed = test::TestRequest::get().uri("/admin/logs").to_request();

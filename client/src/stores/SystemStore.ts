@@ -134,6 +134,23 @@ export interface SeriesResponse {
 
 export type SeriesRange = "1d" | "30d" | "90d";
 
+export interface AiModelInfo {
+    id: string;
+    name: string;
+    model_id: string;
+    task: string;
+    loaded: boolean;
+    status: string;
+    dim?: number;
+}
+
+export interface AiModelsResponse {
+    status: string;
+    device: string;
+    models: AiModelInfo[];
+}
+
+
 export class SystemStore {
     root: RootStore;
 
@@ -146,6 +163,7 @@ export class SystemStore {
     pool: PoolStats | null = null;
     backup: BackupStatus | null = null;
     gpu: GpuResponse | null = null;
+    aiModels: AiModelsResponse | null = null;
     pipeline: PipelineResponse | null = null;
     series: Series[] = [];
     seriesRange: SeriesRange = "1d";
@@ -235,6 +253,17 @@ export class SystemStore {
         }
     }
 
+    
+    async loadAiModels(): Promise<void> {
+        try {
+            const resp = await axios.get<AiModelsResponse>("/admin/ai-models");
+            this.aiModels = resp.data;
+            this.lastError = null;
+        } catch (e) {
+            this.recordError("loadAiModels", e);
+        }
+    }
+
     async loadPipeline(): Promise<void> {
         try {
             const resp = await axios.get<PipelineResponse>("/admin/pipeline");
@@ -277,6 +306,7 @@ export class SystemStore {
             this.loadPool(),
             this.loadBackup(),
             this.loadGpu(),
+            this.loadAiModels(),
             this.loadPipeline(),
             this.loadSeries(),
         ])

@@ -39,10 +39,14 @@ def get_ai_service():
 
 logger = logging.getLogger(__name__)
 
-# gRPC dispatches RPCs on a ThreadPoolExecutor (default 4 workers) and the torch models
-# are shared across those threads without internal serialization. A global lock around
-# every model forward prevents concurrent threads from racing on the same weights.
-_MODEL_LOCK = threading.Lock()
+# Dedicated granular locks per model family to prevent lock contention.
+# Fast interactive requests (e.g. EmbedText for search queries) are never blocked
+# by heavy background tasks (e.g. SmolVLM DescribeImage captions).
+_EMBEDDING_LOCK = threading.Lock()
+_CAPTION_LOCK = threading.Lock()
+_FACE_LOCK = threading.Lock()
+_ORIENTATION_LOCK = threading.Lock()
+_ENHANCE_LOCK = threading.Lock()
 
 # Server-side image dimension cap. Without this a single dense image can exhaust the
 # process RAM during decode + inference (OOM). 4 MP is far beyond real photo needs.
@@ -122,7 +126,7 @@ class AIServiceServicer(ai_service_pb2_grpc.AIServiceServicer):
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, f"Image too small ({image.width}x{image.height})")
 
         try:
-            with _MODEL_LOCK:
+            with _EMBEDDING_LOCK:
                 inputs = get_ai_service().siglip_processor(images=image, return_tensors="pt").to(get_ai_service().device)
                 model_dtype = next(get_ai_service().siglip_model.parameters()).dtype
                 inputs = {k: v.to(model_dtype) if v.is_floating_point() else v for k, v in inputs.items()}
@@ -150,7 +154,7 @@ class AIServiceServicer(ai_service_pb2_grpc.AIServiceServicer):
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, "Missing text")
 
         try:
-            with _MODEL_LOCK:
+            with _EMBEDDING_LOCK:
                 inputs = get_ai_service().siglip_processor(text=[request.text], return_tensors="pt", padding="max_length").to(get_ai_service().device)
                 model_dtype = next(get_ai_service().siglip_model.parameters()).dtype
                 inputs = {k: v.to(model_dtype) if v.is_floating_point() else v for k, v in inputs.items()}
@@ -204,7 +208,7 @@ class AIServiceServicer(ai_service_pb2_grpc.AIServiceServicer):
                         ],
                     }
                 ]
-                with _MODEL_LOCK:
+                with _CAPTION_LOCK:
                     text = get_ai_service().vlm_processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
                     image_inputs, video_inputs = process_vision_info(messages)
                     inputs = get_ai_service().vlm_processor(
@@ -234,7 +238,7 @@ class AIServiceServicer(ai_service_pb2_grpc.AIServiceServicer):
                         ]
                     }
                 ]
-                with _MODEL_LOCK:
+                with _CAPTION_LOCK:
                     prompt = get_ai_service().smolvlm_processor.apply_chat_template(messages, add_generation_prompt=True)
                     inputs = get_ai_service().smolvlm_processor(text=prompt, images=image, return_tensors="pt").to(get_ai_service().device)
 
@@ -265,7 +269,7 @@ class AIServiceServicer(ai_service_pb2_grpc.AIServiceServicer):
             image_np = np.array(image_pil)
             image_bgr = cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR)
 
-            with _MODEL_LOCK:
+            with _FACE_LOCK:
                 faces = get_ai_service().face_app.get(image_bgr)
 
             pb_faces = []
@@ -307,7 +311,7 @@ class AIServiceServicer(ai_service_pb2_grpc.AIServiceServicer):
             sharpness = float(cv2.Laplacian(gray, cv2.CV_64F).var())
 
             # Aesthetic: zero-shot SigLIP text comparison
-            with _MODEL_LOCK:
+            with _EMBEDDING_LOCK:
                 inputs = svc.siglip_processor(text=svc.QUALITY_TEXTS, images=image, return_tensors="pt", padding="max_length")
                 inputs = {k: v.to(svc.device) for k, v in inputs.items()}
                 model_dtype = next(svc.siglip_model.parameters()).dtype
@@ -410,7 +414,7 @@ class AIServiceServicer(ai_service_pb2_grpc.AIServiceServicer):
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, f"Image too small ({image.width}x{image.height})")
 
         try:
-            with _MODEL_LOCK:
+            with _ORIENTATION_LOCK:
                 inputs = svc.orientation_processor(images=image, return_tensors="pt").to(svc.device)
                 model_dtype = next(svc.orientation_model.parameters()).dtype
                 inputs = {k: v.to(model_dtype) if v.is_floating_point() else v for k, v in inputs.items()}

@@ -8,7 +8,7 @@ import android.util.Log
 class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, null, DATABASE_VERSION) {
     companion object {
         private const val DATABASE_NAME = "my_backup.db"
-        private const val DATABASE_VERSION = 1
+        private const val DATABASE_VERSION = 2
         
         // Table for file hashes
         private const val TABLE_FILE_HASHES = "file_hashes"
@@ -16,6 +16,10 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
         private const val COLUMN_FILE_ID = "file_id"
         private const val COLUMN_HASH = "hash"
         private const val COLUMN_MODIFIED_DATE = "modified_date"
+        // Table for confirmed backed up files
+        private const val TABLE_BACKED_UP_FILES = "backed_up_files"
+        private const val COLUMN_UPLOADED_AT = "uploaded_at"
+
         
         // Table for backup timestamps
         private const val TABLE_BACKUP_INFO = "backup_info"
@@ -45,6 +49,16 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
         
         db?.execSQL(createFileHashesTable)
         db?.execSQL(createBackupInfoTable)
+        // Create backed up files table
+        val createBackedUpFilesTable = """
+            CREATE TABLE IF NOT EXISTS $TABLE_BACKED_UP_FILES (
+                $COLUMN_FILE_ID TEXT PRIMARY KEY,
+                $COLUMN_HASH TEXT,
+                $COLUMN_UPLOADED_AT INTEGER
+            )
+        """.trimIndent()
+        db?.execSQL(createBackedUpFilesTable)
+
     }
 
     override fun onUpgrade(db: SQLiteDatabase?, oldVersion: Int, newVersion: Int) {
@@ -52,10 +66,16 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
         // Incremental migrations preserve cached file hashes across schema version updates.
         // Fall back to table recreation only if migrating from unhandled/ancient versions.
         var currentVersion = oldVersion
-        if (currentVersion == 1) {
-            // Version 1 -> 2 migration example (future schema expansions)
-            currentVersion = 2
+                if (oldVersion < 2) {
+            db?.execSQL("""
+                CREATE TABLE IF NOT EXISTS backed_up_files (
+                    file_id TEXT PRIMARY KEY,
+                    hash TEXT,
+                    uploaded_at INTEGER
+                )
+            """.trimIndent())
         }
+
 
         if (currentVersion < newVersion) {
             // Unhandled version migration fallback
@@ -311,5 +331,55 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
 
         Log.d("DatabaseHelper", "Retrieved ${cachedHashes.size} cached hashes from database")
         return cachedHashes
+    }
+
+    // Mark a file as confirmed backed up on the server
+    fun markFileBackedUp(fileId: String, hash: String, uploadedAt: Long = System.currentTimeMillis()) {
+        val db = writableDatabase
+        val contentValues = android.content.ContentValues().apply {
+            put(COLUMN_FILE_ID, fileId)
+            put(COLUMN_HASH, hash)
+            put(COLUMN_UPLOADED_AT, uploadedAt)
+        }
+        db.replace(TABLE_BACKED_UP_FILES, null, contentValues)
+        Log.d("DatabaseHelper", "Marked file $fileId as backed up")
+    }
+
+    // Check if a file is confirmed backed up
+    fun isMediaBackedUp(fileId: String): Boolean {
+        val db = readableDatabase
+        val cursor = db.query(
+            TABLE_BACKED_UP_FILES,
+            arrayOf(COLUMN_FILE_ID),
+            "$COLUMN_FILE_ID = ?",
+            arrayOf(fileId),
+            null,
+            null,
+            null
+        )
+        val exists = cursor.moveToFirst()
+        cursor.close()
+        return exists
+    }
+
+    // Retrieve all backed up file IDs in a single bulk query
+    fun getAllBackedUpFileIds(): Set<String> {
+        val db = readableDatabase
+        val cursor = db.query(
+            TABLE_BACKED_UP_FILES,
+            arrayOf(COLUMN_FILE_ID),
+            null,
+            null,
+            null,
+            null,
+            null
+        )
+        val set = mutableSetOf<String>()
+        while (cursor.moveToNext()) {
+            set.add(cursor.getString(0))
+        }
+        cursor.close()
+        Log.d("DatabaseHelper", "Retrieved ${set.size} confirmed backed up files from database")
+        return set
     }
 }
