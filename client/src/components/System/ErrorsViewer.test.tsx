@@ -11,18 +11,21 @@ describe("ErrorsViewer", () => {
             level: "ERROR",
             target: "p2p_audit",
             message: "Repair failed for shard 123",
+            fields: {},
         },
         {
             timestamp: Math.floor(Date.now() / 1000),
             level: "ERROR",
             target: "p2p_audit",
-            message: "Repair failed for shard 123", // Duplicate to test clustering
+            message: "Repair failed for shard 123",
+            fields: {}, // Duplicate to test clustering
         },
         {
             timestamp: Math.floor(Date.now() / 1000),
             level: "WARN",
             target: "system",
             message: "High memory utilization warning",
+            fields: {},
         },
     ];
 
