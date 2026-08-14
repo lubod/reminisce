@@ -172,3 +172,18 @@ disaster_recovery full --config config.yaml --pg-restore --target-db-url <url>
 When Android is not on the home LAN, it connects to the home server via a reverse QUIC tunnel through the coordinator (a small VPS process). The coordinator also maintains a peer registry so storage nodes can find each other across NATs.
 
 See `coordinator/src/main.rs` for the full coordinator implementation.
+
+## Peer Identity & LAN Address Synchronization
+
+When nodes communicate across local LANs or behind NAT tunnels, the in-memory `P2PService.registry` is automatically kept in sync with the PostgreSQL `p2p_nodes` table via `sync_db_nodes_to_registry()`.
+
+- **Registry Precedence**: In-memory discovered active connections take immediate precedence.
+- **Database Fallback**: When establishing a direct connection or repair transfer to a node ID not yet registered in memory, `lookup_node_addr()` falls back to PostgreSQL and immediately registers the peer in `P2PService.registry`, guaranteeing peer identity validation succeeds without rejection.
+
+## Orphaned Shard Audit & Repair
+
+The `P2P Audit Worker` periodically sweeps for inconsistent or degraded shard states:
+
+1. **Undersharded Files**: Scans for files with fewer than 5 shards across reachable nodes and triggers repair via `p2p_audit_worker::repair_file`.
+2. **Database Orphan Cleanup**: Removes rows in `p2p_shards` belonging to media files that have been deleted from the database.
+3. **Storage Node Sweeps**: Queries remote storage node catalogs to identify and prune orphaned shard files residing on disk that have no active owner in PostgreSQL.
