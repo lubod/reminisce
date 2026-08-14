@@ -48,3 +48,13 @@ async fn test_metrics_collector_lifecycle_and_sampling() {
     let res = tokio::time::timeout(Duration::from_secs(3), collector_task).await;
     assert!(res.is_ok(), "metrics collector stopped cleanly within timeout");
 }
+
+#[actix_web::test]
+#[serial]
+async fn test_pool_util_and_collect_pool_metrics() {
+    let (pool, _db) = setup_test_database_with_instance().await;
+    let main_pool = web::Data::new(common::utils::wrap_main_pool(pool.clone()));
+    let util = metrics_collector::pool_util(&main_pool);
+    assert!(util >= 0.0);
+    metrics_collector::collect_pool_metrics(&main_pool, 16);
+}

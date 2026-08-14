@@ -175,7 +175,7 @@ impl Sampler {
     }
 }
 
-fn pool_util(pool: &web::Data<MainDbPool>) -> f64 {
+pub(crate) fn pool_util(pool: &web::Data<MainDbPool>) -> f64 {
     let status = pool.0.status();
     let size = status.size as f64;
     let available = status.available.max(0) as f64;
@@ -228,7 +228,7 @@ fn hist_percentile_ms(h: &prometheus::proto::Histogram, q: f64) -> Option<f64> {
     Some(prev * 1000.0)
 }
 
-fn collect_pool_metrics(pool: &web::Data<MainDbPool>, max_size: usize) {
+pub(crate) fn collect_pool_metrics(pool: &web::Data<MainDbPool>, max_size: usize) {
     let status = pool.0.status();
     let size = status.size;
     let available = status.available; // Available connections
@@ -314,12 +314,4 @@ mod tests {
         assert!(sampler.last_prune.is_none());
     }
 
-    #[actix_web::test]
-    async fn test_pool_util_and_collect_pool_metrics() {
-        let (pool, _db) = crate::test_utils::setup_test_database_with_instance().await;
-        let main_pool = web::Data::new(crate::db::MainDbPool(pool));
-        let util = pool_util(&main_pool);
-        assert!(util >= 0.0);
-        collect_pool_metrics(&main_pool, 16);
     }
-}
