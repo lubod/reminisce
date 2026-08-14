@@ -88,6 +88,24 @@ def load_models():
         return
     models_loaded = True
 
+    # Patch transformers recursive_diff_dict to gracefully handle missing default keys (e.g. pad_token_id in SmolVLM)
+    try:
+        import transformers.configuration_utils
+        _orig_diff = transformers.configuration_utils.recursive_diff_dict
+        def _safe_diff(dict_a, dict_b, config_obj=None):
+            try:
+                return _orig_diff(dict_a, dict_b, config_obj)
+            except KeyError:
+                diff = {}
+                for k, v in dict_a.items():
+                    if k not in dict_b or v != dict_b.get(k):
+                        diff[k] = v
+                return diff
+        transformers.configuration_utils.recursive_diff_dict = _safe_diff
+        logger.info("Applied safe recursive_diff_dict patch for SmolVLM")
+    except Exception as e:
+        logger.warning(f"Failed to patch recursive_diff_dict: {e}")
+
     # Compatibility patch for models with missing config attributes (SigLIP, Moondream2, etc.)
     try:
         from transformers import PretrainedConfig
@@ -152,64 +170,19 @@ def load_models():
         logger.error(f"Failed to load Qwen2.5-VL model: {e}")
         # Continue without VLM - descriptions won't work but embeddings will
 
-    # Load SmolVLM-500M for fast descriptions (parallel to Qwen2.5-VL)
-    # 500M params vs 3B — ~64 visual tokens per patch vs 256+, target <5s per image
+    # Load SmolVLM-500M for fast descriptions
+    # 500M params — ~64 visual tokens per patch, target <5s per image
     logger.info("Loading SmolVLM-500M-Instruct model for fast descriptions...")
     smolvlm_model_name = os.environ.get("SMOLVLM_MODEL_NAME", "HuggingFaceTB/SmolVLM-500M-Instruct")
     try:
-        import json as _json
-        from huggingface_hub import try_to_load_from_cache
-        from transformers import SmolVLMConfig
-
-        # transformers 5.14's AutoConfig.from_pretrained crashes with KeyError('pad_token_id')
-        # while rendering the config repr (the config's pad_token_id isn't recognized against
-        # the class default). Build the config from the cached config.json to sidestep that
-        # bug, then load the model with the pre-constructed config.
-        _config_path = try_to_load_from_cache(smolvlm_model_name, "config.json")
-        if _config_path is None:
-            from huggingface_hub import hf_hub_download
-            _config_path = hf_hub_download(smolvlm_model_name, "config.json")
-        _cfg_dict = _json.load(open(_config_path))
-        _cfg_dict.pop("pad_token_id", None)
-        smolvlm_config = SmolVLMConfig(**_cfg_dict)
-        vsize = getattr(smolvlm_config, "vocab_size", None)
-
-        last_exc = None
-        for attempt in range(2):
-            try:
-                smolvlm_model = SmolVLMForConditionalGeneration.from_pretrained(
-                    smolvlm_model_name,
-                    config=smolvlm_config,
-                    torch_dtype=torch.float16 if device == "cuda" else torch.float32,
-                ).to(device)
-                last_exc = None
-                break
-            except Exception as e:
-                last_exc = e
-                if attempt == 0:
-                    logger.warning("SmolVLM load attempt 1 failed (%s); retrying once", e)
-        if last_exc is not None:
-            raise last_exc
-
-        # Guarantee a valid pad token for generation padding on every code path.
-        gpad = getattr(smolvlm_model.config, "pad_token_id", None)
-        if gpad is None or (vsize is not None and not (0 <= gpad < vsize)):
-            gpad = getattr(smolvlm_model.generation_config, "pad_token_id", None)
-            if gpad is None or (vsize is not None and not (0 <= gpad < vsize)):
-                gpad = getattr(smolvlm_model.generation_config, "eos_token_id", None)
-                if gpad is None or (vsize is not None and not (0 <= gpad < vsize)):
-                    gpad = 0
-            smolvlm_model.config.pad_token_id = gpad
-        smolvlm_model.generation_config.pad_token_id = gpad
+        smolvlm_dtype = torch.float16 if device == "cuda" else torch.float32
+        smolvlm_model = SmolVLMForConditionalGeneration.from_pretrained(
+            smolvlm_model_name,
+            torch_dtype=smolvlm_dtype,
+        ).to(device)
         smolvlm_processor = AutoProcessor.from_pretrained(smolvlm_model_name)
         smolvlm_model.eval()
-        logger.info(f"SmolVLM-500M-Instruct loaded on {device} (bfloat16, pad_token_id={gpad})")
-
-        # Cleanup: if model loaded but the processor failed (transformers 5.14 tokenizer bug),
-        # treat the fast model as fully unusable so DescribeImage falls back to Qwen cleanly
-        # instead of crashing on a None processor.
-        if smolvlm_model is None or smolvlm_processor is None:
-            raise RuntimeError("SmolVLM processor unavailable (model or processor failed to load)")
+        logger.info(f"SmolVLM-500M-Instruct loaded successfully on {device} (dtype={smolvlm_dtype})")
     except Exception as e:
         smolvlm_model = None
         smolvlm_processor = None

@@ -55,6 +55,8 @@ services:
     volumes:
       - ai_model_cache:/home/ai_user/.cache/huggingface
       - face_model_cache:/app/.insightface
+      - ./ai/ai_service.py:/app/ai_service.py
+      - ./ai/ai_service_grpc.py:/app/ai_service_grpc.py
     environment:
       - API_SECRET_KEY=${API_SECRET_KEY:-}
       - HF_HOME=/home/ai_user/.cache/huggingface
