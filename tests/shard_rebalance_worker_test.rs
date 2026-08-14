@@ -1,3 +1,4 @@
+mod common;
 /// Integration tests for shard_rebalance_worker — the DB-accessible helpers
 /// (ensure_peers_registered, find_file_info, lookup_node_addr) that can be
 /// exercised without a live P2P/QUIC connection.
@@ -219,4 +220,51 @@ async fn test_lookup_node_addr_prefers_registry_over_db() {
 
     let addr = lookup_node_addr(&pool, &p2p, node_id).await;
     assert_eq!(addr.unwrap(), fresh_addr, "in-memory registry address should take priority");
+}
+
+#[tokio::test]
+#[serial]
+async fn test_sync_db_nodes_to_registry_and_rebalance_cycle() {
+    use reminisce::shard_rebalance_worker::{sync_db_nodes_to_registry, rebalance_cycle, start_rebalance_worker};
+    use tokio_util::sync::CancellationToken;
+    use std::time::Duration;
+
+    let (pool, _db) = setup_test_database_with_instance().await;
+    let client = pool.get().await.unwrap();
+
+    let node_id = "sync_node_001";
+    let addr = "127.0.0.1:9500";
+    client.execute(
+        "INSERT INTO p2p_nodes (node_id, public_addr, is_active) VALUES ($1, $2, TRUE)
+         ON CONFLICT (node_id) DO UPDATE SET public_addr = $2, is_active = TRUE",
+        &[&node_id, &addr],
+    ).await.unwrap();
+
+    let p2p = make_test_p2p().await;
+    assert!(p2p.registry.get(node_id).is_none());
+
+    // 1. Sync from DB into registry
+    sync_db_nodes_to_registry(&pool, &p2p).await;
+    assert!(p2p.registry.get(node_id).is_some());
+
+    // 2. Rebalance cycle with 1 node (healthy / no rebalance needed)
+    let config = common::utils::create_test_config();
+    let res = rebalance_cycle(&pool, &config, &p2p).await;
+    assert!(res.is_ok(), "rebalance_cycle returned error: {:?}", res);
+
+    // 3. Worker lifecycle with cancellation
+    let token = CancellationToken::new();
+    let token_clone = token.clone();
+    let pool_clone = pool.clone();
+    let p2p_clone = p2p.clone();
+
+    let worker_handle = tokio::spawn(async move {
+        start_rebalance_worker(pool_clone, config, p2p_clone, token_clone).await;
+    });
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    token.cancel();
+
+    let res = tokio::time::timeout(Duration::from_secs(2), worker_handle).await;
+    assert!(res.is_ok(), "worker stopped cleanly on shutdown token");
 }

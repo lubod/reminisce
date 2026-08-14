@@ -251,3 +251,75 @@ fn collect_pool_metrics(pool: &web::Data<MainDbPool>, max_size: usize) {
         metrics::DB_POOL_UTILIZATION.set(util as i64); // Casting to i64 for IntGauge
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_family_counter_and_gauge() {
+        let mut fam = prometheus::proto::MetricFamily::default();
+        let mut m = prometheus::proto::Metric::default();
+        let mut c = prometheus::proto::Counter::default();
+        c.set_value(42.0);
+        m.set_counter(c);
+        fam.mut_metric().push(m);
+
+        assert_eq!(family_counter(&fam), 42.0);
+
+        let mut gfam = prometheus::proto::MetricFamily::default();
+        let mut gm = prometheus::proto::Metric::default();
+        let mut g = prometheus::proto::Gauge::default();
+        g.set_value(123.5);
+        gm.set_gauge(g);
+        gfam.mut_metric().push(gm);
+
+        assert_eq!(family_gauge(&gfam), 123.5);
+    }
+
+    #[test]
+    fn test_hist_percentile_ms_calculation() {
+        let mut h = prometheus::proto::Histogram::default();
+        assert!(hist_percentile_ms(&h, 0.95).is_none());
+
+        h.set_sample_count(100);
+        h.set_sample_sum(5.0);
+
+        let mut b1 = prometheus::proto::Bucket::default();
+        b1.set_upper_bound(0.05);
+        b1.set_cumulative_count(50);
+        h.mut_bucket().push(b1);
+
+        let mut b2 = prometheus::proto::Bucket::default();
+        b2.set_upper_bound(0.10);
+        b2.set_cumulative_count(95);
+        h.mut_bucket().push(b2);
+
+        let mut b3 = prometheus::proto::Bucket::default();
+        b3.set_upper_bound(0.50);
+        b3.set_cumulative_count(100);
+        h.mut_bucket().push(b3);
+
+        let p95 = hist_percentile_ms(&h, 0.95);
+        assert!(p95.is_some());
+        assert!((p95.unwrap() - 100.0).abs() < 1.0); // 0.10s = 100ms
+    }
+
+    #[test]
+    fn test_sampler_struct_initialization() {
+        let sampler = Sampler::new();
+        assert!(sampler.last_counters.is_empty());
+        assert!(sampler.last_tick.is_none());
+        assert!(sampler.last_backlog.is_none());
+        assert!(sampler.last_prune.is_none());
+    }
+
+    #[actix_web::test]
+    async fn test_pool_util_and_collect_pool_metrics() {
+        let (pool, _db) = crate::test_utils::setup_test_database_with_instance().await;
+        let main_pool = web::Data::new(crate::db::MainDbPool(pool));
+        let util = pool_util(&main_pool);
+        assert!(util >= 0.0);
+        collect_pool_metrics(&main_pool, 16);
+    }
+}

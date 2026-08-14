@@ -759,3 +759,62 @@ async fn test_media_thumbnails_media_type_table_scoped() {
     assert!(vids.contains(&"mt_vid_hash".to_string()), "media_type=video must include the video: {:?}", vids);
     assert!(!vids.contains(&"mt_img_hash".to_string()), "media_type=video must exclude images: {:?}", vids);
 }
+
+#[actix_web::test]
+#[serial]
+async fn test_generate_thumbnail_for_image_and_svg() {
+    use services::thumbnail::generate_thumbnail_for_image;
+    
+
+    let tmp = std::env::temp_dir().join("reminisce_thumb_test");
+    let _ = std::fs::create_dir_all(&tmp);
+    let out_jpg = tmp.join("thumb_test.jpg");
+
+    // 1. Regular JPG with orientation
+    let res = generate_thumbnail_for_image(
+        Path::new("tests/test_thumbnail.jpg"),
+        &out_jpg,
+        200,
+        Some(6),
+    ).await;
+    assert!(res.is_ok(), "thumbnail generation failed: {:?}", res);
+    assert!(out_jpg.exists());
+
+    // 2. SVG thumbnail generation
+    let svg_path = tmp.join("vector.svg");
+    std::fs::write(&svg_path, b"<svg width=\"100\" height=\"100\"><circle cx=\"50\" cy=\"50\" r=\"40\" fill=\"blue\"/></svg>").unwrap();
+    let out_svg_thumb = tmp.join("svg_thumb.jpg");
+    let res_svg = generate_thumbnail_for_image(
+        &svg_path,
+        &out_svg_thumb,
+        150,
+        None,
+    ).await;
+    assert!(res_svg.is_ok(), "svg thumbnail generation failed: {:?}", res_svg);
+    assert!(out_svg_thumb.exists());
+}
+
+#[actix_web::test]
+#[serial]
+async fn test_get_thumbnail_http_endpoint() {
+    let (pool, _test_db) = setup_test_database_with_instance().await;
+    let config = common::utils::create_test_config();
+    let main_pool = common::utils::wrap_main_pool(pool.clone());
+    let geotagging_pool = common::utils::create_geotagging_pool().await;
+
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(main_pool.clone()))
+            .app_data(web::Data::new(geotagging_pool.clone()))
+            .app_data(web::Data::new(config.clone()))
+            .service(services::thumbnail::get_thumbnail)
+    ).await;
+    let token = common::utils::create_test_jwt_token().await;
+
+    // 1. Non-existent thumbnail -> 404
+    let req = test::TestRequest::get().uri("/thumbnail/nonexistent_hash_12345")
+        .insert_header(("Authorization", format!("Bearer {}", token)))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), http::StatusCode::NOT_FOUND);
+}

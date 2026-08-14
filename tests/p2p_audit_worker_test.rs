@@ -1,3 +1,4 @@
+mod common;
 use np2p::crypto::NodeIdentity;
 use np2p::network::P2PService;
 use std::sync::Arc;
@@ -383,4 +384,32 @@ async fn test_sweep_storage_node_orphans_prunes_unreferenced() {
     assert!(!storage.exists(shard2), "orphan shard must be deleted from disk");
 
     let _ = std::fs::remove_dir_all(&tmp_dir);
+}
+
+#[tokio::test]
+#[serial]
+async fn test_start_audit_worker_lifecycle() {
+    use reminisce::p2p_audit_worker::start_audit_worker;
+    use tokio_util::sync::CancellationToken;
+    use std::time::Duration;
+
+    let (pool, _db) = setup_test_database_with_instance().await;
+    let config = common::utils::create_test_config();
+    let addr: std::net::SocketAddr = "127.0.0.1:0".parse().unwrap();
+    let identity = NodeIdentity::generate();
+    let p2p = Arc::new(P2PService::new(addr, identity).await.unwrap());
+
+    let token = CancellationToken::new();
+    let token_clone = token.clone();
+    let pool_clone = pool.clone();
+
+    let worker_handle = tokio::spawn(async move {
+        start_audit_worker(pool_clone, config, p2p, token_clone).await;
+    });
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    token.cancel();
+
+    let res = tokio::time::timeout(Duration::from_secs(2), worker_handle).await;
+    assert!(res.is_ok(), "audit worker exited cleanly upon cancellation");
 }

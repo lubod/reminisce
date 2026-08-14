@@ -106,7 +106,7 @@ export const ErrorsViewer: React.FC = observer(() => {
                         <span className="text-xs uppercase tracking-wider font-bold text-red-400">Errors</span>
                         <AlertCircle className="w-4 h-4 text-red-400" />
                     </div>
-                    <div className="text-2xl font-black text-red-300 mt-1">{systemStore.errorCounts.error}</div>
+                    <div className="text-2xl font-black text-red-300 mt-1">{systemStore.errorCounts?.error ?? 0}</div>
                     <div className="text-[10px] text-gray-500 font-medium mt-0.5">Last 5 minutes</div>
                 </button>
 
@@ -123,7 +123,7 @@ export const ErrorsViewer: React.FC = observer(() => {
                         <span className="text-xs uppercase tracking-wider font-bold text-amber-400">Warnings</span>
                         <AlertTriangle className="w-4 h-4 text-amber-400" />
                     </div>
-                    <div className="text-2xl font-black text-amber-300 mt-1">{systemStore.errorCounts.warn}</div>
+                    <div className="text-2xl font-black text-amber-300 mt-1">{systemStore.errorCounts?.warn ?? 0}</div>
                     <div className="text-[10px] text-gray-500 font-medium mt-0.5">Last 5 minutes</div>
                 </button>
 
@@ -140,7 +140,7 @@ export const ErrorsViewer: React.FC = observer(() => {
                         <span className="text-xs uppercase tracking-wider font-bold text-purple-400">Panics</span>
                         <ShieldAlert className="w-4 h-4 text-purple-400" />
                     </div>
-                    <div className="text-2xl font-black text-purple-300 mt-1">{systemStore.errorCounts.panic}</div>
+                    <div className="text-2xl font-black text-purple-300 mt-1">{systemStore.errorCounts?.panic ?? 0}</div>
                     <div className="text-[10px] text-gray-500 font-medium mt-0.5">Last 5 minutes</div>
                 </button>
             </div>

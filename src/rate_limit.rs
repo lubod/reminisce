@@ -368,5 +368,56 @@ mod tests {
             assert_eq!(a, shard_index(ip), "same IP must map to the same shard");
         }
     }
+
+    #[test]
+    fn test_is_private_or_local_branches() {
+        assert!(is_private_or_local("127.0.0.1".parse().unwrap()));
+        assert!(is_private_or_local("10.0.0.1".parse().unwrap()));
+        assert!(is_private_or_local("192.168.1.50".parse().unwrap()));
+        assert!(is_private_or_local("169.254.1.1".parse().unwrap()));
+        assert!(!is_private_or_local("8.8.8.8".parse().unwrap()));
+        assert!(is_private_or_local("::1".parse().unwrap()));
+        assert!(!is_private_or_local("2607:f8b0:4005:805::200e".parse().unwrap()));
+    }
+
+    #[actix_web::test]
+    async fn test_rate_limiter_middleware_actix_integration() {
+        use actix_web::{test, web, App, HttpResponse};
+
+        let app = test::init_service(
+            App::new()
+                .wrap(RateLimiter::new())
+                .route("/ping", web::get().to(|| async { HttpResponse::Ok().body("pong") }))
+                .route("/api/auth/login", web::post().to(|| async { HttpResponse::Ok().body("logged_in") }))
+                .route("/api/data", web::get().to(|| async { HttpResponse::Ok().body("data") }))
+        ).await;
+
+        // 1. Exempt route always succeeds
+        let req = test::TestRequest::get().uri("/ping").to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), actix_web::http::StatusCode::OK);
+
+        // 2. Normal data route succeeds
+        let req = test::TestRequest::get().uri("/api/data").to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), actix_web::http::StatusCode::OK);
+
+        // 3. Login route succeeds within 50 burst
+        for _ in 0..50 {
+            let req = test::TestRequest::post()
+                .uri("/api/auth/login")
+                .insert_header(("x-real-ip", "198.51.100.55"))
+                .to_request();
+            let _ = test::call_service(&app, req).await;
+        }
+
+        // 51st request should be throttled (429 Too Many Requests)
+        let req_over = test::TestRequest::post()
+            .uri("/api/auth/login")
+            .insert_header(("x-real-ip", "198.51.100.55"))
+            .to_request();
+        let resp_over = test::call_service(&app, req_over).await;
+        assert_eq!(resp_over.status(), actix_web::http::StatusCode::TOO_MANY_REQUESTS);
+    }
 }
 

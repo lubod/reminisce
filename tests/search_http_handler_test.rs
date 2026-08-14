@@ -219,3 +219,42 @@ async fn test_search_video_keyframes_validation_and_500() {
     let resp = authed_get!(&app2, "/search/video-keyframes?query=dog", &token).await;
     assert_eq!(resp.status(), http::StatusCode::INTERNAL_SERVER_ERROR);
 }
+
+#[actix_web::test]
+#[serial]
+async fn test_text_search_advanced_filters() {
+    let (pool, _db) = setup_test_database_with_instance().await;
+    seed_image(&pool, "img_flower", "beautiful red flower in garden", "pixel8").await;
+    seed_video(&pool, "vid_flower", "flower video clip", "pixel8").await;
+    seed_image_location(&pool, "img_flower_loc", 2.3522, 48.8566).await;
+
+    let config = common::utils::create_test_config();
+    let app = search_app!(pool, config);
+    let token = common::utils::create_test_jwt_token().await;
+
+    // 1. Filter by media_type=video
+    let resp = authed_get!(&app, "/search/images?query=flower&mode=text&media_type=video", &token).await;
+    assert_eq!(resp.status(), http::StatusCode::OK);
+    let body: serde_json::Value = test::read_body_json(resp).await;
+    let results = body["results"].as_array().unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0]["media_type"], "video");
+
+    // 2. Filter by media_type=image
+    let resp = authed_get!(&app, "/search/images?query=flower&mode=text&media_type=image", &token).await;
+    assert_eq!(resp.status(), http::StatusCode::OK);
+    let body: serde_json::Value = test::read_body_json(resp).await;
+    let results = body["results"].as_array().unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0]["media_type"], "image");
+
+    // 3. Filter by device_id
+    let resp = authed_get!(&app, "/search/images?query=flower&mode=text&device_id=pixel8", &token).await;
+    assert_eq!(resp.status(), http::StatusCode::OK);
+
+    // 4. Location filter near Paris
+    let resp = authed_get!(&app, "/search/images?query=sunny&mode=text&latitude=48.85&longitude=2.35&distance_km=10", &token).await;
+    assert_eq!(resp.status(), http::StatusCode::OK);
+    let body: serde_json::Value = test::read_body_json(resp).await;
+    assert!(!body["results"].as_array().unwrap().is_empty());
+}
