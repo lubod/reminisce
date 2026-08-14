@@ -92,6 +92,10 @@ pub enum Message {
     StorePinnedResponse { success: bool },
     GetPinnedObject { name: String, token: ShardToken },
     PinnedObjectResponse { data: Option<Vec<u8>> },
+
+    /// Request to list stored shard hashes on the node (optionally scoped by 2-hex prefix).
+    ListShardsRequest { prefix: Option<String>, token: ShardToken },
+    ListShardsResponse { prefix: Option<String>, shards: Vec<[u8; 32]>, available_space_bytes: u64 },
 }
 
 pub struct Protocol;

@@ -121,3 +121,52 @@ async fn handshake_is_acknowledged() {
         other => panic!("expected HandshakeAck, got {:?}", other),
     }
 }
+
+#[tokio::test]
+async fn list_and_delete_shards() {
+
+    let tmp = tempdir().unwrap();
+    let server_storage = DiskStorage::new(tmp.path()).await.unwrap();
+
+    // Store 2 test shards directly
+    let shard1: [u8; 32] = [0xabu8; 32];
+    let shard2: [u8; 32] = [0xacu8; 32];
+    server_storage.store(shard1, b"shard data 1").await.unwrap();
+    server_storage.store(shard2, b"shard data 2").await.unwrap();
+
+    let server_identity = Arc::new(NodeIdentity::generate());
+    let (server_id_hex, addr) = spawn_server(server_storage.clone(), server_identity, None).await;
+
+    let client_id = NodeIdentity::generate();
+    let client_node = Node::new("127.0.0.1:0".parse().unwrap(), client_id.clone()).unwrap();
+    let conn = client_node.connect(addr, &server_id_hex).await.expect("connect");
+
+    // 1. List shards (all)
+    let list_scope: [u8; 32] = blake3::hash(b"").into();
+    let list_token = client_id.create_shard_token(np2p::crypto::ShardOp::List, &list_scope);
+    {
+        let (mut send, mut recv) = conn.open_bi().await.unwrap();
+        Protocol::send(&mut send, &Message::ListShardsRequest { prefix: None, token: list_token }).await.unwrap();
+        let resp = Protocol::receive(&mut recv).await.unwrap();
+        if let Message::ListShardsResponse { shards, .. } = resp {
+            assert_eq!(shards.len(), 2);
+            assert!(shards.contains(&shard1));
+            assert!(shards.contains(&shard2));
+        } else { panic!("expected ListShardsResponse, got {:?}", resp); }
+    }
+
+    // 2. Delete shard1
+    let del_token = client_id.create_shard_token(np2p::crypto::ShardOp::Delete, &shard1);
+    {
+        let (mut send, mut recv) = conn.open_bi().await.unwrap();
+        Protocol::send(&mut send, &Message::DeleteShardRequest { shard_hash: shard1, token: del_token }).await.unwrap();
+        let resp = Protocol::receive(&mut recv).await.unwrap();
+        if let Message::DeleteShardResponse { success, .. } = resp {
+            assert!(success, "delete succeeded");
+        } else { panic!("expected DeleteShardResponse, got {:?}", resp); }
+    }
+
+    // 3. Verify shard1 is gone, shard2 remains
+    assert!(!server_storage.exists(shard1));
+    assert!(server_storage.exists(shard2));
+}

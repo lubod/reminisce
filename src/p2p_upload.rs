@@ -343,3 +343,49 @@ pub async fn read_full(file: &mut tokio::fs::File, buf: &mut [u8]) -> std::io::R
     }
     Ok(total)
 }
+
+/// Send a DeleteShardRequest to a remote node holding a shard (best-effort).
+pub async fn delete_shard_remote(
+    p2p_service: &Arc<P2PService>,
+    addr: SocketAddr,
+    _node_id: &str,
+    shard_hash_hex: &str,
+) -> Result<bool, String> {
+    let shard_hash_bytes: [u8; 32] = match hex::decode(shard_hash_hex).ok().and_then(|b| b.try_into().ok()) {
+        Some(h) => h,
+        None => return Err(format!("invalid shard hash hex {}", shard_hash_hex)),
+    };
+
+    let conn = p2p_service.connect_to_addr(addr).await.map_err(|e| e.to_string())?;
+    let (mut send, mut recv) = conn.open_bi().await.map_err(|e| e.to_string())?;
+    let token = p2p_service.identity().create_shard_token(np2p::crypto::ShardOp::Delete, &shard_hash_bytes);
+    Protocol::send(&mut send, &Message::DeleteShardRequest { shard_hash: shard_hash_bytes, token }).await.map_err(|e| e.to_string())?;
+    let msg = Protocol::receive(&mut recv).await.map_err(|e| e.to_string())?;
+    let _ = send.finish();
+    conn.close(0u32.into(), b"done");
+    match msg {
+        Message::DeleteShardResponse { success, .. } => Ok(success),
+        other => Err(format!("unexpected delete response: {:?}", other)),
+    }
+}
+
+/// Request the list of stored shard hashes from a remote node, optionally scoped by prefix.
+pub async fn list_remote_shards(
+    p2p_service: &Arc<P2PService>,
+    addr: SocketAddr,
+    prefix: Option<String>,
+) -> Result<(Vec<[u8; 32]>, u64), String> {
+    let conn = p2p_service.connect_to_addr(addr).await.map_err(|e| e.to_string())?;
+    let (mut send, mut recv) = conn.open_bi().await.map_err(|e| e.to_string())?;
+    let scope_bytes: [u8; 32] = blake3::hash(prefix.as_deref().unwrap_or("").as_bytes()).into();
+    let token = p2p_service.identity().create_shard_token(np2p::crypto::ShardOp::List, &scope_bytes);
+    Protocol::send(&mut send, &Message::ListShardsRequest { prefix, token }).await.map_err(|e| e.to_string())?;
+    let msg = Protocol::receive(&mut recv).await.map_err(|e| e.to_string())?;
+    let _ = send.finish();
+    conn.close(0u32.into(), b"done");
+    match msg {
+        Message::ListShardsResponse { shards, available_space_bytes, .. } => Ok((shards, available_space_bytes)),
+        Message::Error { message, .. } => Err(message),
+        other => Err(format!("unexpected list shards response: {:?}", other)),
+    }
+}

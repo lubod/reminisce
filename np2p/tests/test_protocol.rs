@@ -321,3 +321,30 @@ fn empty_payload_produces_deserialization_error() {
     let result = bincode::deserialize::<Message>(&[]);
     assert!(result.is_err());
 }
+
+#[test]
+fn rt_list_shards_request() {
+    let identity = np2p::crypto::NodeIdentity::generate();
+    let token = identity.create_shard_token(np2p::crypto::ShardOp::List, &[0u8; 32]);
+    let msg = Message::ListShardsRequest { prefix: Some("ab".to_string()), token: token.clone() };
+    let rt = roundtrip(&msg);
+    if let Message::ListShardsRequest { prefix, token: rt_token } = rt {
+        assert_eq!(prefix, Some("ab".to_string()));
+        assert_eq!(rt_token.owner_node_id, token.owner_node_id);
+    } else { panic!("wrong variant"); }
+}
+
+#[test]
+fn rt_list_shards_response() {
+    let msg = Message::ListShardsResponse {
+        prefix: Some("ab".to_string()),
+        shards: vec![[1u8; 32], [2u8; 32]],
+        available_space_bytes: 1024 * 1024 * 100,
+    };
+    let rt = roundtrip(&msg);
+    if let Message::ListShardsResponse { prefix, shards, available_space_bytes } = rt {
+        assert_eq!(prefix, Some("ab".to_string()));
+        assert_eq!(shards.len(), 2);
+        assert_eq!(available_space_bytes, 1024 * 1024 * 100);
+    } else { panic!("wrong variant"); }
+}

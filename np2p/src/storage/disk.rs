@@ -176,6 +176,41 @@ impl DiskStorage {
         Ok(())
     }
 
+    /// Lists stored shard hashes, optionally filtered by a 2-hex-character prefix.
+    pub async fn list_shards(&self, prefix: Option<&str>) -> Result<Vec<[u8; 32]>> {
+        let mut hashes = Vec::new();
+        let prefixes: Vec<String> = match prefix {
+            Some(p) => vec![p.to_string()],
+            None => (0..=255).map(|i| format!("{:02x}", i)).collect(),
+        };
+
+        for p in prefixes {
+            let dir = self.base_path.join(&p);
+            if !dir.exists() {
+                continue;
+            }
+            let mut entries = match fs::read_dir(&dir).await {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                let name = entry.file_name();
+                let name_str = name.to_string_lossy();
+                if name_str.ends_with(".tmp") || name_str.len() != 62 {
+                    continue;
+                }
+                let full_hex = format!("{}{}", p, name_str);
+                if let Ok(hash_bytes) = hex::decode(&full_hex) {
+                    if let Ok(arr) = hash_bytes.try_into() {
+                        hashes.push(arr);
+                    }
+                }
+            }
+        }
+        hashes.sort();
+        Ok(hashes)
+    }
+
     /// Path for a name-addressed pinned object, keyed by blake3(name).
     fn pinned_path(&self, name: &str) -> PathBuf {
         let hash_hex = hex::encode(blake3::hash(name.as_bytes()).as_bytes());

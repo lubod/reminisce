@@ -1,3 +1,6 @@
+use np2p::crypto::NodeIdentity;
+use np2p::network::P2PService;
+use std::sync::Arc;
 /// Integration tests for p2p_audit_worker — focused on the DB-only helpers
 /// (orphan cleanup, under-sharded file detection) that can be verified without
 /// a live P2P network.
@@ -301,4 +304,83 @@ async fn test_cleanup_purges_shards_of_deleted_video() {
 
     let deleted = cleanup_orphaned_shards(&pool).await.expect("cleanup should succeed");
     assert_eq!(deleted, 2, "deleted video shards purged");
+}
+
+#[tokio::test]
+#[serial]
+async fn test_sweep_storage_node_orphans_prunes_unreferenced() {
+    use reminisce::p2p_audit_worker::sweep_storage_node_orphans;
+    use np2p::storage::DiskStorage;
+    use np2p::network::{Node, ConnectionHandler};
+
+    let (pool, _db) = setup_test_database_with_instance().await;
+    let client = pool.get().await.unwrap();
+
+    // 1. Setup local storage node
+    let tmp_dir = std::env::temp_dir().join(format!("test_shards_{}", uuid::Uuid::new_v4()));
+    let storage: DiskStorage = DiskStorage::new(&tmp_dir).await.unwrap();
+    let server_identity = Arc::new(NodeIdentity::generate());
+    let server_node_id = hex::encode(server_identity.node_id());
+
+    let server_node = Node::new("127.0.0.1:0".parse().unwrap(), (*server_identity).clone()).unwrap();
+    let server_addr = server_node.local_addr().unwrap();
+
+    let storage_clone = storage.clone();
+    let server_id_clone = server_identity.clone();
+    tokio::spawn(async move {
+        while let Some(incoming) = server_node.accept().await {
+            let s = storage_clone.clone();
+            let id = server_id_clone.clone();
+            tokio::spawn(async move {
+                if let Ok(conn) = incoming.await {
+                    let handler = ConnectionHandler::new(conn, s, id);
+                    handler.run().await;
+                }
+            });
+        }
+    });
+
+    // 2. Setup client P2P service
+    let client_identity = NodeIdentity::generate();
+    let p2p_service = P2PService::new("127.0.0.1:0".parse().unwrap(), client_identity).await.unwrap();
+    p2p_service.registry.upsert(server_node_id.clone(), server_addr);
+    let p2p_service = Arc::new(p2p_service);
+
+    // 3. Register node in database
+    client.execute(
+        "INSERT INTO p2p_nodes (node_id, public_addr, is_active) VALUES ($1, $2, true)",
+        &[&server_node_id, &server_addr.to_string()],
+    ).await.unwrap();
+
+    // 4. Store 2 shards on the node:
+    // Shard 1: Referenced in DB (valid)
+    let shard1: [u8; 32] = [0x55u8; 32];
+    let shard1_hex = hex::encode(shard1);
+    storage.store(shard1, b"valid data".as_slice()).await.unwrap();
+
+    let uid = Uuid::parse_str(TEST_USER_ID).unwrap();
+    client.execute(
+        "INSERT INTO images (user_id, deviceid, hash, name, ext, type, has_thumbnail, p2p_synced_at)
+         VALUES ($1, 'test', 'img_valid_123', 'img.jpg', 'jpg', 'camera', false, NOW())",
+        &[&uid],
+    ).await.unwrap();
+    client.execute(
+        "INSERT INTO p2p_shards (file_hash, shard_index, node_id, shard_hash)
+         VALUES ('img_valid_123', 0, $1, $2)",
+        &[&server_node_id, &shard1_hex],
+    ).await.unwrap();
+
+    // Shard 2: Unreferenced on node (orphan)
+    let shard2: [u8; 32] = [0x77u8; 32];
+    storage.store(shard2, b"orphan data".as_slice()).await.unwrap();
+
+    // 5. Run sweep
+    let pruned = sweep_storage_node_orphans(&pool, &p2p_service).await.expect("sweep should succeed");
+    assert_eq!(pruned, 1, "exactly 1 orphan shard pruned");
+
+    // 6. Assert shard1 exists, shard2 was deleted
+    assert!(storage.exists(shard1), "valid shard must remain on disk");
+    assert!(!storage.exists(shard2), "orphan shard must be deleted from disk");
+
+    let _ = std::fs::remove_dir_all(&tmp_dir);
 }

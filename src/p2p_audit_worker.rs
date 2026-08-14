@@ -126,10 +126,36 @@ async fn perform_audit(
     Ok(true)
 }
 
-/// Delete p2p_shards rows whose file_hash has no matching non-deleted image/video.
+/// Delete p2p_shards rows whose file_hash has no matching non-deleted image/video,
+/// optionally notifying remote storage nodes to delete the physical shard files.
 /// Returns the count of purged rows.
-pub async fn cleanup_orphaned_shards(pool: &Pool) -> Result<u64, String> {
+pub async fn cleanup_orphaned_shards_with_service(
+    pool: &Pool,
+    p2p_service: Option<&Arc<P2PService>>,
+) -> Result<u64, String> {
     let client = pool.get().await.map_err(|e| e.to_string())?;
+    let rows = client.query(
+        "SELECT node_id, shard_hash
+         FROM p2p_shards
+         WHERE file_hash NOT IN (
+             SELECT hash FROM images WHERE deleted_at IS NULL
+             UNION ALL
+             SELECT hash FROM videos WHERE deleted_at IS NULL
+         )
+         LIMIT 1000",
+        &[],
+    ).await.map_err(|e| e.to_string())?;
+
+    if let Some(p2p) = p2p_service {
+        for row in &rows {
+            let node_id: String = row.get(0);
+            let shard_hash: String = row.get(1);
+            if let Some(addr) = crate::shard_rebalance_worker::lookup_node_addr(pool, p2p, &node_id).await {
+                let _ = crate::p2p_upload::delete_shard_remote(p2p, addr, &node_id, &shard_hash).await;
+            }
+        }
+    }
+
     client.execute(
         "DELETE FROM p2p_shards
          WHERE file_hash NOT IN (
@@ -139,6 +165,86 @@ pub async fn cleanup_orphaned_shards(pool: &Pool) -> Result<u64, String> {
          )",
         &[],
     ).await.map_err(|e| e.to_string())
+}
+
+/// Delete p2p_shards rows whose file_hash has no matching non-deleted image/video.
+/// Returns the count of purged rows.
+pub async fn cleanup_orphaned_shards(pool: &Pool) -> Result<u64, String> {
+    cleanup_orphaned_shards_with_service(pool, None).await
+}
+
+/// Proactively audits each registered storage node, lists stored shard hashes,
+/// compares them against Postgres (p2p_shards + db_backup_shards), and deletes
+/// any unreferenced shards.
+pub async fn sweep_storage_node_orphans(
+    pool: &Pool,
+    p2p_service: &Arc<P2PService>,
+) -> Result<usize, String> {
+    let client = pool.get().await.map_err(|e| e.to_string())?;
+    let node_rows = client.query(
+        "SELECT node_id, public_addr FROM p2p_nodes WHERE is_active = true",
+        &[],
+    ).await.map_err(|e| e.to_string())?;
+
+    let mut total_pruned = 0;
+
+    for node_row in node_rows {
+        let node_id: String = node_row.get(0);
+        let addr = match crate::shard_rebalance_worker::lookup_node_addr(pool, p2p_service, &node_id).await {
+            Some(a) => a,
+            None => continue,
+        };
+
+        info!("Auditing storage node {} ({}) for unreferenced shards", node_id, addr);
+
+        for i in 0u8..=255 {
+            let prefix = format!("{:02x}", i);
+            let (shards, available_space) = match crate::p2p_upload::list_remote_shards(p2p_service, addr, Some(prefix.clone())).await {
+                Ok(res) => res,
+                Err(e) => {
+                    warn!("Failed to list shards (prefix {}) from node {}: {}", prefix, node_id, e);
+                    continue;
+                }
+            };
+
+            crate::metrics::record_peer_write(&node_id, true, Some(available_space));
+
+            if shards.is_empty() {
+                continue;
+            }
+
+            let hex_shards: Vec<String> = shards.into_iter().map(|s| hex::encode(s)).collect();
+
+            let valid_rows = client.query(
+                "SELECT shard_hash FROM p2p_shards WHERE shard_hash = ANY($1)
+                 UNION
+                 SELECT shard_hash FROM db_backup_shards WHERE shard_hash = ANY($1)",
+                &[&hex_shards],
+            ).await.map_err(|e| e.to_string())?;
+
+            let valid_set: std::collections::HashSet<String> = valid_rows.into_iter().map(|r| r.get(0)).collect();
+
+            for shard_hash_hex in hex_shards {
+                if !valid_set.contains(&shard_hash_hex) {
+                    match crate::p2p_upload::delete_shard_remote(p2p_service, addr, &node_id, &shard_hash_hex).await {
+                        Ok(true) => {
+                            total_pruned += 1;
+                            P2P_ORPHANED_SHARDS_CLEANED_TOTAL.inc();
+                            info!("Pruned orphan shard {} from node {}", &shard_hash_hex[..16.min(shard_hash_hex.len())], node_id);
+                        }
+                        Ok(false) => {
+                            warn!("Node {} refused to delete orphan shard {}", node_id, &shard_hash_hex[..16.min(shard_hash_hex.len())]);
+                        }
+                        Err(e) => {
+                            warn!("Failed to delete orphan shard {} from node {}: {}", &shard_hash_hex[..16.min(shard_hash_hex.len())], node_id, e);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(total_pruned)
 }
 
 /// Return hashes of files marked as p2p_synced but with fewer than 3 shards in p2p_shards.
@@ -172,10 +278,15 @@ async fn check_consistency(
     config: &Config,
     p2p_service: &Arc<P2PService>,
 ) -> Result<bool, String> {
-    let deleted = cleanup_orphaned_shards(pool).await?;
+    let deleted = cleanup_orphaned_shards_with_service(pool, Some(p2p_service)).await?;
     if deleted > 0 {
         info!("Consistency check: purged {} orphaned shard records for deleted files", deleted);
         P2P_ORPHANED_SHARDS_CLEANED_TOTAL.inc_by(deleted);
+    }
+
+    let pruned = sweep_storage_node_orphans(pool, p2p_service).await.unwrap_or(0);
+    if pruned > 0 {
+        info!("Consistency check: pruned {} unreferenced shard files across storage nodes", pruned);
     }
 
     let file_hashes = find_undersharded_files(pool, 10).await?;

@@ -19,7 +19,7 @@ use crate::metrics::{
 use crate::p2p_upload::{self, SEGMENT_THRESHOLD, SHARD_COUNT};
 use deadpool_postgres::Pool;
 use log::{error, info, warn};
-use np2p::network::{Message, P2PService, Protocol};
+use np2p::network::{Message, P2PService};
 use np2p::storage::StorageEngine;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -412,25 +412,7 @@ async fn delete_shard_remote(
         }
     };
 
-    let shard_hash_bytes: [u8; 32] = match hex::decode(shard_hash_hex).ok().and_then(|b| b.try_into().ok()) {
-        Some(h) => h,
-        None => { warn!("Retention: invalid shard hash hex {}", shard_hash_hex); return; }
-    };
-
-    let result: Result<bool, String> = async {
-        let conn = p2p_service.connect_to_addr(addr).await.map_err(|e| e.to_string())?;
-        let (mut send, mut recv) = conn.open_bi().await.map_err(|e| e.to_string())?;
-        let token = p2p_service.identity().create_shard_token(np2p::crypto::ShardOp::Delete, &shard_hash_bytes);
-        Protocol::send(&mut send, &Message::DeleteShardRequest { shard_hash: shard_hash_bytes, token }).await.map_err(|e| e.to_string())?;
-        let msg = Protocol::receive(&mut recv).await.map_err(|e| e.to_string())?;
-        let _ = send.finish();
-        conn.close(0u32.into(), b"done");
-        match msg {
-            Message::DeleteShardResponse { success, .. } => Ok(success),
-            other => Err(format!("unexpected delete response: {:?}", other)),
-        }
-    }.await;
-
+    let result = crate::p2p_upload::delete_shard_remote(p2p_service, addr, node_id, shard_hash_hex).await;
     match result {
         Ok(true) => info!("Retention: deleted shard {} from node {}", &shard_hash_hex[..16.min(shard_hash_hex.len())], node_id),
         Ok(false) => warn!("Retention: node {} refused to delete shard {}", node_id, &shard_hash_hex[..16.min(shard_hash_hex.len())]),

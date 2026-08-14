@@ -242,6 +242,26 @@ impl ConnectionHandler {
                 }
             }
 
+            Message::ListShardsRequest { prefix, token } => {
+                let scope_bytes: [u8; 32] = blake3::hash(prefix.as_deref().unwrap_or("").as_bytes()).into();
+                if crate::crypto::verify_shard_token(&token, crate::crypto::ShardOp::List, &scope_bytes, allowed_owner_id.as_ref()) {
+                    let shards = storage.list_shards(prefix.as_deref()).await.unwrap_or_default();
+                    let response = Message::ListShardsResponse {
+                        prefix,
+                        shards,
+                        available_space_bytes: storage.available_space(),
+                    };
+                    Protocol::send(&mut send, &response).await?;
+                } else {
+                    warn!("ListShardsRequest: token verification failed");
+                    let response = Message::Error {
+                        code: 401,
+                        message: "Unauthorized shard listing".to_string(),
+                    };
+                    Protocol::send(&mut send, &response).await?;
+                }
+            }
+
             _ => {
                 warn!("[CONN] Received unexpected or unhandled message type");
                 let response = Message::Error {

@@ -366,6 +366,7 @@ pub enum ShardOp {
     Store,
     Retrieve,
     Delete,
+    List,
 }
 
 impl ShardOp {
@@ -375,6 +376,7 @@ impl ShardOp {
             ShardOp::Store => 0x01,
             ShardOp::Retrieve => 0x02,
             ShardOp::Delete => 0x03,
+            ShardOp::List => 0x04,
         }
     }
 }
