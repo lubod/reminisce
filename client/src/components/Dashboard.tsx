@@ -8,6 +8,7 @@ import { ServerImportModal } from "./ServerImportModal";
 import { AndroidConnectionQR } from "./AndroidConnectionQR";
 import { UserManagement } from "./UserManagement";
 import { LogViewer } from "./System/LogViewer";
+import { ErrorsViewer } from "./System/ErrorsViewer";
 import { Charts } from "./System/Charts";
 
 export const Dashboard = observer(() => {
@@ -541,35 +542,9 @@ export const Dashboard = observer(() => {
                                     )}
                                 </div>
 
-                                <div className="bg-gray-800 shadow-xl rounded-xl p-8 border border-gray-700">
-                                    <h2 className="text-xl font-bold text-gray-100 mb-6 flex items-center"><AlertTriangle className="w-6 h-6 text-red-400 mr-3" /> Recent Errors</h2>
-                                    <div className="grid grid-cols-3 gap-4 mb-6 max-w-md">
-                                        <div className="p-4 bg-red-950/50 rounded-xl border border-red-800 text-center">
-                                            <div className="text-3xl font-black text-red-400">{systemStore.errorCounts.error}</div>
-                                            <div className="text-[10px] text-gray-400 uppercase font-bold mt-1">errors / 5m</div>
-                                        </div>
-                                        <div className="p-4 bg-amber-950/50 rounded-xl border border-amber-800 text-center">
-                                            <div className="text-3xl font-black text-amber-400">{systemStore.errorCounts.warn}</div>
-                                            <div className="text-[10px] text-gray-400 uppercase font-bold mt-1">warnings / 5m</div>
-                                        </div>
-                                        <div className="p-4 bg-purple-950/50 rounded-xl border border-purple-800 text-center">
-                                            <div className="text-3xl font-black text-purple-400">{systemStore.errorCounts.panic}</div>
-                                            <div className="text-[10px] text-gray-400 uppercase font-bold mt-1">panics / 5m</div>
-                                        </div>
-                                    </div>
-                                    <div className="space-y-1">
-                                        {systemStore.errors.length === 0 ? (
-                                            <div className="text-gray-500 italic">No errors in the recent window.</div>
-                                        ) : (
-                                            systemStore.errors.slice(0, 8).map((e, i) => (
-                                                <div key={`${e.timestamp}-${i}`} className="flex gap-2 text-xs font-mono border-b border-gray-700/60 pb-1">
-                                                    <span className="text-red-400 shrink-0">{e.level}</span>
-                                                    <span className="text-gray-500 shrink-0">{e.target}</span>
-                                                    <span className="text-gray-200 break-all">{e.message}</span>
-                                                </div>
-                                            ))
-                                        )}
-                                    </div>
+                                                                <div className="bg-gray-800 shadow-xl rounded-xl p-8 border border-gray-700">
+                                    <h2 className="text-xl font-bold text-gray-100 mb-6 flex items-center"><AlertTriangle className="w-6 h-6 text-red-400 mr-3" /> Recent Errors & Telemetry</h2>
+                                    <ErrorsViewer />
                                 </div>
 
                                 <div className="bg-gray-800 shadow-xl rounded-xl p-8 border border-gray-700">

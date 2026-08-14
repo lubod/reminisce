@@ -295,9 +295,22 @@ async fn check_consistency(
         return Ok(false);
     }
 
+    let client = pool.get().await.map_err(|e| e.to_string())?;
     info!("Consistency check: Found {} files with missing/incomplete shards", file_hashes.len());
 
     for file_hash in file_hashes {
+        let existing_count: i64 = client.query_one(
+            "SELECT count(*) FROM p2p_shards WHERE file_hash = $1",
+            &[&file_hash],
+        ).await.map_err(|e| e.to_string())?.get(0);
+
+        if existing_count == 0 {
+            info!("Resetting p2p_synced_at for un-sharded file {} to trigger fresh replication", file_hash);
+            let _ = client.execute("UPDATE images SET p2p_synced_at = NULL WHERE hash = $1", &[&file_hash]).await;
+            let _ = client.execute("UPDATE videos SET p2p_synced_at = NULL WHERE hash = $1", &[&file_hash]).await;
+            continue;
+        }
+
         info!("Consistency check: Fixing missing shards for file {}", file_hash);
         for i in 0..SHARD_COUNT {
             match repair_file(pool, config, p2p_service, &file_hash, i).await {
@@ -322,9 +335,23 @@ async fn repair_file(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let client = pool.get().await?;
 
-    // Determine the correct target node for this shard using live registry peers
-    let active_nodes: Vec<(String, std::net::SocketAddr)> = p2p_service.registry.all()
+    // Determine the correct target node for this shard using live registry peers or DB fallback
+    let mut active_nodes: Vec<(String, std::net::SocketAddr)> = p2p_service.registry.all()
         .into_iter().map(|p| (p.node_id, p.addr)).collect();
+
+    if active_nodes.is_empty() {
+        let node_rows = client.query(
+            "SELECT node_id FROM p2p_nodes WHERE is_active = true",
+            &[],
+        ).await?;
+        for row in node_rows {
+            let nid: String = row.get(0);
+            if let Some(addr) = crate::shard_rebalance_worker::lookup_node_addr(pool, p2p_service, &nid).await {
+                active_nodes.push((nid, addr));
+            }
+        }
+    }
+
     if active_nodes.len() < MIN_NODES_REQUIRED {
         return Err("Not enough active nodes for repair".into());
     }
