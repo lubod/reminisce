@@ -55,6 +55,7 @@ async fn perform_audit(
     p2p_service: &Arc<P2PService>,
 ) -> Result<bool, String> {
     let _lock = crate::utils::P2P_WORKER_LOCK.lock().await;
+    crate::shard_rebalance_worker::sync_db_nodes_to_registry(pool, p2p_service).await;
     let client = pool.get().await.map_err(|e| e.to_string())?;
     let rows = client.query(
         "SELECT id, file_hash, shard_index, node_id, shard_hash
@@ -278,6 +279,7 @@ async fn check_consistency(
     config: &Config,
     p2p_service: &Arc<P2PService>,
 ) -> Result<bool, String> {
+    crate::shard_rebalance_worker::sync_db_nodes_to_registry(pool, p2p_service).await;
     let deleted = cleanup_orphaned_shards_with_service(pool, Some(p2p_service)).await?;
     if deleted > 0 {
         info!("Consistency check: purged {} orphaned shard records for deleted files", deleted);

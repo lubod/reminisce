@@ -262,23 +262,42 @@ async fn retrieve_shard_from_old_node(
     }
 }
 
-/// Resolve a node's socket address: check in-memory registry first, then DB public_addr.
-pub async fn lookup_node_addr(pool: &Pool, p2p_service: &Arc<P2PService>, node_id: &str) -> Option<SocketAddr> {
-    // Fast path: in-memory registry
-    if let Some(peer) = p2p_service.registry.get(node_id) {
-        return Some(peer.addr);
+/// Sync all active nodes from the database into the in-memory P2P service registry.
+pub async fn sync_db_nodes_to_registry(pool: &Pool, p2p_service: &Arc<P2PService>) {
+    if let Ok(client) = pool.get().await {
+        if let Ok(rows) = client.query(
+            "SELECT node_id, public_addr FROM p2p_nodes WHERE is_active = true",
+            &[],
+        ).await {
+            for row in rows {
+                let node_id: String = row.get(0);
+                let addr_str: String = row.get(1);
+                if let Ok(addr) = addr_str.parse::<SocketAddr>() {
+                    p2p_service.registry.upsert(node_id, addr);
+                }
+            }
+        }
     }
-    // Slow path: DB
+}
+
+/// Resolve a node's socket address: check DB public_addr and update in-memory registry, then fallback to in-memory registry.
+pub async fn lookup_node_addr(pool: &Pool, p2p_service: &Arc<P2PService>, node_id: &str) -> Option<SocketAddr> {
+    // 1. Check DB first (canonical active IP)
     if let Ok(client) = pool.get().await {
         if let Ok(Some(row)) = client.query_opt(
-            "SELECT public_addr FROM p2p_nodes WHERE node_id = $1",
+            "SELECT public_addr FROM p2p_nodes WHERE node_id = $1 AND is_active = true",
             &[&node_id],
         ).await {
             let addr_str: String = row.get(0);
-            if let Ok(addr) = addr_str.parse() {
+            if let Ok(addr) = addr_str.parse::<SocketAddr>() {
+                p2p_service.registry.upsert(node_id.to_string(), addr);
                 return Some(addr);
             }
         }
+    }
+    // 2. Fallback to in-memory registry
+    if let Some(peer) = p2p_service.registry.get(node_id) {
+        return Some(peer.addr);
     }
     None
 }
