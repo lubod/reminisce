@@ -213,7 +213,7 @@ pub async fn sweep_storage_node_orphans(
                 continue;
             }
 
-            let hex_shards: Vec<String> = shards.into_iter().map(|s| hex::encode(s)).collect();
+            let hex_shards: Vec<String> = shards.into_iter().map(hex::encode).collect();
 
             let valid_rows = client.query(
                 "SELECT shard_hash FROM p2p_shards WHERE shard_hash = ANY($1)
