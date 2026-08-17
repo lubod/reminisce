@@ -20,7 +20,7 @@ const UPLOAD_STREAM_THRESHOLD: usize = 64 * 1024 * 1024; // 64 MB — stay under
 const UPLOAD_CHUNK_SIZE: usize = 32 * 1024 * 1024;       // 32 MB chunks
 
 /// Sync dynamically discovered peers into p2p_nodes.
-/// Upserts active nodes; marks any node not currently in the registry as inactive.
+/// Upserts active nodes and marks stale nodes inactive only after 10m of inactivity.
 pub async fn ensure_peers_registered(pool: &Pool, nodes: &[(String, SocketAddr)]) -> Result<(), String> {
     let client = pool.get().await.map_err(|e| e.to_string())?;
 
@@ -33,21 +33,11 @@ pub async fn ensure_peers_registered(pool: &Pool, nodes: &[(String, SocketAddr)]
         ).await.map_err(|e| format!("Failed to upsert peer {}: {}", node_id, e))?;
     }
 
-    // Mark peers not currently seen as inactive
-    if !nodes.is_empty() {
-        let placeholders: Vec<String> = nodes.iter().enumerate()
-            .map(|(i, _)| format!("${}", i + 1))
-            .collect();
-        let query = format!(
-            "UPDATE p2p_nodes SET is_active = FALSE WHERE node_id NOT IN ({})",
-            placeholders.join(", ")
-        );
-        let node_ids: Vec<&str> = nodes.iter().map(|(id, _)| id.as_str()).collect();
-        let params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = node_ids.iter()
-            .map(|id| id as &(dyn tokio_postgres::types::ToSql + Sync))
-            .collect();
-        client.execute(&query, &params).await.map_err(|e| e.to_string())?;
-    }
+    // Mark peers that have not been seen in the last 10 minutes as inactive
+    client.execute(
+        "UPDATE p2p_nodes SET is_active = FALSE WHERE last_seen < NOW() - INTERVAL '10 minutes'",
+        &[],
+    ).await.map_err(|e| e.to_string())?;
 
     Ok(())
 }
@@ -112,19 +102,30 @@ pub async fn rebalance_cycle(
     p2p_service: &Arc<P2PService>,
 ) -> Result<bool, String> {
     let _lock = crate::utils::P2P_WORKER_LOCK.lock().await;
-    // Get currently discovered peers and sync to DB
-    let active_nodes: Vec<(String, SocketAddr)> = p2p_service.registry.all()
+    // Sync discovered peers to DB and DB peers to in-memory registry
+    let discovered: Vec<(String, SocketAddr)> = p2p_service.registry.all()
         .into_iter()
         .map(|p| (p.node_id, p.addr))
         .collect();
+    ensure_peers_registered(pool, &discovered).await?;
+    sync_db_nodes_to_registry(pool, p2p_service).await;
 
-    ensure_peers_registered(pool, &active_nodes).await?;
+    let client = pool.get().await.map_err(|e| e.to_string())?;
+
+    let active_node_rows = client.query(
+        "SELECT node_id, public_addr FROM p2p_nodes WHERE is_active = TRUE AND last_seen > NOW() - INTERVAL '10 minutes' ORDER BY node_id",
+        &[],
+    ).await.map_err(|e| e.to_string())?;
+
+    let active_nodes: Vec<(String, SocketAddr)> = active_node_rows.into_iter().filter_map(|r| {
+        let nid: String = r.get(0);
+        let addr_str: String = r.get(1);
+        addr_str.parse::<SocketAddr>().ok().map(|a| (nid, a))
+    }).collect();
 
     if active_nodes.len() < MIN_NODES_REQUIRED {
         return Ok(false);
     }
-
-    let client = pool.get().await.map_err(|e| e.to_string())?;
 
     let target_node_count = active_nodes.len().min(crate::p2p_upload::SHARD_COUNT) as i64;
     // Find files that need rebalancing: either have shards on inactive nodes, or not yet distributed across target nodes
