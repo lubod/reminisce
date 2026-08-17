@@ -156,7 +156,7 @@ pub async fn get_p2p_backup_status(
         (false, "critical")
     };
 
-    let target_nodes = active_peers.min(crate::p2p_upload::SHARD_COUNT).max(1);
+    let target_nodes = active_peers.clamp(1, crate::p2p_upload::SHARD_COUNT);
     let rebalance_row = client.query_one(
         "SELECT 
             count(*) as total_files,
