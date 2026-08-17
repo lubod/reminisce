@@ -54,8 +54,7 @@ async fn perform_audit(
     config: &Config,
     p2p_service: &Arc<P2PService>,
 ) -> Result<bool, String> {
-    let _lock = crate::utils::P2P_WORKER_LOCK.lock().await;
-    crate::shard_rebalance_worker::sync_db_nodes_to_registry(pool, p2p_service).await;
+        crate::shard_rebalance_worker::sync_db_nodes_to_registry(pool, p2p_service).await;
     let client = pool.get().await.map_err(|e| e.to_string())?;
     let rows = client.query(
         "SELECT id, file_hash, shard_index, node_id, shard_hash

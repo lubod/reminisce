@@ -54,10 +54,11 @@ pub async fn run_full_rebalance(
         match rebalance_cycle(pool, config, p2p_service).await {
             Ok(true) => {
                 total_batches += 1;
+                info!("Full rebalance sweep: completed batch {} (~{} files evaluated)", total_batches, total_batches * (REBALANCE_BATCH_SIZE as usize));
                 tokio::task::yield_now().await;
             }
             Ok(false) => {
-                info!("Full rebalance sweep completed. Processed {} batches.", total_batches);
+                info!("Full rebalance sweep completed. Processed {} total batches.", total_batches);
                 break;
             }
             Err(e) => {
@@ -101,8 +102,7 @@ pub async fn rebalance_cycle(
     config: &Config,
     p2p_service: &Arc<P2PService>,
 ) -> Result<bool, String> {
-    let _lock = crate::utils::P2P_WORKER_LOCK.lock().await;
-    // Sync discovered peers to DB and DB peers to in-memory registry
+        // Sync discovered peers to DB and DB peers to in-memory registry
     let discovered: Vec<(String, SocketAddr)> = p2p_service.registry.all()
         .into_iter()
         .map(|p| (p.node_id, p.addr))
@@ -143,6 +143,8 @@ pub async fn rebalance_cycle(
     if rows.is_empty() {
         return Ok(false);
     }
+
+    info!("Rebalancing batch of {} files across {} active nodes ({:?})", rows.len(), active_nodes.len(), active_nodes.iter().map(|n| n.1.to_string()).collect::<Vec<_>>());
 
     for row in &rows {
         let file_hash: String = row.get(0);
