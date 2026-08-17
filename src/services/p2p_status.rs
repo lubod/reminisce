@@ -9,6 +9,16 @@ use np2p::network::P2PService;
 use std::sync::Arc;
 use hex;
 
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
+pub struct RebalanceProgress {
+    pub is_active: bool,
+    pub total_files: i64,
+    pub balanced_files: i64,
+    pub unbalanced_files: i64,
+    pub progress_percent: f64,
+    pub target_nodes: usize,
+}
+
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct P2PBackupStatusResponse {
     pub local_peer_id: String,
@@ -32,6 +42,7 @@ pub struct P2PBackupStatusResponse {
     pub db_backups_count: i64,
     pub db_backups_total_bytes: i64,
     pub db_backups_latest_at: Option<String>,
+    pub rebalance: RebalanceProgress,
 }
 
 #[utoipa::path(
@@ -145,6 +156,40 @@ pub async fn get_p2p_backup_status(
         (false, "critical")
     };
 
+    let target_nodes = active_peers.min(crate::p2p_upload::SHARD_COUNT).max(1);
+    let rebalance_row = client.query_one(
+        "SELECT 
+            count(*) as total_files,
+            count(*) FILTER (WHERE node_count >= $1) as balanced_files,
+            count(*) FILTER (WHERE node_count < $1) as unbalanced_files
+         FROM (
+            SELECT file_hash, count(distinct node_id) as node_count 
+            FROM p2p_shards 
+            GROUP BY file_hash
+         ) sub;",
+        &[&(target_nodes as i64)],
+    ).await.map_err(|_| actix_web::error::ErrorInternalServerError("DB query error"))?;
+
+    let reb_total: i64 = rebalance_row.get(0);
+    let reb_balanced: i64 = rebalance_row.get(1);
+    let reb_unbalanced: i64 = rebalance_row.get(2);
+    let progress_percent = if reb_total > 0 {
+        ((reb_balanced as f64 / reb_total as f64) * 100.0 * 10.0).round() / 10.0
+    } else {
+        100.0
+    };
+
+    let is_rebalancing = crate::shard_rebalance_worker::REBALANCE_ACTIVE.load(std::sync::atomic::Ordering::Relaxed) || (reb_unbalanced > 0 && active_peers > 1);
+
+    let rebalance = RebalanceProgress {
+        is_active: is_rebalancing,
+        total_files: reb_total,
+        balanced_files: reb_balanced,
+        unbalanced_files: reb_unbalanced,
+        progress_percent,
+        target_nodes,
+    };
+
     let response = P2PBackupStatusResponse {
         local_peer_id: hex::encode(p2p_service.identity().node_id()),
         is_healthy,
@@ -160,6 +205,7 @@ pub async fn get_p2p_backup_status(
         db_backups_count,
         db_backups_total_bytes,
         db_backups_latest_at,
+        rebalance,
     };
 
     Ok(HttpResponse::Ok().json(response))

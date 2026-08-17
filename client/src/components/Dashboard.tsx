@@ -11,6 +11,7 @@ import { LogViewer } from "./System/LogViewer";
 import { ErrorsViewer } from "./System/ErrorsViewer";
 import { Charts } from "./System/Charts";
 import { AiModelsViewer } from "./System/AiModelsViewer";
+import { P2PRebalanceProgress } from "./System/P2PRebalanceProgress";
 
 export const Dashboard = observer(() => {
     const { statsStore, authStore, uiStore, systemStore } = useStore();
@@ -61,6 +62,23 @@ export const Dashboard = observer(() => {
             return () => clearInterval(interval);
         }
     }, [statsStore, systemStore, isAdmin]);
+
+    // Adaptive fast-polling on the backup tab when rebalancing is active
+    useEffect(() => {
+        if (isAdmin && activeTab === 'backup') {
+            void statsStore.fetchP2PBackupStatus();
+            void statsStore.fetchDiscoveredPeers();
+
+            const fastInterval = setInterval(() => {
+                const reb = statsStore.p2pBackupStatus?.rebalance;
+                if (reb?.is_active || (reb && reb.progress_percent < 100)) {
+                    void statsStore.fetchP2PBackupStatus();
+                    void statsStore.fetchDiscoveredPeers();
+                }
+            }, 4000);
+            return () => clearInterval(fastInterval);
+        }
+    }, [isAdmin, activeTab, statsStore]);
 
     // Update local state when settings are loaded
     useEffect(() => {
@@ -442,6 +460,9 @@ export const Dashboard = observer(() => {
                                             )}
                                         </div>
                                     </div>
+
+                                    {/* Mesh Shard Distribution & Rebalance Progress */}
+                                    <P2PRebalanceProgress />
 
                                     {/* Engine info + Peers */}
                                     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

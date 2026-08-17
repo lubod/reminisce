@@ -15,6 +15,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
+pub static REBALANCE_ACTIVE: AtomicBool = AtomicBool::new(false);
+
 const REBALANCE_BATCH_SIZE: i64 = 50;
 const UPLOAD_STREAM_THRESHOLD: usize = 64 * 1024 * 1024; // 64 MB — stay under Pi's 100 MB recv limit
 const UPLOAD_CHUNK_SIZE: usize = 32 * 1024 * 1024;       // 32 MB chunks
@@ -98,6 +102,19 @@ pub async fn start_rebalance_worker(
 }
 
 pub async fn rebalance_cycle(
+    pool: &Pool,
+    config: &Config,
+    p2p_service: &Arc<P2PService>,
+) -> Result<bool, String> {
+    REBALANCE_ACTIVE.store(true, Ordering::Relaxed);
+    let res = rebalance_cycle_inner(pool, config, p2p_service).await;
+    if let Ok(false) | Err(_) = &res {
+        REBALANCE_ACTIVE.store(false, Ordering::Relaxed);
+    }
+    res
+}
+
+async fn rebalance_cycle_inner(
     pool: &Pool,
     config: &Config,
     p2p_service: &Arc<P2PService>,

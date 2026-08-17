@@ -92,6 +92,15 @@ export interface P2PDaemonStatus {
     p2p_peer_count: number;
 }
 
+export interface RebalanceProgress {
+    is_active: boolean;
+    total_files: number;
+    balanced_files: number;
+    unbalanced_files: number;
+    progress_percent: number;
+    target_nodes: number;
+}
+
 export interface P2PBackupStatus {
     local_peer_id: string;
     is_healthy: boolean;
@@ -107,6 +116,7 @@ export interface P2PBackupStatus {
     db_backups_count: number;
     db_backups_total_bytes: number;
     db_backups_latest_at: string | null;
+    rebalance?: RebalanceProgress;
 }
 
 export interface DiscoveredPeer {
@@ -373,6 +383,10 @@ export class StatsStore {
     forceRebalance = async (): Promise<void> => {
         await axios.post('/p2p/backup/rebalance');
         this.rootStore.uiStore.setSuccess('Rebalance triggered — shards will redistribute in the background.');
+        await Promise.all([
+            this.fetchP2PBackupStatus(),
+            this.fetchDiscoveredPeers(),
+        ]);
     };
 
     fetchServiceHealth = async () => {
