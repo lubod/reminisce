@@ -596,7 +596,7 @@ pub async fn remove_p2p_node(
     let config_clone = config.get_ref().clone();
     let p2p_clone = p2p_service.get_ref().clone();
     tokio::spawn(async move {
-        let _ = crate::shard_rebalance_worker::rebalance_cycle(&pool_clone, &config_clone, &p2p_clone).await;
+        let _ = crate::shard_rebalance_worker::run_full_rebalance(&pool_clone, &config_clone, &p2p_clone).await;
     });
 
     Ok(HttpResponse::Ok().json(RemoveNodeResponse { node_id, removed_shards }))
@@ -631,7 +631,7 @@ pub async fn trigger_rebalance(
     let config_clone = config.get_ref().clone();
     let p2p_clone = p2p_service.get_ref().clone();
     tokio::spawn(async move {
-        let _ = crate::shard_rebalance_worker::rebalance_cycle(&pool_clone, &config_clone, &p2p_clone).await;
+        let _ = crate::shard_rebalance_worker::run_full_rebalance(&pool_clone, &config_clone, &p2p_clone).await;
     });
 
     Ok(HttpResponse::Accepted().json(RebalanceResponse { status: "rebalance triggered".to_string() }))

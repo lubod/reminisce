@@ -195,7 +195,7 @@ fn default_replication_batch_size() -> i64 { 50 }
 fn default_audit_min() -> u64 { 60 }
 fn default_audit_max() -> u64 { 3600 }
 
-fn default_rebalance_min() -> u64 { 120 }
+fn default_rebalance_min() -> u64 { 5 }
 fn default_rebalance_max() -> u64 { 3600 }
 
 fn default_verification_min() -> u64 { 1 }

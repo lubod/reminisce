@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-const REBALANCE_BATCH_SIZE: i64 = 20;
+const REBALANCE_BATCH_SIZE: i64 = 50;
 const UPLOAD_STREAM_THRESHOLD: usize = 64 * 1024 * 1024; // 64 MB — stay under Pi's 100 MB recv limit
 const UPLOAD_CHUNK_SIZE: usize = 32 * 1024 * 1024;       // 32 MB chunks
 
@@ -50,6 +50,33 @@ pub async fn ensure_peers_registered(pool: &Pool, nodes: &[(String, SocketAddr)]
     }
 
     Ok(())
+}
+
+/// Runs rebalance cycles continuously until all un-rebalanced shards have been distributed.
+pub async fn run_full_rebalance(
+    pool: &Pool,
+    config: &Config,
+    p2p_service: &Arc<P2PService>,
+) -> Result<usize, String> {
+    let mut total_batches = 0;
+    info!("Starting full P2P shard rebalance sweep...");
+    loop {
+        match rebalance_cycle(pool, config, p2p_service).await {
+            Ok(true) => {
+                total_batches += 1;
+                tokio::task::yield_now().await;
+            }
+            Ok(false) => {
+                info!("Full rebalance sweep completed. Processed {} batches.", total_batches);
+                break;
+            }
+            Err(e) => {
+                error!("Rebalance cycle error: {}", e);
+                return Err(e);
+            }
+        }
+    }
+    Ok(total_batches)
 }
 
 pub async fn start_rebalance_worker(
@@ -147,17 +174,7 @@ async fn rebalance_file(
 ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
     let client = pool.get().await?;
 
-    // Skip segmented large files — per-segment rebalance not yet implemented.
-    let seg_row = client.query_opt(
-        "SELECT 1 FROM images WHERE hash = $1 AND p2p_segment_count > 1 \
-         UNION ALL \
-         SELECT 1 FROM videos WHERE hash = $1 AND p2p_segment_count > 1 \
-         LIMIT 1",
-        &[&file_hash]
-    ).await?;
-    if seg_row.is_some() {
-        return Ok(false);
-    }
+
 
     // Load current shard assignments
     let shard_rows = client.query(
