@@ -99,10 +99,19 @@ pub async fn rebalance_cycle(
 
     let client = pool.get().await.map_err(|e| e.to_string())?;
 
-    // Get a batch of file hashes that have shard assignments
+    let target_node_count = active_nodes.len().min(crate::p2p_upload::SHARD_COUNT) as i64;
+    // Find files that need rebalancing: either have shards on inactive nodes, or not yet distributed across target nodes
     let rows = client.query(
-        "SELECT DISTINCT file_hash FROM p2p_shards LIMIT $1",
-        &[&REBALANCE_BATCH_SIZE],
+        "SELECT DISTINCT file_hash FROM (
+            SELECT s.file_hash FROM p2p_shards s
+            LEFT JOIN p2p_nodes n ON s.node_id = n.node_id AND n.is_active = TRUE
+            WHERE n.node_id IS NULL
+            UNION
+            SELECT s.file_hash FROM p2p_shards s
+            GROUP BY s.file_hash
+            HAVING COUNT(DISTINCT s.node_id) < $1
+        ) sub LIMIT $2",
+        &[&target_node_count, &REBALANCE_BATCH_SIZE],
     ).await.map_err(|e| e.to_string())?;
 
     if rows.is_empty() {
@@ -191,6 +200,11 @@ async fn rebalance_file(
                 ).await?;
                 migrated_any = true;
                 info!("Migrated shard {} of {} to {}", shard_index, file_hash, ideal_node_id);
+
+                // Clean up the old shard on the previous node
+                if let Some(old_addr) = lookup_node_addr(pool, p2p_service, &current_node).await {
+                    let _ = crate::p2p_upload::delete_shard_remote(p2p_service, old_addr, &current_node, &_current_shard_hash).await;
+                }
             }
             Err(e) => {
                 warn!("Failed to migrate shard {} of {}: {}", shard_index, file_hash, e);
