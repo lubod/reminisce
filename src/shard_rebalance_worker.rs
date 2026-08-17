@@ -128,17 +128,15 @@ pub async fn rebalance_cycle(
     }
 
     let target_node_count = active_nodes.len().min(crate::p2p_upload::SHARD_COUNT) as i64;
-    // Find files that need rebalancing: either have shards on inactive nodes, or not yet distributed across target nodes
+    // Find files needing rebalance, ordered by least-recently-checked so missing files never stall the sweep
     let rows = client.query(
-        "SELECT DISTINCT file_hash FROM (
-            SELECT s.file_hash FROM p2p_shards s
-            LEFT JOIN p2p_nodes n ON s.node_id = n.node_id AND n.is_active = TRUE
-            WHERE n.node_id IS NULL
-            UNION
-            SELECT s.file_hash FROM p2p_shards s
-            GROUP BY s.file_hash
-            HAVING COUNT(DISTINCT s.node_id) < $1
-        ) sub LIMIT $2",
+        "SELECT s.file_hash, MIN(s.last_checked_at) as min_checked
+         FROM p2p_shards s
+         GROUP BY s.file_hash
+         HAVING COUNT(DISTINCT s.node_id) < $1
+            AND (MIN(s.last_checked_at) IS NULL OR MIN(s.last_checked_at) < NOW() - INTERVAL '1 hour')
+         ORDER BY min_checked NULLS FIRST
+         LIMIT $2",
         &[&target_node_count, &REBALANCE_BATCH_SIZE],
     ).await.map_err(|e| e.to_string())?;
 
@@ -146,24 +144,17 @@ pub async fn rebalance_cycle(
         return Ok(false);
     }
 
-    let mut did_work = false;
-
     for row in &rows {
         let file_hash: String = row.get(0);
-
         match rebalance_file(pool, config, p2p_service, &file_hash, &active_nodes).await {
-            Ok(migrated) => {
-                if migrated {
-                    did_work = true;
-                }
-            }
+            Ok(_) => {}
             Err(e) => {
-                error!("Rebalance failed for {}: {}", file_hash, e);
+                error!("Rebalance error for {}: {}", file_hash, e);
             }
         }
     }
 
-    Ok(did_work)
+    Ok(true)
 }
 
 async fn rebalance_file(
@@ -229,6 +220,12 @@ async fn rebalance_file(
             }
         }
     }
+
+    // Always update last_checked_at so un-migratable files do not block future sweeps
+    let _ = client.execute(
+        "UPDATE p2p_shards SET last_checked_at = NOW() WHERE file_hash = $1",
+        &[&file_hash],
+    ).await;
 
     Ok(migrated_any)
 }
