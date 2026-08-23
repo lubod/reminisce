@@ -547,23 +547,40 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
         // configured. Anything else is refused — no wildcard reflection for a
         // cookie-authenticated API.
         let configured = cors_allowed_origins.clone();
+        // Split "host[:port]" (IPv6-safe) into lowercase host + port.
+        fn split_authority(auth: &str) -> (String, Option<String>) {
+            let auth = auth.trim();
+            let (host, port) = match auth.rsplit_once(':') {
+                Some((h, p)) if !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()) => {
+                    (h, Some(p.to_string()))
+                }
+                _ => (auth, None),
+            };
+            (host.trim_matches(['[', ']']).to_ascii_lowercase(), port)
+        }
         let cors = actix_cors::Cors::default()
             .allowed_origin_fn(move |origin: &actix_web::http::header::HeaderValue, head: &actix_web::dev::RequestHead| {
                 let origin_str = origin.to_str().unwrap_or("");
-                let origin_host = origin_str
-                    .split_once("://")
-                    .map(|(_, rest)| rest.split('/').next().unwrap_or(""));
-                let host_hdr = head
+                let Some((scheme, authority)) = origin_str.split_once("://") else {
+                    return false;
+                };
+                let origin_authority = authority.split('/').next().unwrap_or("");
+                let (o_host, o_port) = split_authority(origin_authority);
+                let Some(host_hdr) = head
                     .headers
                     .get(actix_web::http::header::HOST)
-                    .and_then(|h| h.to_str().ok());
-                if let (Some(o), Some(h)) = (origin_host, host_hdr) {
-                    if o.eq_ignore_ascii_case(h)
-                        || o.eq_ignore_ascii_case(h.trim_end_matches(":443"))
-                        || o.eq_ignore_ascii_case(h.trim_end_matches(":80"))
-                    {
-                        return true;
-                    }
+                    .and_then(|h| h.to_str().ok())
+                else {
+                    return false;
+                };
+                let (h_host, h_port) = split_authority(host_hdr);
+                // nginx $host drops the port; treat missing ports as the
+                // scheme default so "https://host:443" == "https://host" etc.
+                let default_port = if scheme.eq_ignore_ascii_case("https") { "443" } else { "80" };
+                let o_eff: &str = o_port.as_deref().unwrap_or(default_port);
+                let h_eff: &str = h_port.as_deref().unwrap_or(default_port);
+                if o_host == h_host && o_eff == h_eff {
+                    return true;
                 }
                 configured.iter().any(|c| c == origin_str)
             })
