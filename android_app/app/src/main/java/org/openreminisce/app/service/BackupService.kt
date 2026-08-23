@@ -63,10 +63,17 @@ class BackupService : Service() {
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC) // Make notification visible on lock screen
             .build()
         
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
-            startForeground(NOTIFICATION_ID, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                startForeground(NOTIFICATION_ID, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+        } catch (e: Exception) {
+            // Android 12+ forbids FGS starts from the background (e.g. a
+            // START_STICKY restart with the app killed). The WorkManager job
+            // below still runs — don't crash the service before enqueueing it.
+            Log.e(TAG, "startForeground rejected (app in background?) — continuing without FGS", e)
         }
         
         // Start the actual backup work using WorkManager

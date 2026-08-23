@@ -1,5 +1,6 @@
 package org.openreminisce.app
 
+import org.openreminisce.app.util.applyKeepScreenOn
 import android.annotation.SuppressLint
 import android.content.Intent
 import android.net.http.SslError
@@ -43,6 +44,7 @@ class WebGalleryActivity : AppCompatActivity() {
 
                 if (status == "completed" || status == "failed" || status == "cancelled") {
                     isBackingUp = false
+                    applyKeepScreenOn(false)
                 }
 
                 if (status == "completed") {
@@ -99,6 +101,7 @@ class WebGalleryActivity : AppCompatActivity() {
     private fun startQuickBackup() {
         isBackingUp = true
 
+        applyKeepScreenOn(true)
         // Clear any previous cancel flag
         val prefs = getSharedPreferences("BackupState", MODE_PRIVATE)
         prefs.edit().putBoolean("cancel_backup", false).apply()
@@ -132,6 +135,7 @@ class WebGalleryActivity : AppCompatActivity() {
     private fun startFullBackup() {
         isBackingUp = true
 
+        applyKeepScreenOn(true)
         // Clear any previous cancel flag
         val prefs = getSharedPreferences("BackupState", MODE_PRIVATE)
         prefs.edit().putBoolean("cancel_backup", false).apply()
@@ -170,6 +174,8 @@ class WebGalleryActivity : AppCompatActivity() {
         stopService(serviceIntent)
 
         isBackingUp = false
+
+        applyKeepScreenOn(false)
         progressDialogHelper.dismiss()
     }
 

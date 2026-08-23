@@ -1,5 +1,6 @@
 package org.openreminisce.app
 
+import org.openreminisce.app.util.applyKeepScreenOn
 import android.content.Intent
 import android.os.Bundle
 import android.util.Log
@@ -48,6 +49,7 @@ class MainActivity : AppCompatActivity() {
 
                 if (status == "completed" || status == "failed" || status == "cancelled") {
                     isBackingUp = false
+                    applyKeepScreenOn(false)
                 }
 
                 if (status == "completed") {
@@ -148,13 +150,54 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun startQuickBackup() {
+        /**
+     * Honor/Huawei/xiaomi builds silently freeze background uploads unless the
+     * app is exempted from battery optimizations. Ask a few times max.
+     */
+    private fun maybePromptBatteryOptimization() {
+        val pm = getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+        if (pm.isIgnoringBatteryOptimizations(packageName)) return
+
+        val prefs = getSharedPreferences("BackupState", MODE_PRIVATE)
+        val askedCount = prefs.getInt("battery_prompt_count", 0)
+        if (askedCount >= 3) return // don't nag forever
+
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("Allow background uploads?")
+            .setMessage(
+                "Your device stops uploads when the screen turns off. " +
+                "Exclude Reminisce from battery optimization so photo backups " +
+                "can continue reliably in the background."
+            )
+            .setPositiveButton("Allow") { _, _ ->
+                try {
+                    startActivity(
+                        android.content.Intent(
+                            android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                            android.net.Uri.parse("package:$packageName")
+                        )
+                    )
+                } catch (e: Exception) {
+                    Log.w(TAG, "Battery optimization settings unavailable", e)
+                }
+            }
+            .setNegativeButton("Not now", null)
+            .show()
+
+        prefs.edit().putInt("battery_prompt_count", askedCount + 1).apply()
+    }
+
+private fun startQuickBackup() {
         if (isBackingUp) {
             return
         }
 
+        maybePromptBatteryOptimization()
+
         isBackingUp = true
 
+
+        applyKeepScreenOn(true)
         // Clear any previous cancel flag
         val prefs = getSharedPreferences("BackupState", MODE_PRIVATE)
         prefs.edit().putBoolean("cancel_backup", false).apply()
@@ -195,6 +238,8 @@ class MainActivity : AppCompatActivity() {
 
         isBackingUp = true
 
+
+        applyKeepScreenOn(true)
         // Clear any previous cancel flag
         val prefs = getSharedPreferences("BackupState", MODE_PRIVATE)
         prefs.edit().putBoolean("cancel_backup", false).apply()
@@ -234,6 +279,8 @@ class MainActivity : AppCompatActivity() {
         stopService(serviceIntent)
 
         isBackingUp = false
+
+        applyKeepScreenOn(false)
         progressDialogHelper.dismiss()
     }
 
