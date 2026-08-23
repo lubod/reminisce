@@ -64,14 +64,8 @@ impl FromRequest for Claims {
             }
         }
 
-        // 3. Query parameter 'token'
-        if token.is_none() {
-            if let Ok(query) = web::Query::<std::collections::HashMap<String, String>>::from_query(req.query_string()) {
-                if let Some(t) = query.get("token") {
-                    token = Some(t.clone());
-                }
-            }
-        }
+        // NOTE: tokens in query strings are deliberately not accepted — they leak
+        // into access logs, browser history and Referer headers.
 
         let pool = req.app_data::<web::Data<MainDbPool>>().cloned();
         let path = req.path().to_string();
