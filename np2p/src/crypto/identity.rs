@@ -39,6 +39,29 @@ impl NodeIdentity {
         Self { signing_key }
     }
 
+    /// Hardened derivation: Argon2id (memory-hard KDF) instead of a single fast
+    /// BLAKE3 hash. The publicly broadcast node_id is otherwise an offline
+    /// brute-force oracle on the master secret; this makes each guess cost
+    /// ~50-100ms of RAM-hard work.
+    ///
+    /// NOTE: produces a DIFFERENT node_id than `from_secret` — enabling it
+    /// re-keys the node in the mesh, so it is opt-in via `p2p_identity_kdf`.
+    /// The salt is fixed by design: deterministic recovery of the identity from
+    /// the master secret (no on-disk state) is a core feature.
+    pub fn from_secret_hardened(secret: &str) -> Self {
+        use argon2::{Algorithm, Argon2, Params, Version};
+        const SALT: &[u8] = b"reminisce-p2p-identity-v2";
+        // 64 MiB, t=3, p=1, 32-byte output — ~50ms per derivation on server hw.
+        let params = Params::new(64 * 1024, 3, 1, Some(32)).expect("static KDF params are valid");
+        let argon = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
+        let mut out = [0u8; 32];
+        argon
+            .hash_password_into(secret.as_bytes(), SALT, &mut out)
+            .expect("argon2id derivation with static params cannot fail");
+        let signing_key = SigningKey::from_bytes(&out);
+        Self { signing_key }
+    }
+
     pub fn from_secret_bytes(bytes: &[u8]) -> Result<Self> {
         if bytes.len() != 32 {
             return Err(Np2pError::Identity(format!("Invalid secret key size: expected 32, got {}", bytes.len())));

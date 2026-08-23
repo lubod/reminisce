@@ -48,12 +48,17 @@ _FACE_LOCK = threading.Lock()
 _ORIENTATION_LOCK = threading.Lock()
 _ENHANCE_LOCK = threading.Lock()
 
+# Admission control for heavy inference handlers: caps how many run concurrently
+# regardless of the executor's worker count, bounding peak RAM/GPU pressure.
+_INFERENCE_SEMAPHORE = threading.Semaphore(4)
+
 # Server-side image dimension cap. Without this a single dense image can exhaust the
 # process RAM during decode + inference (OOM). 4 MP is far beyond real photo needs.
 MAX_IMAGE_PIXELS = 4_000_000
 
-# Input byte cap for image payloads — far below the 64 MB gRPC limit. A real photo is a
-# few MB; anything near 64 MB is an abuse vector.
+# Input byte cap for image payloads. The gRPC receive cap is 10 MB, so anything
+# larger is rejected at the transport layer anyway; this stays as an explicit,
+# earlier semantic guard against abuse.
 MAX_IMAGE_INPUT_BYTES = 25 * 1024 * 1024
 
 
@@ -125,6 +130,7 @@ class AIServiceServicer(ai_service_pb2_grpc.AIServiceServicer):
         if image.width < 3 or image.height < 3:
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, f"Image too small ({image.width}x{image.height})")
 
+        _INFERENCE_SEMAPHORE.acquire()
         try:
             with _EMBEDDING_LOCK:
                 inputs = get_ai_service().siglip_processor(images=image, return_tensors="pt").to(get_ai_service().device)
@@ -144,6 +150,8 @@ class AIServiceServicer(ai_service_pb2_grpc.AIServiceServicer):
         except Exception as e:
             logger.error(f"Error in gRPC EmbedImage: {e}", exc_info=True)
             context.abort(grpc.StatusCode.INTERNAL, str(e))
+        finally:
+            _INFERENCE_SEMAPHORE.release()
 
     def EmbedText(self, request, context):
         check_api_key(context)
@@ -196,6 +204,7 @@ class AIServiceServicer(ai_service_pb2_grpc.AIServiceServicer):
             if get_ai_service().smolvlm_model is None:
                 context.abort(grpc.StatusCode.UNAVAILABLE, "SmolVLM model not loaded")
 
+        _INFERENCE_SEMAPHORE.acquire()
         try:
             if use_qwen:
                 from qwen_vl_utils import process_vision_info
@@ -255,6 +264,8 @@ class AIServiceServicer(ai_service_pb2_grpc.AIServiceServicer):
         except Exception as e:
             logger.error(f"Error in gRPC DescribeImage: {e}", exc_info=True)
             context.abort(grpc.StatusCode.INTERNAL, str(e))
+        finally:
+            _INFERENCE_SEMAPHORE.release()
 
     def DetectFaces(self, request, context):
         check_api_key(context)
@@ -265,6 +276,7 @@ class AIServiceServicer(ai_service_pb2_grpc.AIServiceServicer):
         if image_pil.mode != 'RGB':
             image_pil = image_pil.convert('RGB')
 
+        _INFERENCE_SEMAPHORE.acquire()
         try:
             image_np = np.array(image_pil)
             image_bgr = cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR)
@@ -291,6 +303,8 @@ class AIServiceServicer(ai_service_pb2_grpc.AIServiceServicer):
         except Exception as e:
             logger.error(f"Error in gRPC DetectFaces: {e}", exc_info=True)
             context.abort(grpc.StatusCode.INTERNAL, str(e))
+        finally:
+            _INFERENCE_SEMAPHORE.release()
 
     def QualityScore(self, request, context):
         check_api_key(context)
@@ -305,6 +319,7 @@ class AIServiceServicer(ai_service_pb2_grpc.AIServiceServicer):
         if w < 3 or h < 3:
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, f"Image too small ({w}x{h})")
 
+        _INFERENCE_SEMAPHORE.acquire()
         try:
             # Sharpness: Laplacian variance on grayscale
             gray = np.array(image.convert('L'))
@@ -331,6 +346,8 @@ class AIServiceServicer(ai_service_pb2_grpc.AIServiceServicer):
         except Exception as e:
             logger.error(f"Error in gRPC QualityScore: {e}", exc_info=True)
             context.abort(grpc.StatusCode.INTERNAL, str(e))
+        finally:
+            _INFERENCE_SEMAPHORE.release()
 
     def EnhanceImage(self, request, context):
         check_api_key(context)
@@ -345,6 +362,7 @@ class AIServiceServicer(ai_service_pb2_grpc.AIServiceServicer):
         if img.width < 3 or img.height < 3:
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, f"Image too small ({img.width}x{img.height})")
 
+        _INFERENCE_SEMAPHORE.acquire()
         try:
             result = np.array(img)
             operations = []
@@ -400,6 +418,8 @@ class AIServiceServicer(ai_service_pb2_grpc.AIServiceServicer):
         except Exception as e:
             logger.error(f"Error in gRPC EnhanceImage: {e}", exc_info=True)
             context.abort(grpc.StatusCode.INTERNAL, str(e))
+        finally:
+            _INFERENCE_SEMAPHORE.release()
 
     def DetectOrientation(self, request, context):
         check_api_key(context)
@@ -413,6 +433,7 @@ class AIServiceServicer(ai_service_pb2_grpc.AIServiceServicer):
         if image.width < 3 or image.height < 3:
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, f"Image too small ({image.width}x{image.height})")
 
+        _INFERENCE_SEMAPHORE.acquire()
         try:
             with _ORIENTATION_LOCK:
                 inputs = svc.orientation_processor(images=image, return_tensors="pt").to(svc.device)
@@ -450,6 +471,8 @@ class AIServiceServicer(ai_service_pb2_grpc.AIServiceServicer):
         except Exception as e:
             logger.error(f"Error in gRPC DetectOrientation: {e}", exc_info=True)
             context.abort(grpc.StatusCode.INTERNAL, str(e))
+        finally:
+            _INFERENCE_SEMAPHORE.release()
 
     def HealthCheck(self, request, context):
         device_str = str(get_ai_service().device) if get_ai_service().device else "unknown"
@@ -467,7 +490,7 @@ class AIServiceServicer(ai_service_pb2_grpc.AIServiceServicer):
 def serve_grpc(port=50051, max_workers=4):
     options = [
         ('grpc.max_send_message_length', 64 * 1024 * 1024),
-        ('grpc.max_receive_message_length', 64 * 1024 * 1024),
+        ('grpc.max_receive_message_length', 10 * 1024 * 1024),
     ]
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=max_workers), options=options)
     ai_service_pb2_grpc.add_AIServiceServicer_to_server(AIServiceServicer(), server)

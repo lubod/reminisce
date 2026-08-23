@@ -6,7 +6,7 @@ import { X, Upload, FolderOpen, CheckCircle, AlertCircle, Loader } from "lucide-
 import axios from "../api/axiosConfig";
 import { isAxiosError } from "axios";
 import { logger } from "../utils/logger";
-import { blake3 } from "hash-wasm";
+import { createBLAKE3 } from "hash-wasm";
 
 interface FileWithHash {
     file: File;
@@ -45,8 +45,21 @@ const isVideoFile = (filename: string): boolean => {
 };
 
 const calculateHash = async (file: File): Promise<string> => {
-    const buffer = await file.arrayBuffer();
-    return await blake3(new Uint8Array(buffer));
+    // Stream the file in chunks instead of slurping it into an arrayBuffer:
+    // one-shot hashing of large videos spikes memory hard enough to OOM the tab.
+    const hasher = await createBLAKE3();
+    hasher.init();
+    const reader = file.stream().getReader();
+    try {
+        for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            hasher.update(value);
+        }
+    } finally {
+        reader.releaseLock();
+    }
+    return hasher.digest();
 };
 
 export const DirectoryImportModal = observer(({ onClose }: { onClose: () => void }) => {

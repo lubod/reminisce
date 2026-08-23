@@ -38,10 +38,18 @@ RUN cargo build --bin np2pd --bin e2e_client -p np2p \
 FROM debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241 as storage
 RUN apt-get update && apt-get install -y ca-certificates procps && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /usr/src/app/target/release/np2pd /usr/local/bin/
-RUN mkdir -p /data
+RUN groupadd --system --gid 10001 np2p \
+    && useradd --system --uid 10001 --gid np2p --home-dir /nonexistent --shell /usr/sbin/nologin np2p \
+    && mkdir -p /data \
+    && chown -R np2p:np2p /data
+
+USER np2p
+
 EXPOSE 5050/udp
+# np2pd only listens on UDP 5050 (no TCP socket to probe), so verify the process is
+# alive AND its datagram socket is actually bound: port 5050 = hex 13BA in /proc/net/udp.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD pgrep np2pd || exit 1
+    CMD pgrep -x np2pd >/dev/null && grep -qiE ':13BA[[:space:]]' /proc/net/udp || exit 1
 CMD ["np2pd", "--listen", "0.0.0.0:5050", "--data-dir", "/data"]
 
 # E2E Client Simulator
@@ -54,8 +62,15 @@ CMD ["e2e_client"]
 FROM debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241 as coordinator
 RUN apt-get update && apt-get install -y ca-certificates procps && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /usr/src/app/target/release/coordinator /usr/local/bin/
-RUN mkdir -p /data
+RUN groupadd --system --gid 10001 np2p \
+    && useradd --system --uid 10001 --gid np2p --home-dir /nonexistent --shell /usr/sbin/nologin np2p \
+    && mkdir -p /data \
+    && chown -R np2p:np2p /data
+
+USER np2p
+
 EXPOSE 5055/udp 8443/tcp
+# Real probe: TCP-connect to the coordinator's tunnel listener on 8443 via bash /dev/tcp.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD pgrep coordinator || exit 1
+    CMD bash -c 'exec 3<>/dev/tcp/127.0.0.1/8443' || exit 1
 CMD ["coordinator", "--listen", "0.0.0.0:5055", "--tunnel-port", "8443", "--data-dir", "/data"]

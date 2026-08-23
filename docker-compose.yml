@@ -13,6 +13,10 @@ services:
     image: lubod/reminisce-postgres:latest
     logging: *default-logging
     container_name: reminisce-postgres
+    mem_limit: 2g
+    pids_limit: 200
+    networks:
+      - backend
     environment:
       POSTGRES_DB: reminisce_db
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
@@ -31,6 +35,10 @@ services:
     image: lubod/reminisce-geodb:latest
     logging: *default-logging
     container_name: reminisce-geotagging
+    mem_limit: 1g
+    pids_limit: 200
+    networks:
+      - backend
     environment:
       POSTGRES_DB: geotagging_db
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
@@ -49,6 +57,10 @@ services:
     image: lubod/reminisce-ai-server:latest
     logging: *default-logging
     container_name: reminisce-ai-server
+    mem_limit: 12g
+    pids_limit: 300
+    networks:
+      - backend
     expose:
       - "8081"
       - "50051"
@@ -58,7 +70,7 @@ services:
       - ./ai/ai_service.py:/app/ai_service.py
       - ./ai/ai_service_grpc.py:/app/ai_service_grpc.py
     environment:
-      - API_SECRET_KEY=${API_SECRET_KEY:-}
+      - API_SECRET_KEY=${API_SECRET_KEY:?api_secret_key is required}
       - HF_HOME=/home/ai_user/.cache/huggingface
     #GPU#devices:
     #GPU#  - /dev/dri:/dev/dri
@@ -78,6 +90,11 @@ services:
     image: lubod/reminisce:latest
     logging: *default-logging
     container_name: reminisce
+    mem_limit: 4g
+    pids_limit: 300
+    networks:
+      - frontend
+      - backend
     expose:
       - "8080"
     ports:
@@ -106,6 +123,10 @@ services:
     image: lubod/reminisce-client:latest
     logging: *default-logging
     container_name: reminisce-client
+    mem_limit: 512m
+    pids_limit: 100
+    networks:
+      - frontend
     ports:
       - "28080:80"
       - "28443:443"
@@ -121,3 +142,8 @@ volumes:
   ai_model_cache:
   face_model_cache:
   client_ssl:
+
+networks:
+  frontend:
+  backend:
+    internal: true

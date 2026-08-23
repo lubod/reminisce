@@ -327,13 +327,13 @@ export const MediaBrowser = observer(() => {
                                     role="button"
                                     aria-label={`Open ${item.media_type === 'video' ? 'video' : 'image'} ${item.name}`}
                                     onClick={() => {
-                                        const idx = mediaStore.allMedia.findIndex(m => m.hash === item.hash);
+                                        const idx = mediaStore.allMedia.findIndex(m => m.hash === item.hash && m.device_id === item.device_id);
                                         if (idx !== -1) mediaStore.openMediaLightbox(idx, 'all');
                                     }}
                                     onKeyDown={(e) => {
                                         if (e.key === 'Enter' || e.key === ' ') {
                                             e.preventDefault();
-                                            const idx = mediaStore.allMedia.findIndex(m => m.hash === item.hash);
+                                            const idx = mediaStore.allMedia.findIndex(m => m.hash === item.hash && m.device_id === item.device_id);
                                             if (idx !== -1) mediaStore.openMediaLightbox(idx, 'all');
                                         }
                                     }}

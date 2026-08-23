@@ -352,8 +352,6 @@ mod tests {
     }
 
     #[test]
-
-    #[test]
     fn rate_limit_ignores_headers_from_private_peer_not_in_allowlist() {
         // RFC1918 peers are no longer blanket-trusted: a LAN device connecting
         // directly to the backend must not be able to rotate its bucket.

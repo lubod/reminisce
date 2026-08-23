@@ -40,6 +40,10 @@ pub struct Config {
     // startup log) allowed to receive shards. Empty = open admission (legacy).
     #[serde(default)]
     pub p2p_allowed_node_ids: Vec<String>,
+    // Node identity derivation: "legacy" (fast BLAKE3, default) or "argon2id"
+    // (memory-hard; produces a NEW node_id — storage nodes must re-pair).
+    #[serde(default)]
+    pub p2p_identity_kdf: Option<String>,
 
     // Database connection pool configuration
     #[serde(default = "default_db_tls")]

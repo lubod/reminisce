@@ -423,17 +423,15 @@ export class MediaStore {
             }
 
             const response = await axios.get(`/search/images?${params}`);
-            const searchResults = response.data.results.map((item: MediaItem) => ({
+            const itemsWithThumbnails = this.attachThumbnails(response.data.results.map((item: MediaItem) => ({
                 ...item,
                 thumbnailUrl: item.thumbnail_url ? this.getAuthenticatedUrl(item.thumbnail_url) : undefined
-            }));
-
-            const itemsWithThumbnails = await this.attachThumbnails(searchResults);
+            })));
             // More results exist iff the server reports more than we have now
             // (offset + this page's rows). Do NOT rely on "did we get a full page" —
             // the +1 probe on the server makes an exhausted page shorter than limit.
-            const hasMoreFromServer = response.data.total > offset + searchResults.length;
-            if (reqSeq !== this.requestSeq) { this.revokeThumbnailUrls(itemsWithThumbnails); return; } // stale response — discard
+            const hasMoreFromServer = response.data.total > offset + itemsWithThumbnails.length;
+            if (reqSeq !== this.requestSeq) return; // stale response — discard
 
             runInAction(() => {
                 if (append) {
@@ -460,33 +458,15 @@ export class MediaStore {
         }
     };
 
-    private attachThumbnails = async (items: MediaItem[]): Promise<MediaItem[]> => {
-        return Promise.all(
-            items.map(async (item) => {
-                // If the item already has a full URL (from search response), use it
-                if (item.thumbnailUrl) {
-                    return item;
-                }
-
-                try {
-                    const thumbResponse = await axios.get(`/thumbnail/${item.hash}`, { responseType: 'blob' });
-                    const thumbnailUrl = URL.createObjectURL(thumbResponse.data);
-                    return { ...item, thumbnailUrl };
-                } catch  {
-                    return item;
-                }
-            })
-        );
-    };
-
-    /// Revoke blob URLs created for a discarded (stale) response so they don't leak.
-    private revokeThumbnailUrls(items: MediaItem[]) {
-        for (const item of items) {
-            if (item.thumbnailUrl?.startsWith('blob:')) {
-                URL.revokeObjectURL(item.thumbnailUrl);
-            }
-        }
-    };
+    // Thumbnails are served same-origin from a stable URL and authenticated by the
+    // httpOnly session cookie, so a plain <img src> works — no per-item blob fetch
+    // waterfall (and no object-URL bookkeeping) is needed.
+    private attachThumbnails = (items: MediaItem[]): MediaItem[] =>
+        items.map(item => (
+            item.thumbnailUrl
+                ? item
+                : { ...item, thumbnailUrl: this.getAuthenticatedUrl(`/api/thumbnail/${item.hash}`) }
+        ));
 
     fetchImages = async (page: number = 1, limit: number = 50, append: boolean = false) => {
         const seq = this.requestSeq;
@@ -514,11 +494,11 @@ export class MediaStore {
             }
 
             const response = await axios.get<ThumbnailsResponse>(`/image_thumbnails?${params}`);
-            const withUrls = await this.attachThumbnails(response.data.thumbnails.map(t => ({
+            const withUrls = this.attachThumbnails(response.data.thumbnails.map(t => ({
                 ...t,
                 thumbnailUrl: t.thumbnail_url ? this.getAuthenticatedUrl(t.thumbnail_url) : undefined
             })));
-            if (seq !== this.requestSeq) { this.revokeThumbnailUrls(withUrls); return; } // stale response — discard
+            if (seq !== this.requestSeq) return; // stale response — discard
 
             runInAction(() => {
                 this.images = append ? [...this.images, ...withUrls] : withUrls;
@@ -558,11 +538,11 @@ export class MediaStore {
             }
 
             const response = await axios.get<ThumbnailsResponse>(`/video_thumbnails?${params}`);
-            const withUrls = await this.attachThumbnails(response.data.thumbnails.map(t => ({
+            const withUrls = this.attachThumbnails(response.data.thumbnails.map(t => ({
                 ...t,
                 thumbnailUrl: t.thumbnail_url ? this.getAuthenticatedUrl(t.thumbnail_url) : undefined
             })));
-            if (seq !== this.requestSeq) { this.revokeThumbnailUrls(withUrls); return; } // stale response — discard
+            if (seq !== this.requestSeq) return; // stale response — discard
 
             runInAction(() => {
                 this.videos = append ? [...this.videos, ...withUrls] : withUrls;
@@ -606,11 +586,11 @@ export class MediaStore {
             if (this.filters.allMediaTypeFilter === 'video') endpoint = '/video_thumbnails';
 
             const response = await axios.get<ThumbnailsResponse>(`${endpoint}?${params}`);
-            const withUrls = await this.attachThumbnails(response.data.thumbnails.map(t => ({
+            const withUrls = this.attachThumbnails(response.data.thumbnails.map(t => ({
                 ...t,
                 thumbnailUrl: t.thumbnail_url ? this.getAuthenticatedUrl(t.thumbnail_url) : undefined
             })));
-            if (seq !== this.requestSeq) { this.revokeThumbnailUrls(withUrls); return; } // stale response — discard
+            if (seq !== this.requestSeq) return; // stale response — discard
 
             runInAction(() => {
                 this.allMedia = append ? [...this.allMedia, ...withUrls] : withUrls;
@@ -649,11 +629,11 @@ export class MediaStore {
                 no_exif: "true"
             });
             const response = await axios.get<ThumbnailsResponse>(`/image_thumbnails?${params}`);
-            const withUrls = await this.attachThumbnails(response.data.thumbnails.map(t => ({
+            const withUrls = this.attachThumbnails(response.data.thumbnails.map(t => ({
                 ...t,
                 thumbnailUrl: t.thumbnail_url ? this.getAuthenticatedUrl(t.thumbnail_url) : undefined
             })));
-            if (seq !== this.requestSeq) { this.revokeThumbnailUrls(withUrls); return; }
+            if (seq !== this.requestSeq) return;
 
             runInAction(() => {
                 this.noExifImages = append ? [...this.noExifImages, ...withUrls] : withUrls;
@@ -783,8 +763,10 @@ export class MediaStore {
     // --- Metadata Actions ---
 
     loadImageMetadata = async (hash: string) => {
+        const seq = this.requestSeq;
         try {
             const response = await axios.get<ImageMetadata>(`/image/${hash}/metadata`);
+            if (seq !== this.requestSeq) return; // stale response — discard
             runInAction(() => { this.imageMetadata = response.data; this.lastLoadedMetadataHash = hash; });
         } catch (error) { logger.error("Metadata fetch failed", error); }
     };
@@ -895,8 +877,6 @@ export class MediaStore {
     getAuthenticatedUrl = (baseUrl: string) => baseUrl;
 
     cleanupThumbnails = () => {
-        const revoke = (list: MediaItem[]) => list.forEach(i => i.thumbnailUrl && URL.revokeObjectURL(i.thumbnailUrl));
-        revoke(this.images); revoke(this.videos); revoke(this.allMedia);
         runInAction(() => { this.images = []; this.videos = []; this.allMedia = []; });
     };
 
@@ -991,7 +971,7 @@ export class MediaStore {
     fetchLocationSuggestions = async (query: string, seq: number) => {
         this.isLoadingLocationSuggestions = true;
         try {
-            const response = await axios.get(`/search/places?query=${query}&limit=20`);
+            const response = await axios.get('/search/places', { params: { query, limit: 20 } });
             if (seq !== this.locationRequestSeq) return; // stale response — discard
             runInAction(() => { this.locationSuggestions = response.data; });
         } catch (error) {

@@ -296,7 +296,17 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
 
     let identity_path = p2p_data_path.join("node.key");
     let identity = if config.p2p_deterministic_identity {
-        let id = np2p::crypto::NodeIdentity::from_secret(config.get_api_key().expect("api_secret_key required for deterministic P2P identity"));
+        let secret_for_identity = config.get_api_key().expect("api_secret_key required for deterministic P2P identity");
+        let id = match config.p2p_identity_kdf.as_deref() {
+            Some("argon2id") => {
+                info!("P2P identity: Argon2id (hardened) derivation");
+                np2p::crypto::NodeIdentity::from_secret_hardened(&secret_for_identity)
+            }
+            _ => {
+                warn!("P2P identity uses legacy fast-hash derivation (offline brute-force oracle on the API secret). Set p2p_identity_kdf: argon2id to harden — NOTE this changes the node ID and requires re-pairing storage nodes.");
+                np2p::crypto::NodeIdentity::from_secret(&secret_for_identity)
+            }
+        };
         // Persist the derived identity so tooling that reads node.key stays consistent.
         if !identity_path.exists() {
             std::fs::write(&identity_path, id.signing_key.to_bytes()).expect("Failed to save P2P identity file");

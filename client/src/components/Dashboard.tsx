@@ -34,34 +34,67 @@ export const Dashboard = observer(() => {
     const [isRebalancing, setIsRebalancing] = useState<boolean>(false);
 
     useEffect(() => {
-        if (isAdmin) {
-            statsStore.fetchAllStats();
+        if (isAdmin) statsStore.fetchAllStats();
+    }, [statsStore, isAdmin]);
 
-            void systemStore.loadLogs();
-            void systemStore.loadErrors();
-            void systemStore.loadAlerts();
-            void systemStore.loadGpu();
-            void systemStore.loadAiModels();
-            void systemStore.loadPipeline();
-            void systemStore.loadSeries();
+    // Pool stats are cheap and relevant on every admin tab, so they poll globally.
+    // Polling pauses while the document is hidden and catches up on return.
+    useEffect(() => {
+        if (!isAdmin) return;
 
-            const interval = setInterval(() => {
-                statsStore.fetchPoolStats();
-                statsStore.fetchSystemStats();
-                statsStore.fetchP2PBackupStatus();
-                statsStore.fetchDiscoveredPeers();
+        const tick = () => {
+            if (!document.hidden) void statsStore.fetchPoolStats();
+        };
+
+        tick();
+        const interval = setInterval(tick, 30000);
+        document.addEventListener("visibilitychange", tick);
+
+        return () => {
+            clearInterval(interval);
+            document.removeEventListener("visibilitychange", tick);
+        };
+    }, [statsStore, isAdmin]);
+
+    // Heavy per-tab polling: logs/errors/alerts/gpu/models/pipeline/series belong
+    // to the system tab and only load while it is active; overview keeps its stat
+    // cards fresh and backup keeps mesh status fresh. Everything pauses while the
+    // document is hidden.
+    useEffect(() => {
+        if (!isAdmin) return;
+
+        const loadForTab = () => {
+            if (activeTab === 'system') {
+                void statsStore.fetchSystemStats();
                 void systemStore.loadLogs();
                 void systemStore.loadErrors();
                 void systemStore.loadAlerts();
                 void systemStore.loadGpu();
-            void systemStore.loadAiModels();
+                void systemStore.loadAiModels();
                 void systemStore.loadPipeline();
                 void systemStore.loadSeries();
-            }, 30000);
+            } else if (activeTab === 'overview') {
+                void statsStore.fetchSystemStats();
+            } else if (activeTab === 'backup') {
+                void statsStore.fetchP2PBackupStatus();
+                void statsStore.fetchDiscoveredPeers();
+            }
+        };
 
-            return () => clearInterval(interval);
-        }
-    }, [statsStore, systemStore, isAdmin]);
+        loadForTab();
+        const interval = setInterval(() => {
+            if (!document.hidden) loadForTab();
+        }, 30000);
+        const onVisibilityChange = () => {
+            if (!document.hidden) loadForTab();
+        };
+        document.addEventListener("visibilitychange", onVisibilityChange);
+
+        return () => {
+            clearInterval(interval);
+            document.removeEventListener("visibilitychange", onVisibilityChange);
+        };
+    }, [statsStore, systemStore, isAdmin, activeTab]);
 
     // Adaptive fast-polling on the backup tab when rebalancing is active
     useEffect(() => {

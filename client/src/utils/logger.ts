@@ -12,9 +12,9 @@ export const logger = {
         }
     },
     error: (...args: unknown[]) => {
-        if (isDev) {
-            console.error(...args);
-        }
+        // Errors are always reported so production crashes (e.g. ErrorBoundary
+        // fallbacks) are visible in the browser console for bug reports.
+        console.error(...args);
     },
 };
 

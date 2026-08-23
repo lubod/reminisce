@@ -17,13 +17,15 @@ Endpoints:
 - GET  /gpu-metrics  - ROCm GPU metrics (used by the app's /system page)
 """
 
+import hmac
 import logging
 import sys
 import json
 import subprocess
+import time
 
 import torch
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 from transformers import AutoModel, AutoProcessor, SmolVLMForConditionalGeneration
 from transformers import AutoImageProcessor, AutoModelForImageClassification
 from insightface.app import FaceAnalysis
@@ -226,6 +228,30 @@ QUALITY_TEXTS = [
 
 # ==================== HEALTH & INFO ENDPOINTS ====================
 
+_GPU_METRICS_CACHE = {"ts": 0.0, "payload": None}
+_GPU_METRICS_TTL_SECONDS = 30.0
+
+
+def check_api_key():
+    """Same admission control as the gRPC handlers' check_api_key(): constant-time
+    comparison of the x-api-key header (or Bearer token) against API_SECRET_KEY.
+    Fails closed when no key is configured. Returns a (body, status) response on
+    rejection, or None when the caller is authorized.
+    """
+    expected_key = os.environ.get('API_SECRET_KEY') or os.environ.get('REMINISCE_API_SECRET_KEY')
+    if not expected_key:
+        return jsonify({'error': 'Server not configured with an API secret key'}), 503
+
+    provided = request.headers.get('x-api-key') or ''
+    auth_header = request.headers.get('authorization') or ''
+    if auth_header.startswith('Bearer '):
+        provided = auth_header.split(' ', 1)[1]
+
+    if not provided or not hmac.compare_digest(provided, expected_key):
+        return jsonify({'error': 'Invalid or missing API key'}), 401
+    return None
+
+
 @app.route('/health', methods=['GET'])
 def health():
     """Health check endpoint"""
@@ -252,8 +278,17 @@ def health():
 def gpu_metrics():
     """Lightweight ROCm GPU metrics for the in-app /system page (no exporter sidecar).
 
-    Consumed by the Reminisce server's GET /api/admin/gpu (ProxyFetch).
+    Consumed by the Reminisce server's GET /api/admin/gpu (ProxyFetch), which must
+    forward the API key. Results are cached for 30 s to bound rocm-smi invocations.
     """
+    denied = check_api_key()
+    if denied is not None:
+        return denied
+
+    now = time.time()
+    if _GPU_METRICS_CACHE["payload"] is not None and (now - _GPU_METRICS_CACHE["ts"]) < _GPU_METRICS_TTL_SECONDS:
+        return jsonify(_GPU_METRICS_CACHE["payload"])
+
     cards = []
     data = {}
     mem_data = {}
@@ -296,7 +331,10 @@ def gpu_metrics():
         except (TypeError, ValueError):
             continue
 
-    return jsonify({"available": len(cards) > 0, "cards": cards})
+    payload = {"available": len(cards) > 0, "cards": cards}
+    _GPU_METRICS_CACHE["ts"] = now
+    _GPU_METRICS_CACHE["payload"] = payload
+    return jsonify(payload)
 
 
 @app.route('/', methods=['GET'])
