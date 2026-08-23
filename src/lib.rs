@@ -540,20 +540,41 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
     let _server_config = config.clone();
     let cors_allowed_origins = config.cors_allowed_origins.clone();
     HttpServer::new(move || {
-        // CORS: same-origin only unless explicit origins are configured. Never
-        // reflect arbitrary Origins for a cookie-authenticated API.
-        let mut cors = actix_cors::Cors::default()
+        // CORS policy: browsers send Origin on same-origin POSTs too, so a
+        // blanket rejection breaks the SPA. Instead, allow an Origin when its
+        // authority matches the request's Host (same-origin through any
+        // reverse proxy), plus whatever extra origins are explicitly
+        // configured. Anything else is refused — no wildcard reflection for a
+        // cookie-authenticated API.
+        let configured = cors_allowed_origins.clone();
+        let cors = actix_cors::Cors::default()
+            .allowed_origin_fn(move |origin: &actix_web::http::header::HeaderValue, head: &actix_web::dev::RequestHead| {
+                let origin_str = origin.to_str().unwrap_or("");
+                let origin_host = origin_str
+                    .split_once("://")
+                    .map(|(_, rest)| rest.split('/').next().unwrap_or(""));
+                let host_hdr = head
+                    .headers
+                    .get(actix_web::http::header::HOST)
+                    .and_then(|h| h.to_str().ok());
+                if let (Some(o), Some(h)) = (origin_host, host_hdr) {
+                    if o.eq_ignore_ascii_case(h)
+                        || o.eq_ignore_ascii_case(h.trim_end_matches(":443"))
+                        || o.eq_ignore_ascii_case(h.trim_end_matches(":80"))
+                    {
+                        return true;
+                    }
+                }
+                configured.iter().any(|c| c == origin_str)
+            })
             .allowed_methods(vec!["GET", "POST", "PUT", "DELETE", "OPTIONS"])
             .allowed_headers(vec!["Authorization", "Content-Type", "X-Requested-With"])
+            .supports_credentials()
             .max_age(3600);
-        if cors_allowed_origins.is_empty() {
-            info!("CORS: no origins configured — same-origin requests only");
+        if !cors_allowed_origins.is_empty() {
+            info!("CORS: extra allowed origins: {:?}", cors_allowed_origins);
         } else {
-            for origin in &cors_allowed_origins {
-                cors = cors.allowed_origin(origin);
-                info!("CORS: allowing origin {}", origin);
-            }
-            cors = cors.supports_credentials();
+            info!("CORS: same-origin (via Host match) only");
         }
 
         App::new()
