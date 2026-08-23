@@ -44,6 +44,7 @@ pub fn create_test_config() -> config::Config {
         allowed_import_dirs: Some(vec![std::env::temp_dir().to_string_lossy().to_string()]),
         cors_allowed_origins: Vec::new(),
         rate_limit_trusted_proxies: Vec::new(),
+        p2p_allowed_node_ids: Vec::new(),
         p2p_data_shards: 3,
         p2p_parity_shards: 2,
         workers: config::WorkerConfig::default(),

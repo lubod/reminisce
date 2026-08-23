@@ -61,6 +61,7 @@ pub async fn handle_stream(
     channels: ChannelMap,
     data_dir: PathBuf,
     rate_limiter: Arc<RateLimiter>,
+    allowed_nodes: std::sync::Arc<Option<Vec<String>>>,
 ) {
     // Guard every registration / discovery / relay message with a per-IP rate limit.
     if !rate_limiter.allow(remote_ip) {
@@ -91,9 +92,19 @@ pub async fn handle_stream(
                 }
             }
 
+            let mut rejection: Option<Message> = None;
             if !verified {
                 warn!("[COORD] Rejecting RegisterNode from {} - identity verification failed", remote_ip);
-                Message::Error { code: 401, message: "Identity verification failed".into() }
+                rejection = Some(Message::Error { code: 401, message: "Identity verification failed".into() });
+            } else if let Some(list) = allowed_nodes.as_ref() {
+                if !list.iter().any(|id| id == &node_id) {
+                    warn!("[COORD] Rejecting RegisterNode from {}: node not in admission allow-list", remote_ip);
+                    rejection = Some(Message::Error { code: 403, message: "Node not allowed".into() });
+                }
+            }
+
+            if let Some(resp) = rejection {
+                resp
             } else {
                 info!("[COORD] Register: node_id={} ns={} ip={} quic_port={}", node_id, namespace, remote_ip, quic_port);
                 peers.write().unwrap_or_else(|e| e.into_inner()).insert(

@@ -66,6 +66,11 @@ struct Args {
     /// peer could hijack Android→home traffic). Only set this on trusted/private setups.
     #[arg(long)]
     allow_any_tunnel: bool,
+
+    /// Storage-node IDs (64-hex) allowed to register. Repeatable. When set,
+    /// registrations from any other node are refused even with a valid identity.
+    #[arg(long = "allowed-node")]
+    allowed_nodes: Vec<String>,
 }
 
 #[tokio::main(flavor = "multi_thread")]
@@ -130,6 +135,13 @@ async fn main() -> anyhow::Result<()> {
     start_tcp_tunnel_listener(args.tunnel_port, tunnels.clone(), tls_acceptor, args.allowed_tunnel_node_id.clone());
 
     let allowed_tunnel_node_id = args.allowed_tunnel_node_id.clone();
+    let allowed_nodes: std::sync::Arc<Option<Vec<String>>> = if args.allowed_nodes.is_empty() {
+        info!("[COORD] Node admission OPEN — pass --allowed-node <id> to restrict registration");
+        std::sync::Arc::new(None)
+    } else {
+        info!("[COORD] Node admission allow-list active: {} node(s)", args.allowed_nodes.len());
+        std::sync::Arc::new(Some(args.allowed_nodes.clone()))
+    };
     let allow_any_tunnel = args.allow_any_tunnel;
     if allowed_tunnel_node_id.is_none() && !allow_any_tunnel {
         warn!("[TUNNEL] --allowed-tunnel-node-id not set and --allow-any-tunnel not given — tunnel registration will be REFUSED");
@@ -159,7 +171,9 @@ async fn main() -> anyhow::Result<()> {
                 }
             };
 
+            let allowed_nodes_conn = allowed_nodes.clone();
             tokio::spawn(async move {
+                let allowed_nodes = allowed_nodes_conn;
                 let _permit = permit; // held for the connection's lifetime
                 let conn = match incoming.await {
                     Ok(c) => c,
@@ -288,10 +302,11 @@ async fn main() -> anyhow::Result<()> {
                     // ── Normal P2P connection ─────────────────────────────────
                     // Handle first message, then loop for more streams
                     let limiter_first = limiter.clone();
+                    let admission_first = allowed_nodes.clone();
                     tokio::spawn(handle_stream(
                         first_msg, first_send, first_recv, conn.clone(),
                         remote_ip, peers.clone(), ttl, node_for_task.clone(), channels.clone(),
-                        data_dir_owned.clone(), limiter_first,
+                        data_dir_owned.clone(), limiter_first, admission_first,
                     ));
 
                     while let Ok((send, mut recv)) = conn.accept_bi().await {
@@ -302,7 +317,8 @@ async fn main() -> anyhow::Result<()> {
                         let conn_clone = conn.clone();
                         let data_dir = data_dir_owned.clone();
                         let limiter = limiter.clone();
-                        tokio::spawn(handle_stream(msg, send, recv, conn_clone, remote_ip, peers, ttl, node, channels, data_dir, limiter));
+                        let admission = allowed_nodes.clone();
+                        tokio::spawn(handle_stream(msg, send, recv, conn_clone, remote_ip, peers, ttl, node, channels, data_dir, limiter, admission));
                     }
                 }
             });

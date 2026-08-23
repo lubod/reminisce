@@ -16,10 +16,31 @@ pub struct PeerInfo {
     pub last_seen: Instant,
 }
 
+/// Mesh admission control applied at the single choke point every peer enters
+/// through (`upsert`): LAN discovery, coordinator syncs, and any other source.
+#[derive(Debug, Clone, Default)]
+pub enum AdmissionPolicy {
+    /// Any signed announcement may join (legacy behavior).
+    #[default]
+    Open,
+    /// Only these node IDs (64-hex) may join; others are refused.
+    AllowList(Vec<String>),
+}
+
+impl AdmissionPolicy {
+    pub fn allows(&self, node_id: &str) -> bool {
+        match self {
+            AdmissionPolicy::Open => true,
+            AdmissionPolicy::AllowList(list) => list.iter().any(|id| id == node_id),
+        }
+    }
+}
+
 /// Thread-safe map of discovered peers, keyed by node_id hex string.
 #[derive(Clone, Default)]
 pub struct PeerRegistry {
     peers: Arc<RwLock<HashMap<String, PeerInfo>>>,
+    admission: Arc<AdmissionPolicy>,
 }
 
 fn is_private_ip(ip: std::net::IpAddr) -> bool {
@@ -34,7 +55,26 @@ impl PeerRegistry {
         Self::default()
     }
 
+    /// Registry that refuses to admit node IDs outside `allowed`.
+    pub fn with_allow_list(allowed: Vec<String>) -> Self {
+        Self {
+            peers: Arc::new(RwLock::new(HashMap::new())),
+            admission: Arc::new(AdmissionPolicy::AllowList(allowed)),
+        }
+    }
+
+    pub fn admission(&self) -> &AdmissionPolicy {
+        &self.admission
+    }
+
     pub fn upsert(&self, node_id: String, addr: SocketAddr) {
+        if !self.admission.allows(&node_id) {
+            tracing::warn!(
+                "[REGISTRY] Refused unlisted peer {} at {} (admission allow-list active)",
+                node_id, addr
+            );
+            return;
+        }
         let mut peers = self.peers.write().unwrap_or_else(|e| e.into_inner());
         if let Some(existing) = peers.get_mut(&node_id) {
             if is_private_ip(existing.addr.ip()) && !is_private_ip(addr.ip()) {

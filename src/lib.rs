@@ -68,7 +68,7 @@ use crate::config::Config;
 use actix_web::{ App, HttpServer, web, HttpResponse };
 use prometheus::{Encoder, TextEncoder};
 
-use tracing::{error, info, Span};
+use tracing::{error, info, warn, Span};
 use tracing_actix_web::{TracingLogger, RootSpanBuilder};
 use actix_web_prom::PrometheusMetricsBuilder;
 use actix_web::dev::ServiceRequest;
@@ -317,10 +317,16 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
 
         info!("P2P Node ID: {}", hex::encode(identity.node_id()));
 
-        let p2p_service = Arc::new(np2p::network::P2PService::new(
+        let p2p_service = Arc::new(np2p::network::P2PService::with_allowed_nodes(
             "0.0.0.0:0".parse().unwrap(),
-            identity
+            identity,
+            config.p2p_allowed_node_ids.clone(),
         ).await.expect("Failed to initialize P2P service"));
+        if config.p2p_allowed_node_ids.is_empty() {
+            warn!("P2P admission is OPEN — set p2p_allowed_node_ids in config.yaml to restrict which nodes can receive shards");
+        } else {
+            info!("P2P admission allow-list active with {} node(s)", config.p2p_allowed_node_ids.len());
+        }
     
         if let Err(e) = services::ai_settings::load_ai_settings_from_db(&pool, &config).await {
             error!("Failed to load AI settings from database: {}", e);

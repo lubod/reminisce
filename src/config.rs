@@ -36,6 +36,10 @@ pub struct Config {
     // rate-limit key (e.g. the nginx host). Loopback is always trusted.
     #[serde(default)]
     pub rate_limit_trusted_proxies: Vec<String>,
+    // P2P mesh admission control: storage-node IDs (64-hex, from each node's
+    // startup log) allowed to receive shards. Empty = open admission (legacy).
+    #[serde(default)]
+    pub p2p_allowed_node_ids: Vec<String>,
 
     // Database connection pool configuration
     #[serde(default = "default_db_tls")]

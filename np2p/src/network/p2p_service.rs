@@ -25,14 +25,48 @@ pub struct P2PService {
 
 impl P2PService {
     pub async fn new(listen_addr: SocketAddr, identity: NodeIdentity) -> Result<Self> {
+        Self::with_registry(listen_addr, identity, PeerRegistry::new()).await
+    }
+
+    /// Service whose peer registry only admits the listed node IDs (mesh
+    /// admission control). An empty list means open admission.
+    pub async fn with_allowed_nodes(
+        listen_addr: SocketAddr,
+        identity: NodeIdentity,
+        allowed_nodes: Vec<String>,
+    ) -> Result<Self> {
+        let registry = if allowed_nodes.is_empty() {
+            PeerRegistry::new()
+        } else {
+            PeerRegistry::with_allow_list(allowed_nodes)
+        };
+        Self::with_registry(listen_addr, identity, registry).await
+    }
+
+    pub async fn with_registry(
+        listen_addr: SocketAddr,
+        identity: NodeIdentity,
+        registry: PeerRegistry,
+    ) -> Result<Self> {
         let std_socket = std::net::UdpSocket::bind(listen_addr)?;
         std_socket.set_nonblocking(true)?;
         let node = Node::from_socket(std_socket, identity.clone())?;
 
+        // Bound registry growth: evict entries not seen for an hour. Peers
+        // reappear via the next discovery announcement or coordinator sync.
+        let sweeper = registry.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(600));
+            loop {
+                interval.tick().await;
+                sweeper.remove_stale(3600);
+            }
+        });
+
         Ok(Self {
             node,
             identity: Arc::new(identity),
-            registry: PeerRegistry::new(),
+            registry,
             coordinator_addr: None,
             coordinator_node_id: None,
         })
