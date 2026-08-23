@@ -32,7 +32,7 @@ pub const TEST_VIDEO_HASH: &str = "359e03c57e2fbe3af680cb73cc7e553893548adf52b3a
 #[allow(dead_code)]
 pub const TEST_VIDEO_NAME: &str = "/storage/emulated/0/DCIM/Camera/VID_20250614_224725.mp4";
 #[allow(dead_code)]
-pub const TEST_VIDEO_HASH2: &str = "cc32a44125af17256768285da55c0c8ca5fae4f9425c4202be2a005fff60d9b7"; // BLAKE3 of tests/test_video2.mp4
+pub const TEST_VIDEO_HASH2: &str = "93ff826ccbb174a23124b8247276d8af171e338e6b024b6c7543b4d9bd4159d3"; // BLAKE3 of tests/test_video2.mp4
 #[allow(dead_code)]
 pub const TEST_VIDEO_NAME2: &str = "/storage/emulated/0/DCIM/Camera/VID_20250614_224726.mp4";
 #[allow(dead_code)]

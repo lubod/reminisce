@@ -173,10 +173,20 @@ fn validate_media_file(
             "Rejected {}: content sniffs as {} but was uploaded as {}",
             hash, other, expected_kind
         ).into()),
-        None => Err(format!(
-            "Rejected {}: unrecognized or non-media content",
-            hash
-        ).into()),
+        None => {
+            log::warn!(
+                "Rejected {} ({}): unrecognized content, first {} bytes: {}",
+                hash,
+                ext,
+                n,
+                head[..n].iter().map(|b| format!("{:02x}", b)).collect::<String>()
+            );
+            Err(format!(
+                "Rejected {}: unrecognized or non-media content",
+                hash
+            ).into())
+        }
+
     }
 }
 

@@ -212,6 +212,17 @@ pub async fn streaming_hash_to_temp(
                 actix_web::error::ErrorInternalServerError("Failed to write temp file")
             })?;
     }
+    // Ensure every byte is actually in the file before any reader (magic-byte
+    // validation, move/rename) touches the path — and make it crash-durable
+    // while we're at it.
+    f.flush().await.map_err(|e| {
+        log::error!("Failed to flush temp file {:?}: {}", temp_path, e);
+        actix_web::error::ErrorInternalServerError("Failed to flush temp file")
+    })?;
+    f.sync_all().await.map_err(|e| {
+        log::error!("Failed to sync temp file {:?}: {}", temp_path, e);
+        actix_web::error::ErrorInternalServerError("Failed to sync temp file")
+    })?;
     Ok((temp_path, hasher.finalize().to_hex().to_string()))
 }
 
