@@ -52,7 +52,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     }
 
-    let restored = restore_file(&pool, &p2p_service, &args.hash, &args.api_secret).await?;
+    let restored = restore_file(&pool, &p2p_service, &args.hash, &args.api_secret, None).await?;
 
     let out_dir = std::path::Path::new(&args.output);
     std::fs::create_dir_all(out_dir)?;

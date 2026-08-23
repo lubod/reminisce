@@ -35,14 +35,19 @@ struct FileRecord {
 ///
 /// `api_secret` is the master secret used to unwrap the per-file ChaCha20 key stored
 /// in `p2p_encryption_key` (which is wrapped via `utils::encrypt_key`).
+///
+/// `owner_user_id` scopes the lookup to one user's media. Pass `None` only for
+/// admin callers and the local disaster-recovery CLI; the HTTP handler must always
+/// pass `Some(user_id)` for non-admin roles (object-level authorization).
 pub async fn restore_file(
     pool: &Pool,
     p2p_service: &Arc<P2PService>,
     file_hash: &str,
     api_secret: &str,
+    owner_user_id: Option<&str>,
 ) -> Result<RestoredFile, Box<dyn std::error::Error + Send + Sync>> {
     let svc = p2p_service.clone();
-    restore_file_with_fetcher(pool, file_hash, move |node_id, shard_hash| {
+    restore_file_with_fetcher(pool, file_hash, owner_user_id, move |node_id, shard_hash| {
         let svc = svc.clone();
         async move {
             let token = svc.identity().create_shard_token(np2p::crypto::ShardOp::Retrieve, &shard_hash);
@@ -61,6 +66,7 @@ pub async fn restore_file(
 pub async fn restore_file_with_fetcher<F, Fut>(
     pool: &Pool,
     file_hash: &str,
+    owner_user_id: Option<&str>,
     fetch: F,
     api_secret: &str,
 ) -> Result<RestoredFile, Box<dyn std::error::Error + Send + Sync>>
@@ -70,7 +76,7 @@ where
 {
     let client = pool.get().await?;
 
-    let rec = query_file_record(&client, file_hash, api_secret).await?
+    let rec = query_file_record(&client, file_hash, owner_user_id, api_secret).await?
         .ok_or_else(|| format!("File {} not found in database", file_hash))?;
 
     let shard_rows = client.query(
@@ -150,14 +156,27 @@ where
 async fn query_file_record(
     client: &deadpool_postgres::Object,
     file_hash: &str,
+    owner_user_id: Option<&str>,
     api_secret: &str,
 ) -> Result<Option<FileRecord>, Box<dyn std::error::Error + Send + Sync>> {
-    let row = client.query_opt(
-        "SELECT name, ext, p2p_encryption_key, p2p_encrypted_size, \
-         p2p_segment_count, p2p_segment_enc_sizes, p2p_data_shards, p2p_parity_shards \
-         FROM images WHERE hash = $1 AND deleted_at IS NULL",
-        &[&file_hash],
-    ).await?;
+    // Object-level authorization: non-admin callers may only touch their own rows.
+    // The same predicate style is used by services/thumbnail.rs. An unparseable
+    // owner id simply matches nothing (reported as not-found).
+    let owner_uuid = owner_user_id.and_then(|uid| uuid::Uuid::parse_str(uid).ok());
+    let row = match owner_uuid {
+        Some(uid) => client.query_opt(
+            "SELECT name, ext, p2p_encryption_key, p2p_encrypted_size, \
+             p2p_segment_count, p2p_segment_enc_sizes, p2p_data_shards, p2p_parity_shards \
+             FROM images WHERE hash = $1 AND deleted_at IS NULL AND user_id = $2",
+            &[&file_hash, &uid],
+        ).await?,
+        None => client.query_opt(
+            "SELECT name, ext, p2p_encryption_key, p2p_encrypted_size, \
+             p2p_segment_count, p2p_segment_enc_sizes, p2p_data_shards, p2p_parity_shards \
+             FROM images WHERE hash = $1 AND deleted_at IS NULL",
+            &[&file_hash],
+        ).await?,
+    };
 
     if let Some(r) = row {
         let key = r.get::<_, Option<Vec<u8>>>(2)
@@ -177,12 +196,20 @@ async fn query_file_record(
         }));
     }
 
-    let row = client.query_opt(
-        "SELECT name, ext, p2p_encryption_key, p2p_encrypted_size, \
-         p2p_segment_count, p2p_segment_enc_sizes, p2p_data_shards, p2p_parity_shards \
-         FROM videos WHERE hash = $1 AND deleted_at IS NULL",
-        &[&file_hash],
-    ).await?;
+    let row = match owner_uuid {
+        Some(uid) => client.query_opt(
+            "SELECT name, ext, p2p_encryption_key, p2p_encrypted_size, \
+             p2p_segment_count, p2p_segment_enc_sizes, p2p_data_shards, p2p_parity_shards \
+             FROM videos WHERE hash = $1 AND deleted_at IS NULL AND user_id = $2",
+            &[&file_hash, &uid],
+        ).await?,
+        None => client.query_opt(
+            "SELECT name, ext, p2p_encryption_key, p2p_encrypted_size, \
+             p2p_segment_count, p2p_segment_enc_sizes, p2p_data_shards, p2p_parity_shards \
+             FROM videos WHERE hash = $1 AND deleted_at IS NULL",
+            &[&file_hash],
+        ).await?,
+    };
 
     if let Some(r) = row {
         let key = r.get::<_, Option<Vec<u8>>>(2)

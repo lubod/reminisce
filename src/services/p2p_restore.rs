@@ -26,9 +26,16 @@ pub async fn restore_p2p_file(
     p2p_service: web::Data<Arc<P2PService>>,
     pool: web::Data<MainDbPool>,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let _claims = match utils::authenticate_request(&req, "restore_p2p_file", config.get_api_key()).await {
+    let claims = match utils::authenticate_request(&req, "restore_p2p_file", config.get_api_key()).await {
         Ok(c) => c,
         Err(r) => return Ok(r),
+    };
+
+    // Object-level authorization: only admins may restore arbitrary users' media.
+    let owner_user_id: Option<String> = if claims.role == "admin" {
+        None
+    } else {
+        Some(claims.user_id.clone())
     };
 
     let file_hash = path.into_inner();
@@ -36,7 +43,7 @@ pub async fn restore_p2p_file(
         Ok(k) => k.to_string(),
         Err(e) => return Ok(HttpResponse::InternalServerError().body(e.to_string())),
     };
-    match restore_file(&pool.0, &p2p_service, &file_hash, &api_secret).await {
+    match restore_file(&pool.0, &p2p_service, &file_hash, &api_secret, owner_user_id.as_deref()).await {
         Ok(restored) => {
             // Sanitize the (client-supplied) filename for use inside a Content-Disposition
             // header so it can't inject newlines/quotes.

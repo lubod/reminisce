@@ -137,7 +137,7 @@ async fn test_restore_single_segment_image_all_shards() {
     }
 
     let store = Arc::new(shard_store_from(&shards));
-    let restored = restore_file_with_fetcher(&pool, hash, memory_fetcher(store), "test-secret")
+    let restored = restore_file_with_fetcher(&pool, hash, None, memory_fetcher(store), "test-secret")
         .await
         .expect("restore should succeed");
 
@@ -162,7 +162,7 @@ async fn test_restore_single_segment_video() {
     }
 
     let store = Arc::new(shard_store_from(&shards));
-    let restored = restore_file_with_fetcher(&pool, hash, memory_fetcher(store), "test-secret")
+    let restored = restore_file_with_fetcher(&pool, hash, None, memory_fetcher(store), "test-secret")
         .await
         .expect("restore should succeed");
 
@@ -192,7 +192,7 @@ async fn test_restore_degraded_one_shard_missing() {
     store_map.remove(&missing_hash);
     let store = Arc::new(store_map);
 
-    let restored = restore_file_with_fetcher(&pool, hash, memory_fetcher(store), "test-secret")
+    let restored = restore_file_with_fetcher(&pool, hash, None, memory_fetcher(store), "test-secret")
         .await
         .expect("should recover with 4/5 shards");
 
@@ -221,7 +221,7 @@ async fn test_restore_fails_with_only_two_shards() {
     let h3: [u8;32] = blake3::hash(&shards[3]).into(); store_map.remove(&h3);
     let store = Arc::new(store_map);
 
-    let err = restore_file_with_fetcher(&pool, hash, memory_fetcher(store), "test-secret")
+    let err = restore_file_with_fetcher(&pool, hash, None, memory_fetcher(store), "test-secret")
         .await
         .unwrap_err();
 
@@ -252,7 +252,7 @@ async fn test_restore_hash_mismatch_treated_as_missing() {
     let store = Arc::new(store_map);
 
     // Still has 4 valid shards — restore should succeed despite the corrupted one
-    let restored = restore_file_with_fetcher(&pool, hash, memory_fetcher(store), "test-secret")
+    let restored = restore_file_with_fetcher(&pool, hash, None, memory_fetcher(store), "test-secret")
         .await
         .expect("should recover ignoring corrupted shard");
 
@@ -264,7 +264,7 @@ async fn test_restore_file_not_found() {
     let (pool, _db) = setup_test_database_with_instance().await;
 
     let store = Arc::new(HashMap::<[u8; 32], Vec<u8>>::new());
-    let err = restore_file_with_fetcher(&pool, "nonexistent_hash_xyz", memory_fetcher(store), "test-secret")
+    let err = restore_file_with_fetcher(&pool, "nonexistent_hash_xyz", None, memory_fetcher(store), "test-secret")
         .await
         .unwrap_err();
 
@@ -282,7 +282,7 @@ async fn test_restore_no_shards_in_db() {
     insert_image(&client, hash, "noshards", "jpg", &key, 100, 1, None).await;
 
     let store = Arc::new(HashMap::<[u8; 32], Vec<u8>>::new());
-    let err = restore_file_with_fetcher(&pool, hash, memory_fetcher(store), "test-secret")
+    let err = restore_file_with_fetcher(&pool, hash, None, memory_fetcher(store), "test-secret")
         .await
         .unwrap_err();
 
@@ -329,7 +329,7 @@ async fn test_restore_multi_segment_full_fetch() {
     }
 
     let store = Arc::new(shard_store_from(&full_shards));
-    let restored = restore_file_with_fetcher(&pool, hash, memory_fetcher(store), "test-secret")
+    let restored = restore_file_with_fetcher(&pool, hash, None, memory_fetcher(store), "test-secret")
         .await
         .expect("multi-segment restore should succeed");
 
@@ -375,7 +375,7 @@ async fn test_restore_multi_segment_one_shard_missing() {
     let hf4: [u8;32] = blake3::hash(&full_shards[4]).into(); store_map.remove(&hf4);
     let store = Arc::new(store_map);
 
-    let restored = restore_file_with_fetcher(&pool, hash, memory_fetcher(store), "test-secret")
+    let restored = restore_file_with_fetcher(&pool, hash, None, memory_fetcher(store), "test-secret")
         .await
         .expect("should recover multi-segment with 4/5 shards");
 
@@ -418,4 +418,38 @@ async fn test_restore_p2p_file_http_endpoint() {
         .to_request();
     let resp_auth = test::call_service(&app, req_auth).await;
     assert_eq!(resp_auth.status(), http::StatusCode::NOT_FOUND);
+}
+
+// ---------------------------------------------------------------------------
+// Test: object-level authorization (owner scoping)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_restore_scoped_to_owner() {
+    let (pool, _db) = setup_test_database_with_instance().await;
+    let client = pool.get().await.unwrap();
+
+    let key = [0xB7u8; 32];
+    let original = b"ownership scoping test data";
+    let (shards, enc_size) = StorageEngine::process_for_backup(original, &key, &key, 3, 2).unwrap();
+
+    let hash = "restore_test_owner_001";
+    insert_image(&client, hash, "owned", "jpg", &key, enc_size as i32, 1, None).await;
+    for (i, shard) in shards.iter().enumerate() {
+        insert_shard(&client, hash, i as i32, shard).await;
+    }
+    let store = Arc::new(shard_store_from(&shards));
+
+    // The owner can restore their own file.
+    let restored = restore_file_with_fetcher(&pool, hash, Some(TEST_USER_ID), memory_fetcher(store.clone()), "test-secret")
+        .await
+        .expect("owner restore must succeed");
+    assert_eq!(restored.data, original.to_vec());
+
+    // A different user must NOT be able to restore it — the lookup is scoped.
+    let other_user = "660e8400-e29b-41d4-a716-446655440999";
+    let err = restore_file_with_fetcher(&pool, hash, Some(other_user), memory_fetcher(store), "test-secret")
+        .await
+        .expect_err("cross-user restore must fail");
+    assert!(err.to_string().contains("not found in database"));
 }
