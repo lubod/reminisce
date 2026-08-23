@@ -180,6 +180,7 @@ fn validate_media_file(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn process_image_file(
     temp_path: &Path,
     name: &str,

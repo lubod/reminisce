@@ -21,19 +21,39 @@ impl Node {
         Self::from_socket(socket, identity)
     }
 
+    /// Builds the shared QUIC transport settings used for both server and client
+    /// roles (see the comment in `from_socket` for the chosen values).
+    fn hardened_transport() -> quinn::TransportConfig {
+        let mut transport = quinn::TransportConfig::default();
+        transport.keep_alive_interval(Some(Duration::from_secs(15)));
+        transport.max_idle_timeout(Some(Duration::from_secs(300).try_into().unwrap()));
+        transport.stream_receive_window(quinn::VarInt::from_u32(4 * 1024 * 1024));
+        transport.receive_window(quinn::VarInt::from_u32(4 * 1024 * 1024));
+        transport.max_concurrent_bidi_streams(quinn::VarInt::from_u32(32));
+        transport.max_concurrent_uni_streams(quinn::VarInt::from_u32(0));
+        transport
+    }
+
     /// Creates a node from an existing UDP socket.
     pub fn from_socket(socket: std::net::UdpSocket, identity: NodeIdentity) -> Result<Self> {
-        let (server_config, mut client_config) = identity.generate_tls_config()?;
+        let (mut server_config, mut client_config) = identity.generate_tls_config()?;
 
         // Keep long-lived connections (e.g. tunnel) alive with QUIC PING frames.
         // idle timeout 300s so large segmented uploads (encrypt/erasure-code of each
         // 256MB segment can pause streaming >60s under CPU/disk load) don't get
         // silently dropped mid-stream — previously caused "0/5 shards stored" for
         // big files even though the sender reported success.
-        let mut transport = quinn::TransportConfig::default();
-        transport.keep_alive_interval(Some(Duration::from_secs(15)));
-        transport.max_idle_timeout(Some(Duration::from_secs(300).try_into().unwrap()));
-        client_config.transport_config(Arc::new(transport));
+        //
+        // Resource caps (apply to both roles):
+        //  * 4 MiB per-stream and per-connection flow-control receive windows bound
+        //    how much unread data a misbehaving peer can make us buffer.
+        //  * max_concurrent_bidi_streams(32) bounds concurrent inbound streams;
+        //    uni streams are refused entirely (the protocol is bidi-only).
+        client_config.transport_config(Arc::new(Self::hardened_transport()));
+
+        // The SERVER side previously ran on quinn's default TransportConfig with no
+        // caps at all — incoming connections could buffer/open far more.
+        server_config.transport_config(Arc::new(Self::hardened_transport()));
 
         let mut endpoint = Endpoint::new(
             quinn::EndpointConfig::default(),

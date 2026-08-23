@@ -94,6 +94,40 @@ impl DiskStorage {
         self.base_path.join(prefix).join(format!("{}.tmp", rest))
     }
 
+    /// Returns a unique sibling temp path for `final_path` (same directory, so
+    /// the subsequent rename stays atomic on the same filesystem). Uniqueness
+    /// comes from pid + wall-clock nanos + a process-local counter, so two
+    /// writers (or two processes) can never interleave into one temp file.
+    fn unique_temp_sibling(final_path: &Path) -> PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let mut name = final_path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "shard".to_string());
+        name.push_str(&format!(".{}.{}.{}.tmp", std::process::id(), nanos, seq));
+        final_path.with_file_name(name)
+    }
+
+    /// Best-effort fsync of the parent directory of `path` so the rename that
+    /// moved `path` into place is itself durable across power loss. Errors are
+    /// ignored (e.g. platforms where directories cannot be opened as files).
+    async fn sync_parent_dir(path: &Path) {
+        #[cfg(unix)]
+        if let Some(parent) = path.parent() {
+            if let Ok(dir) = tokio::fs::File::open(parent).await {
+                let _ = dir.sync_all().await;
+            }
+        }
+        #[cfg(not(unix))]
+        let _ = path;
+    }
+
     /// Stores a shard on disk.
     pub async fn store(&self, shard_hash: [u8; 32], data: &[u8]) -> Result<()> {
         // Assert at least 100MB of free space is available (fails closed off-Unix).
@@ -108,7 +142,27 @@ impl DiskStorage {
             }
         }
 
-        fs::write(path, data).await?;
+        // Durable write: temp file in the same dir → flush → fsync → atomic rename
+        // over the content-addressed final path. A crash mid-write can therefore
+        // never leave a truncated/partial shard at the final path.
+        let tmp_path = Self::unique_temp_sibling(&path);
+        let result = async {
+            let mut file = fs::File::create(&tmp_path).await?;
+            file.write_all(data).await?;
+            file.flush().await?;
+            file.sync_all().await?;
+            drop(file);
+            fs::rename(&tmp_path, &path).await
+        }
+        .await;
+        if let Err(e) = result {
+            // Never leak the temp file on failure.
+            let _ = fs::remove_file(&tmp_path).await;
+            return Err(e.into());
+        }
+
+        // Persist the directory entry (best-effort).
+        Self::sync_parent_dir(&path).await;
         Ok(())
     }
 
@@ -147,7 +201,14 @@ impl DiskStorage {
                 fs::create_dir_all(parent).await?;
             }
         }
-        fs::rename(temp_path, final_path).await?;
+        // Flush the streamed (append-written) chunks to stable storage BEFORE the
+        // rename, so the final path never names a file whose bytes are not durable.
+        let file = tokio::fs::File::open(temp_path).await?;
+        file.sync_all().await?;
+        drop(file);
+        fs::rename(temp_path, &final_path).await?;
+        // Persist the directory entry (best-effort).
+        Self::sync_parent_dir(&final_path).await;
         Ok(())
     }
 

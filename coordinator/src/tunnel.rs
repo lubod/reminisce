@@ -5,11 +5,22 @@ use std::io::BufReader;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::io::{AsyncRead, AsyncWrite};
+use std::time::Duration;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::sync::Semaphore;
 use tokio_rustls::TlsAcceptor;
 use tracing::{info, warn};
 
 use crate::types::TunnelMap;
+
+/// Maximum concurrent tunneled client connections. Additional clients are
+/// dropped (fail fast) instead of queueing unbounded tasks/memory.
+pub const MAX_CONCURRENT_TUNNELS: usize = 256;
+
+/// How long a tunnel may stay silent before it is reaped. Unlike the previous
+/// fixed 1800s wall-clock kill, this resets on every received chunk, so long
+/// active transfers (big uploads/downloads) are never cut off mid-flight.
+const TUNNEL_IDLE_TIMEOUT: Duration = Duration::from_secs(1800);
 
 pub fn load_tls_acceptor(cert: &PathBuf, key: &PathBuf) -> anyhow::Result<TlsAcceptor> {
     let cert_file = std::fs::File::open(cert)?;
@@ -27,24 +38,51 @@ pub fn load_tls_acceptor(cert: &PathBuf, key: &PathBuf) -> anyhow::Result<TlsAcc
     Ok(TlsAcceptor::from(Arc::new(config)))
 }
 
+/// Copies reader → writer, failing if no data arrives within `idle`. The idle
+/// clock resets on every successfully transferred chunk.
+async fn copy_with_idle<R, W>(mut reader: R, mut writer: W, idle: Duration) -> std::io::Result<u64>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    let mut buf = vec![0u8; 64 * 1024];
+    let mut total = 0u64;
+    loop {
+        let n = match tokio::time::timeout(idle, reader.read(&mut buf)).await {
+            Ok(res) => res?,
+            Err(_) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "tunnel idle timeout",
+                ));
+            }
+        };
+        if n == 0 {
+            return Ok(total);
+        }
+        writer.write_all(&buf[..n]).await?;
+        total += n as u64;
+    }
+}
+
 async fn pipe<R, W>(
-    mut client_read: R,
-    mut client_write: W,
-    mut quic_recv: quinn::RecvStream,
-    mut quic_send: quinn::SendStream,
+    client_read: R,
+    client_write: W,
+    quic_recv: quinn::RecvStream,
+    quic_send: quinn::SendStream,
 ) where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
-    let to_home = tokio::io::copy(&mut client_read, &mut quic_send);
-    let to_client = tokio::io::copy(&mut quic_recv, &mut client_write);
-    // 30-minute timeout: prevents stalled connections from holding QUIC streams
-    // open, while allowing long media uploads/downloads through the tunnel.
-    let timeout = tokio::time::sleep(std::time::Duration::from_secs(1800));
+    let to_home = copy_with_idle(client_read, quic_send, TUNNEL_IDLE_TIMEOUT);
+    let to_client = copy_with_idle(quic_recv, client_write, TUNNEL_IDLE_TIMEOUT);
     tokio::select! {
-        _ = to_home => {}
-        _ = to_client => {}
-        _ = timeout => { warn!("[TUNNEL] Pipe timed out after 1800s — closing"); }
+        res = to_home => {
+            if let Err(e) = res { warn!("[TUNNEL] Client→home direction ended: {}", e); }
+        }
+        res = to_client => {
+            if let Err(e) = res { warn!("[TUNNEL] Home→client direction ended: {}", e); }
+        }
     }
 }
 
@@ -70,13 +108,29 @@ pub fn start_tcp_tunnel_listener(
         let tls_label = if tls_acceptor.is_some() { "HTTPS" } else { "HTTP" };
         info!("[TUNNEL] {} listener on :{} (Android → home server)", tls_label, tunnel_port);
 
+        // Bound concurrently-piped tunnels so client floods cannot spawn
+        // unbounded tasks/QUIC streams on the coordinator.
+        let tunnel_permits = Arc::new(Semaphore::new(MAX_CONCURRENT_TUNNELS));
+
         loop {
             let Ok((tcp_stream, client_addr)) = listener.accept().await else { continue };
+
+            // Fail fast when at capacity rather than stalling the accept loop.
+            let permit = match tunnel_permits.clone().try_acquire_owned() {
+                Ok(permit) => permit,
+                Err(_) => {
+                    warn!("[TUNNEL] At capacity ({} tunnels) — dropping {}", MAX_CONCURRENT_TUNNELS, client_addr);
+                    continue;
+                }
+            };
+
             let tunnels = tunnels.clone();
             let tls = tls_acceptor.clone();
             let allowed = allowed_tunnel_node_id.clone();
 
             tokio::spawn(async move {
+                // Released when this tunnel's pipe task ends.
+                let _permit = permit;
                 let tunnel_conn = {
                     let map = tunnels.read().unwrap_or_else(|e| e.into_inner());
                     match &allowed {

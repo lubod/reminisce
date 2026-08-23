@@ -300,11 +300,11 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
         let id = match config.p2p_identity_kdf.as_deref() {
             Some("argon2id") => {
                 info!("P2P identity: Argon2id (hardened) derivation");
-                np2p::crypto::NodeIdentity::from_secret_hardened(&secret_for_identity)
+                np2p::crypto::NodeIdentity::from_secret_hardened(secret_for_identity)
             }
             _ => {
                 warn!("P2P identity uses legacy fast-hash derivation (offline brute-force oracle on the API secret). Set p2p_identity_kdf: argon2id to harden — NOTE this changes the node ID and requires re-pairing storage nodes.");
-                np2p::crypto::NodeIdentity::from_secret(&secret_for_identity)
+                np2p::crypto::NodeIdentity::from_secret(secret_for_identity)
             }
         };
         // Persist the derived identity so tooling that reads node.key stays consistent.

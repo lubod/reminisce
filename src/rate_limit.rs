@@ -11,6 +11,7 @@ use std::{
     time::Instant,
 };
 
+#[cfg(test)]
 fn is_private_or_local(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => v4.is_loopback() || v4.is_private() || v4.is_link_local(),
@@ -302,6 +303,64 @@ where
     }
 }
 
+// ---------------------------------------------------------------------------
+// Per-account login failure lockout
+//
+// The IP bucket alone cannot stop a distributed or LAN-wide brute force aimed
+// at a single username. This in-memory tracker fails closed per account:
+// after LOGIN_FAILURE_THRESHOLD failures inside the window, further attempts
+// for that username are rejected until the window empties.
+// ---------------------------------------------------------------------------
+
+const LOGIN_FAILURE_THRESHOLD: usize = 8;
+const LOGIN_FAILURE_WINDOW_SECS: u64 = 900; // 15 minutes
+
+fn login_failure_store() -> &'static std::sync::Mutex<HashMap<String, Vec<Instant>>> {
+    static STORE: std::sync::OnceLock<std::sync::Mutex<HashMap<String, Vec<Instant>>>> = std::sync::OnceLock::new();
+    STORE.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+}
+
+/// Returns true when logins are currently allowed for this account.
+pub fn login_allowed_for_account(username: &str) -> bool {
+    let key = username.trim().to_lowercase();
+    if key.is_empty() {
+        return false;
+    }
+    let mut store = login_failure_store().lock().unwrap_or_else(|e| e.into_inner());
+    let now = Instant::now();
+    if let Some(failures) = store.get_mut(&key) {
+        failures.retain(|t| now.duration_since(*t).as_secs() < LOGIN_FAILURE_WINDOW_SECS);
+        failures.len() < LOGIN_FAILURE_THRESHOLD
+    } else {
+        true
+    }
+}
+
+/// Record a failed login attempt for this account.
+pub fn record_login_failure(username: &str) {
+    let key = username.trim().to_lowercase();
+    if key.is_empty() {
+        return;
+    }
+    let mut store = login_failure_store().lock().unwrap_or_else(|e| e.into_inner());
+    let now = Instant::now();
+    let failures = store.entry(key).or_default();
+    failures.push(now);
+    failures.retain(|t| now.duration_since(*t).as_secs() < LOGIN_FAILURE_WINDOW_SECS);
+    // Bound memory: drop fully-expired accounts while we hold the lock.
+    store.retain(|_, v| !v.is_empty());
+}
+
+/// Clear failure history after a successful login.
+pub fn clear_login_failures(username: &str) {
+    let key = username.trim().to_lowercase();
+    if key.is_empty() {
+        return;
+    }
+    let mut store = login_failure_store().lock().unwrap_or_else(|e| e.into_inner());
+    store.remove(&key);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -386,6 +445,7 @@ mod tests {
         assert!(login_allowed_for_account(user), "success must clear history");
     }
 
+    #[test]
     fn token_bucket_allows_full_capacity_and_denies_when_empty() {
         let mut tb = TokenBucket::new(10.0);
         assert!(tb.consume(10.0, 1.0, 10.0), "a full burst must be allowed");
@@ -480,60 +540,3 @@ mod tests {
 }
 
 
-// ---------------------------------------------------------------------------
-// Per-account login failure lockout
-//
-// The IP bucket alone cannot stop a distributed or LAN-wide brute force aimed
-// at a single username. This in-memory tracker fails closed per account:
-// after LOGIN_FAILURE_THRESHOLD failures inside the window, further attempts
-// for that username are rejected until the window empties.
-// ---------------------------------------------------------------------------
-
-const LOGIN_FAILURE_THRESHOLD: usize = 8;
-const LOGIN_FAILURE_WINDOW_SECS: u64 = 900; // 15 minutes
-
-fn login_failure_store() -> &'static std::sync::Mutex<HashMap<String, Vec<Instant>>> {
-    static STORE: std::sync::OnceLock<std::sync::Mutex<HashMap<String, Vec<Instant>>>> = std::sync::OnceLock::new();
-    STORE.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
-}
-
-/// Returns true when logins are currently allowed for this account.
-pub fn login_allowed_for_account(username: &str) -> bool {
-    let key = username.trim().to_lowercase();
-    if key.is_empty() {
-        return false;
-    }
-    let mut store = login_failure_store().lock().unwrap_or_else(|e| e.into_inner());
-    let now = Instant::now();
-    if let Some(failures) = store.get_mut(&key) {
-        failures.retain(|t| now.duration_since(*t).as_secs() < LOGIN_FAILURE_WINDOW_SECS);
-        failures.len() < LOGIN_FAILURE_THRESHOLD
-    } else {
-        true
-    }
-}
-
-/// Record a failed login attempt for this account.
-pub fn record_login_failure(username: &str) {
-    let key = username.trim().to_lowercase();
-    if key.is_empty() {
-        return;
-    }
-    let mut store = login_failure_store().lock().unwrap_or_else(|e| e.into_inner());
-    let now = Instant::now();
-    let failures = store.entry(key).or_default();
-    failures.push(now);
-    failures.retain(|t| now.duration_since(*t).as_secs() < LOGIN_FAILURE_WINDOW_SECS);
-    // Bound memory: drop fully-expired accounts while we hold the lock.
-    store.retain(|_, v| !v.is_empty());
-}
-
-/// Clear failure history after a successful login.
-pub fn clear_login_failures(username: &str) {
-    let key = username.trim().to_lowercase();
-    if key.is_empty() {
-        return;
-    }
-    let mut store = login_failure_store().lock().unwrap_or_else(|e| e.into_inner());
-    store.remove(&key);
-}

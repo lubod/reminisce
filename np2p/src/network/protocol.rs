@@ -98,17 +98,39 @@ pub enum Message {
     ListShardsResponse { prefix: Option<String>, shards: Vec<[u8; 32]>, available_space_bytes: u64 },
 }
 
+/// Hard cap on the size of a single framed protocol message.
+///
+/// A peer that declares a larger frame is treated as malicious/corrupt and the
+/// connection message is rejected BEFORE any buffer of the declared size is
+/// allocated (prevents memory-exhaustion via a forged length prefix).
+///
+/// NOTE: this must stay >= ~90 MiB, not a small control-plane-only value: the
+/// wire legitimately carries bulk payloads in single frames —
+///   * `StoreShardChunk` messages up to 16 MiB (src/p2p_upload.rs CHUNK_MSG_SIZE,
+///     which is documented as "kept safely under the protocol receive cap"),
+///   * relayed `RetrieveShardResponse` payloads for the largest single shard
+///     (~85 MB for a 256 MB file split into 3 data shards) plus bincode overhead.
+///
+/// Peers are identity-authenticated, so this is a trust-boundary limit.
+pub const MAX_MESSAGE_LEN: u32 = 128 * 1024 * 1024;
+
 pub struct Protocol;
 
 impl Protocol {
     pub async fn send(send: &mut quinn::SendStream, msg: &Message) -> crate::error::Result<()> {
         let bytes = bincode::serialize(msg)?;
-        // Never silently truncate: the frame prefix is a u32, so oversized
-        // messages must error instead of corrupting the framing on the wire.
+        // Never silently truncate or send an unframeable message: reject anything
+        // the receiver would refuse under MAX_MESSAGE_LEN before touching the wire.
         let len = u32::try_from(bytes.len())
             .map_err(|_| crate::error::Np2pError::Protocol(format!(
                 "Message too large to frame ({} bytes)", bytes.len()
             )))?;
+        if len > MAX_MESSAGE_LEN {
+            return Err(crate::error::Np2pError::Network(format!(
+                "Refusing to send {}-byte message: exceeds MAX_MESSAGE_LEN ({} bytes)",
+                len, MAX_MESSAGE_LEN
+            )));
+        }
 
         send.write_all(&len.to_be_bytes()).await?;
         send.write_all(&bytes).await?;
@@ -120,13 +142,13 @@ impl Protocol {
         recv.read_exact(&mut len_buf).await?;
         let len = u32::from_be_bytes(len_buf) as usize;
 
-        // Cap must accommodate the largest intentional message we can receive:
-        // a relayed shard payload (RetrieveShardResponse) for the largest single
-        // shard (~85 MB for a 256 MB file split into 3 data shards) plus bincode
-        // framing overhead. Peers in a mesh are identity-authenticated, so this is
-        // a trust-boundary limit (an unpinned storage node is already an open relay).
-        if len > 128 * 1024 * 1024 {
-            return Err(crate::error::Np2pError::Protocol("Message too large".into()));
+        // Reject oversized frames BEFORE allocating the buffer of the declared
+        // size: a forged length prefix must not be able to force a huge allocation.
+        if len > MAX_MESSAGE_LEN as usize {
+            return Err(crate::error::Np2pError::Network(format!(
+                "Peer declared {}-byte message, exceeding MAX_MESSAGE_LEN ({} bytes) — rejecting without allocating",
+                len, MAX_MESSAGE_LEN
+            )));
         }
 
         let mut buf = vec![0u8; len];

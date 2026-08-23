@@ -4,8 +4,10 @@ use tracing::{debug, info, warn};
 use crate::crypto::NodeIdentity;
 use crate::network::protocol::{Message, Protocol};
 use crate::network::transport::Node;
+use crate::network::utils::ReconnectBackoff;
 
 const RECONNECT_DELAY_SECS: u64 = 5;
+const MAX_RECONNECT_DELAY_SECS: u64 = 60;
 
 /// Start the tunnel client on the home server side.
 ///
@@ -32,16 +34,26 @@ pub fn start_tunnel_client(
         // already run remove() for any stale entry from a prior connection, preventing
         // a race where our insert() is wiped by the old task's cleanup.
         tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        let mut backoff = ReconnectBackoff::new(RECONNECT_DELAY_SECS, MAX_RECONNECT_DELAY_SECS);
         loop {
-            let delay = match run_tunnel(&node, coordinator_addr, &coordinator_node_id, &node_id, &identity, local_port).await {
-                Ok(_) => { info!("[TUNNEL] Connection ended cleanly"); RECONNECT_DELAY_SECS }
-                Err(crate::error::Np2pError::UnknownMessage(msg)) => {
-                    debug!("[TUNNEL] Protocol version mismatch with coordinator ({}), retrying in 60s", msg);
-                    60
+            match run_tunnel(&node, coordinator_addr, &coordinator_node_id, &node_id, &identity, local_port).await {
+                Ok(_) => {
+                    info!("[TUNNEL] Connection ended cleanly");
+                    // A completed session means connect + registration succeeded:
+                    // start the next retry sequence from the initial delay again.
+                    backoff.reset();
                 }
-                Err(e) => { warn!("[TUNNEL] Connection lost: {} — reconnecting in {}s", e, RECONNECT_DELAY_SECS); RECONNECT_DELAY_SECS }
-            };
-            tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
+                Err(crate::error::Np2pError::UnknownMessage(msg)) => {
+                    debug!("[TUNNEL] Protocol version mismatch with coordinator ({})", msg);
+                    backoff.skip_to_max();
+                }
+                Err(e) => {
+                    warn!("[TUNNEL] Connection lost: {}", e);
+                }
+            }
+            let delay = backoff.next_delay();
+            info!("[TUNNEL] Reconnecting in {}s", delay.as_secs());
+            tokio::time::sleep(delay).await;
         }
     });
 }

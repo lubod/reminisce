@@ -5,7 +5,23 @@ use crate::storage::DiskStorage;
 use crate::crypto::NodeIdentity;
 use tracing::{debug, info, warn, error};
 use std::sync::Arc;
+use std::sync::OnceLock;
 use hex;
+
+/// Global cap on concurrently-executing inbound stream handlers across the whole
+/// storage node (QUIC listener + reverse-channel relays). Bounds task/memory
+/// blowup when a peer (or coordinator) opens unbounded numbers of streams.
+/// Once exhausted, new streams wait for a permit before being spawned.
+pub const MAX_CONCURRENT_STREAMS: usize = 64;
+
+static STREAM_SEMAPHORE: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
+
+/// The shared inbound-stream gate for this process.
+pub fn inbound_stream_semaphore() -> Arc<tokio::sync::Semaphore> {
+    STREAM_SEMAPHORE
+        .get_or_init(|| Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_STREAMS)))
+        .clone()
+}
 
 /// Handles a single connection to a peer.
 pub struct ConnectionHandler {
@@ -41,13 +57,41 @@ impl ConnectionHandler {
                 Ok((send, recv)) => {
                     let storage = self.storage.clone();
                     let identity = self.identity.clone();
+                    let remote_addr = self.connection.remote_address();
 
+                    // Backpressure: wait for a permit BEFORE spawning so concurrent
+                    // stream handlers never exceed MAX_CONCURRENT_STREAMS. The permit
+                    // is held by the supervisor task and released when it completes.
+                    let permit = match inbound_stream_semaphore().acquire_owned().await {
+                        Ok(permit) => permit,
+                        Err(_) => {
+                            warn!("[CONN] Stream semaphore closed — dropping stream from {}", remote_addr);
+                            continue;
+                        }
+                    };
+
+                    // Supervisor task: awaits the worker's JoinHandle so a panic in
+                    // handle_stream is logged with the peer address instead of the
+                    // task dying silently.
                     tokio::spawn(async move {
-                        if let Err(e) = Self::handle_stream(send, recv, storage, identity, allowed_owner).await {
-                            if matches!(e, crate::error::Np2pError::UnknownMessage(_)) {
-                                debug!("[CONN] Unknown message from peer (version mismatch): {}", e);
-                            } else {
-                                error!("[CONN] Stream error: {}", e);
+                        let _permit = permit;
+                        let worker = tokio::spawn(async move {
+                            if let Err(e) = Self::handle_stream(send, recv, storage, identity, allowed_owner).await {
+                                if matches!(e, crate::error::Np2pError::UnknownMessage(_)) {
+                                    debug!("[CONN] Unknown message from peer (version mismatch): {}", e);
+                                } else {
+                                    error!("[CONN] Stream error: {}", e);
+                                }
+                            }
+                        });
+                        match worker.await {
+                            Ok(()) => {}
+                            Err(join_err) => {
+                                if join_err.is_panic() {
+                                    error!("[CONN] Stream handler PANICKED (peer {}): {}", remote_addr, join_err);
+                                } else {
+                                    warn!("[CONN] Stream task cancelled (peer {})", remote_addr);
+                                }
                             }
                         }
                     });

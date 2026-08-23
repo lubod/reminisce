@@ -5,9 +5,11 @@ use crate::crypto::NodeIdentity;
 use crate::network::handler::ConnectionHandler;
 use crate::network::protocol::{Message, Protocol};
 use crate::network::transport::Node;
+use crate::network::utils::ReconnectBackoff;
 use crate::storage::DiskStorage;
 
 const RECONNECT_DELAY_SECS: u64 = 5;
+const MAX_RECONNECT_DELAY_SECS: u64 = 60;
 
 /// Start a persistent reverse channel to the coordinator.
 /// Storage nodes call this so the coordinator can relay messages to them even when behind NAT.
@@ -25,16 +27,26 @@ pub fn start_channel_client(
     let coordinator_node_id = coordinator_node_id.to_string();
     tokio::spawn(async move {
         info!("[CHANNEL] Client starting — coordinator={}", coordinator_addr);
+        let mut backoff = ReconnectBackoff::new(RECONNECT_DELAY_SECS, MAX_RECONNECT_DELAY_SECS);
         loop {
-            let delay = match run_channel(&node, coordinator_addr, &coordinator_node_id, &node_id, &identity, &storage, authorized_owner_id).await {
-                Ok(_) => { info!("[CHANNEL] Connection ended cleanly"); RECONNECT_DELAY_SECS }
-                Err(crate::error::Np2pError::UnknownMessage(msg)) => {
-                    debug!("[CHANNEL] Protocol version mismatch with coordinator ({}), retrying in 60s", msg);
-                    60
+            match run_channel(&node, coordinator_addr, &coordinator_node_id, &node_id, &identity, &storage, authorized_owner_id).await {
+                Ok(_) => {
+                    info!("[CHANNEL] Connection ended cleanly");
+                    // A completed session means connect + registration succeeded:
+                    // start the next retry sequence from the initial delay again.
+                    backoff.reset();
                 }
-                Err(e) => { warn!("[CHANNEL] Connection lost: {} — reconnecting in {}s", e, RECONNECT_DELAY_SECS); RECONNECT_DELAY_SECS }
-            };
-            tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
+                Err(crate::error::Np2pError::UnknownMessage(msg)) => {
+                    debug!("[CHANNEL] Protocol version mismatch with coordinator ({})", msg);
+                    backoff.skip_to_max();
+                }
+                Err(e) => {
+                    warn!("[CHANNEL] Connection lost: {}", e);
+                }
+            }
+            let delay = backoff.next_delay();
+            info!("[CHANNEL] Reconnecting in {}s", delay.as_secs());
+            tokio::time::sleep(delay).await;
         }
     });
 }
@@ -93,7 +105,14 @@ async fn run_channel(
             Ok((send, recv)) => {
                 let storage = storage.clone();
                 let identity = identity_arc.clone();
+                // Same global inbound-stream gate as the QUIC listener path, so
+                // relayed requests cannot bypass the storage node's stream bound.
+                let permit = match crate::network::handler::inbound_stream_semaphore().acquire_owned().await {
+                    Ok(permit) => permit,
+                    Err(_) => continue,
+                };
                 tokio::spawn(async move {
+                    let _permit = permit;
                     if let Err(e) = ConnectionHandler::handle_stream(send, recv, storage, identity, authorized_owner_id).await {
                         warn!("[CHANNEL] Stream error: {}", e);
                     }

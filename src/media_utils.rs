@@ -954,17 +954,32 @@ pub async fn extract_video_keyframes(
     let output_pattern_str = output_pattern.to_str().ok_or("Invalid output pattern path")?;
 
     let fps_filter = format!("fps=1/{}", interval_secs);
-    let result = tokio::process::Command::new("ffmpeg")
-        .args([
-            "-i", video_str,
-            "-vf", &fps_filter,
-            "-vframes", &max_keyframes.to_string(),
-            "-q:v", "3",
-            "-y",
-            output_pattern_str,
-        ])
-        .output()
-        .await;
+    // A hung/corrupt video must not pin an AI task (and its DB client) forever:
+    // 5-minute ceiling, child killed on expiry.
+    const FFMPEG_TIMEOUT: Duration = Duration::from_secs(300);
+    let result = tokio::time::timeout(
+        FFMPEG_TIMEOUT,
+        tokio::process::Command::new("ffmpeg")
+            .args([
+                "-i", video_str,
+                "-vf", &fps_filter,
+                "-vframes", &max_keyframes.to_string(),
+                "-q:v", "3",
+                "-y",
+                output_pattern_str,
+            ])
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await;
+
+    let result = match result {
+        Ok(r) => r,
+        Err(_) => {
+            let _ = tokio::fs::remove_dir_all(&temp_dir).await;
+            return Err(format!("ffmpeg keyframe extraction timed out after {}s", FFMPEG_TIMEOUT.as_secs()));
+        }
+    };
 
     match result {
         Ok(output) if output.status.success() => {},

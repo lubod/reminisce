@@ -156,12 +156,28 @@ async fn main() -> anyhow::Result<()> {
     let service = Arc::new(service);
     let identity_arc = Arc::new(identity);
 
+    // Bound concurrently-handled inbound connections. Per-STREAM concurrency is
+    // additionally bounded globally by ConnectionHandler::inbound_stream_semaphore()
+    // (shared with the reverse-channel path), so neither connections nor streams
+    // can pile up without limit under load or attack.
+    const MAX_CONCURRENT_CONNECTIONS: usize = 64;
+    let conn_sem = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_CONNECTIONS));
+
     loop {
         if let Some(incoming) = service.node().accept().await {
             let storage_clone = storage.clone();
             let identity_clone = identity_arc.clone();
             let allowed_owner = authorized_owner_id;
+            let permit = match conn_sem.clone().acquire_owned().await {
+                Ok(permit) => permit,
+                Err(_) => {
+                    warn!("Connection semaphore closed — dropping incoming connection");
+                    continue;
+                }
+            };
             tokio::spawn(async move {
+                // Released when this connection's handler task ends.
+                let _permit = permit;
                 match incoming.await {
                     Ok(conn) => {
                         let handler = ConnectionHandler::new(conn, storage_clone, identity_clone)

@@ -223,27 +223,42 @@ async fn relay(
         }
     };
 
-    let (mut ts, mut tr) = match conn.open_bi().await {
-        Ok(s) => s,
-        Err(e) => {
-            let _ = Protocol::send(send, &Message::Error { code: 503, message: e.to_string() }).await;
-            return;
+    // Bound the whole post-connect exchange (open_bi + write + read-back) so a
+    // stalled/unresponsive target releases the requester with a 504 instead of
+    // hanging the relay task indefinitely.
+    let len = payload.len() as u32;
+    let exchange = async {
+        let (mut ts, mut tr) = conn.open_bi().await.map_err(|e| e.to_string())?;
+        ts.write_all(&len.to_be_bytes()).await.map_err(|e| e.to_string())?;
+        ts.write_all(&payload).await.map_err(|e| e.to_string())?;
+        let _ = ts.finish();
+
+        let mut len_buf = [0u8; 4];
+        tr.read_exact(&mut len_buf).await.map_err(|e| e.to_string())?;
+        let resp_len = u32::from_be_bytes(len_buf) as usize;
+        if resp_len > MAX_RELAY_PAYLOAD {
+            return Err("target response exceeds relay limit".to_string());
         }
+        let mut resp_payload = vec![0u8; resp_len];
+        tr.read_exact(&mut resp_payload).await.map_err(|e| e.to_string())?;
+        Ok(resp_payload)
     };
 
-    let len = payload.len() as u32;
-    if ts.write_all(&len.to_be_bytes()).await.is_err() || ts.write_all(&payload).await.is_err() {
-        return;
+    match tokio::time::timeout(std::time::Duration::from_secs(30), exchange).await {
+        Ok(Ok(resp_payload)) => {
+            let _ = Protocol::send(send, &Message::RelayResponse { payload: resp_payload }).await;
+            let _ = send.finish();
+        }
+        Ok(Err(e)) => {
+            warn!("[RELAY] Exchange with {} failed: {}", target_addr, e);
+        }
+        Err(_) => {
+            warn!("[RELAY] Exchange with {} timed out after 30s", target_addr);
+            let _ = Protocol::send(send, &Message::Error {
+                code: 504,
+                message: format!("Relay to {} timed out", target_node_id),
+            }).await;
+            let _ = send.finish();
+        }
     }
-    let _ = ts.finish();
-
-    let mut len_buf = [0u8; 4];
-    if tr.read_exact(&mut len_buf).await.is_err() { return; }
-    let resp_len = u32::from_be_bytes(len_buf) as usize;
-    if resp_len > MAX_RELAY_PAYLOAD { return; }
-    let mut resp_payload = vec![0u8; resp_len];
-    if tr.read_exact(&mut resp_payload).await.is_err() { return; }
-
-    let _ = Protocol::send(send, &Message::RelayResponse { payload: resp_payload }).await;
-    let _ = send.finish();
 }
