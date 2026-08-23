@@ -94,9 +94,24 @@ pub async fn get_image(
                     _ => data,
                 };
                 info!("Serving image: {:?}", image_path);
+                // Only allow-listed media extensions may render inline from our
+                // origin; anything else (e.g. a name ending in .html/.svg that
+                // slipped into the DB historically) is forced to download as
+                // inert octet-stream so it cannot host active content.
+                let ext_lc = extension.to_lowercase();
+                let inline_safe = crate::services::ingest::IMAGE_EXTS.contains(&ext_lc.as_str());
+                let disposition = if inline_safe {
+                    format!("inline; filename=\"{}\"", original_name)
+                } else {
+                    "attachment".to_string()
+                };
                 let mut response = HttpResponse::Ok();
-                response.content_type(mime_type.as_ref());
-                response.insert_header(("Content-Disposition", format!("inline; filename=\"{}\"", original_name)));
+                if inline_safe {
+                    response.content_type(mime_type.as_ref());
+                } else {
+                    response.content_type("application/octet-stream");
+                }
+                response.insert_header(("Content-Disposition", disposition));
 
                 // Add place as a custom header if available
                 if let Some(place_value) = place {

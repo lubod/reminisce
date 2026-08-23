@@ -158,10 +158,13 @@ pub async fn hash_file_blake3(path: &std::path::Path) -> Result<String, std::io:
 }
 
 /// Stream a multipart field to a temp file while computing its BLAKE3 hash.
+/// Aborts with 413 once more than `max_bytes` have been written (the temp file
+/// is removed), so an authenticated user cannot fill the disk with one request.
 /// Returns `(temp_path, blake3_hex_hash)`.
 pub async fn streaming_hash_to_temp(
     field: &mut actix_multipart::Field,
     temp_dir: &std::path::Path,
+    max_bytes: u64,
 ) -> Result<(PathBuf, String), actix_web::Error> {
     let effective_temp_dir = if tokio::fs::create_dir_all(temp_dir).await.is_ok() {
         temp_dir.to_path_buf()
@@ -189,7 +192,18 @@ pub async fn streaming_hash_to_temp(
     };
 
     let mut hasher = blake3::Hasher::new();
+    let mut written: u64 = 0;
     while let Ok(Some(chunk)) = field.try_next().await {
+        written += chunk.len() as u64;
+        if written > max_bytes {
+            drop(f);
+            let _ = tokio::fs::remove_file(&temp_path).await;
+            log::warn!("Upload aborted: exceeded {} byte limit after {} bytes", max_bytes, written);
+            return Err(actix_web::error::ErrorPayloadTooLarge(format!(
+                "File exceeds the {} MB upload limit",
+                max_bytes / (1024 * 1024)
+            )));
+        }
         hasher.update(&chunk);
         f.write_all(&chunk).await
             .map_err(|e| {
@@ -200,11 +214,27 @@ pub async fn streaming_hash_to_temp(
     Ok((temp_path, hasher.finalize().to_hex().to_string()))
 }
 
-/// Drain a multipart text field into a `String`.
+/// Upper bound for a single multipart *metadata* field (name, device_id, dates…).
+/// These are small strings; anything larger is client abuse or a bug.
+const MAX_METADATA_FIELD_BYTES: usize = 64 * 1024;
+
+/// Drain a multipart text field into a `String`, capped at
+/// `MAX_METADATA_FIELD_BYTES`. The stream is still drained to completion so the
+/// multipart framing stays intact, but overflowed bytes are discarded instead of
+/// being buffered in RAM (memory-exhaustion protection).
 pub async fn read_field_string(field: &mut actix_multipart::Field) -> String {
     let mut bytes = Vec::new();
+    let mut overflowed = false;
     while let Ok(Some(chunk)) = field.try_next().await {
-        bytes.extend_from_slice(&chunk);
+        if bytes.len() < MAX_METADATA_FIELD_BYTES {
+            let remaining = MAX_METADATA_FIELD_BYTES - bytes.len();
+            bytes.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
+        } else {
+            overflowed = true;
+        }
+    }
+    if overflowed {
+        log::warn!("Multipart metadata field exceeded {} bytes — truncated", MAX_METADATA_FIELD_BYTES);
     }
     String::from_utf8_lossy(&bytes).into_owned()
 }

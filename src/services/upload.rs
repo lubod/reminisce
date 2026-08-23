@@ -135,7 +135,7 @@ pub async fn upload_image(
             }
             "image" => {
                 let temp_dir = std::path::Path::new(config.get_images_dir()).join(".tmp");
-                let (temp_path, hash) = crate::media_utils::streaming_hash_to_temp(&mut field, &temp_dir).await?;
+                let (temp_path, hash) = crate::media_utils::streaming_hash_to_temp(&mut field, &temp_dir, 200 * 1024 * 1024).await?;
                 calculated_image_hash_opt = Some(hash);
                 image_temp_file_path = Some(temp_path);
             }
@@ -220,7 +220,7 @@ pub async fn batch_upload_image(
         let filename = content_disposition.get_filename().unwrap_or("unknown").to_string();
         
         let temp_dir = std::path::Path::new(config.get_images_dir()).join(".tmp");
-        let (temp_path, hash) = crate::media_utils::streaming_hash_to_temp(&mut field, &temp_dir).await?;
+        let (temp_path, hash) = crate::media_utils::streaming_hash_to_temp(&mut field, &temp_dir, 200 * 1024 * 1024).await?;
 
         let res = ingest::process_image_file(
             &temp_path,
@@ -655,7 +655,7 @@ pub async fn upload_video(
             }
             "video" => {
                 let temp_dir = std::path::Path::new(config.get_videos_dir()).join(".tmp");
-                let (temp_path, hash) = crate::media_utils::streaming_hash_to_temp(&mut field, &temp_dir).await?;
+                let (temp_path, hash) = crate::media_utils::streaming_hash_to_temp(&mut field, &temp_dir, 20 * 1024 * 1024 * 1024).await?;
                 calculated_video_hash_opt = Some(hash);
                 video_temp_file_path = Some(temp_path);
             }

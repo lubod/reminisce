@@ -102,6 +102,84 @@ pub async fn filter_existing_hashes(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Extension allow-lists for ingested media (normalized lowercase).
+pub const IMAGE_EXTS: &[&str] = &["jpg", "jpeg", "png", "gif", "webp", "heic", "heif", "tiff", "tif", "bmp"];
+pub const VIDEO_EXTS: &[&str] = &["mp4", "mov", "avi", "mkv", "webm", "m4v", "mpg", "mpeg"];
+
+/// Sniff the coarse media kind ("image" or "video") from leading magic bytes.
+/// Returns `None` for anything unrecognized — including active content such as
+/// HTML/SVG — so uploads are validated by content, not by client-supplied name.
+pub fn sniff_media_kind(data: &[u8]) -> Option<&'static str> {
+    if data.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        return Some("image"); // JPEG
+    }
+    if data.starts_with(&[0x89, b'P', b'N', b'G']) {
+        return Some("image"); // PNG
+    }
+    if data.starts_with(b"GIF8") {
+        return Some("image"); // GIF
+    }
+    if data.len() >= 12 && &data[0..4] == b"RIFF" && &data[8..12] == b"WEBP" {
+        return Some("image"); // WebP
+    }
+    if data.starts_with(b"II*\x00") || data.starts_with(b"MM\x00*") {
+        return Some("image"); // TIFF
+    }
+    if data.starts_with(b"BM") && data.len() > 6 {
+        return Some("image"); // BMP
+    }
+    if data.len() >= 12 && &data[4..8] == b"ftyp" {
+        match &data[8..12] {
+            b"heic" | b"heix" | b"hevc" | b"heim" | b"heis" | b"hevm" | b"hevs"
+            | b"mif1" | b"msf1" => return Some("image"), // HEIC/HEIF stills
+            b"isom" | b"iso2" | b"mp41" | b"mp42" | b"avc1" | b"dash" | b"M4V " => return Some("video"),
+            b"qt  " => return Some("video"), // QuickTime MOV
+            _ => {}
+        }
+    }
+    if data.len() >= 12 && &data[0..4] == b"RIFF" && &data[8..12] == b"AVI " {
+        return Some("video"); // AVI
+    }
+    if data.starts_with(&[0x1A, 0x45, 0xDF, 0xA3]) {
+        return Some("video"); // MKV / WebM (EBML)
+    }
+    None
+}
+
+/// Validate an upload before it enters the store: extension must be in the
+/// allow-list for the expected kind AND the leading bytes must sniff as that
+/// kind. Prevents serving attacker-chosen active content from our origin and
+/// blocks mislabeled payloads.
+fn validate_media_file(
+    temp_path: &Path,
+    expected_kind: &str,
+    ext: &str,
+    hash: &str,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let allowed = if expected_kind == "image" { IMAGE_EXTS } else { VIDEO_EXTS };
+    if !allowed.contains(&ext) {
+        return Err(format!(
+            "Rejected {}: .{} is not an allowed {} extension",
+            hash, ext, expected_kind
+        ).into());
+    }
+    let mut file = std::fs::File::open(temp_path)?;
+    use std::io::Read;
+    let mut head = [0u8; 16];
+    let n = file.read(&mut head)?;
+    match sniff_media_kind(&head[..n]) {
+        Some(kind) if kind == expected_kind => Ok(()),
+        Some(other) => Err(format!(
+            "Rejected {}: content sniffs as {} but was uploaded as {}",
+            hash, other, expected_kind
+        ).into()),
+        None => Err(format!(
+            "Rejected {}: unrecognized or non-media content",
+            hash
+        ).into()),
+    }
+}
+
 pub async fn process_image_file(
     temp_path: &Path,
     name: &str,
@@ -114,7 +192,9 @@ pub async fn process_image_file(
     move_file: bool,
     client_created_at: Option<chrono::DateTime<Utc>>,
 ) -> Result<IngestResult, Box<dyn std::error::Error + Send + Sync>> {
-    let ext = Path::new(name).extension().and_then(|s| s.to_str()).unwrap_or("jpg");
+    let raw_ext = Path::new(name).extension().and_then(|s| s.to_str()).unwrap_or("");
+    let ext = raw_ext.to_lowercase();
+    validate_media_file(temp_path, "image", &ext, hash)?;
     let filename = format!("{}.{}", hash, ext);
 
     // 1. Target Path
@@ -257,9 +337,11 @@ pub async fn process_video_file(
     move_file: bool,
     client_created_at: Option<chrono::DateTime<Utc>>,
 ) -> Result<IngestResult, Box<dyn std::error::Error + Send + Sync>> {
-    let ext = Path::new(name).extension().and_then(|s| s.to_str()).unwrap_or("mp4");
+    let raw_ext = Path::new(name).extension().and_then(|s| s.to_str()).unwrap_or("");
+    let ext = raw_ext.to_lowercase();
+    validate_media_file(temp_path, "video", &ext, hash)?;
     let filename = format!("{}.{}", hash, ext);
-    
+
     let videos_dir = config.get_videos_dir();
     let sub_dir = &hash[0..2];
     let target_dir = Path::new(videos_dir).join(sub_dir);
@@ -326,4 +408,45 @@ pub async fn process_video_file(
         thumbnail: false,
         thumbnail_generated: false,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sniff_detects_common_media_kinds() {
+        assert_eq!(sniff_media_kind(&[0xFF, 0xD8, 0xFF, 0xE0]), Some("image"));
+        assert_eq!(sniff_media_kind(&[0x89, 0x50, 0x4E, 0x47]), Some("image"));
+        let mut heic = vec![0u8; 12];
+        heic[4..8].copy_from_slice(b"ftyp");
+        heic[8..12].copy_from_slice(b"heic");
+        assert_eq!(sniff_media_kind(&heic), Some("image"));
+        let mut mp4 = vec![0u8; 12];
+        mp4[4..8].copy_from_slice(b"ftyp");
+        mp4[8..12].copy_from_slice(b"isom");
+        assert_eq!(sniff_media_kind(&mp4), Some("video"));
+        let mut mov = vec![0u8; 12];
+        mov[4..8].copy_from_slice(b"ftyp");
+        mov[8..12].copy_from_slice(b"qt  ");
+        assert_eq!(sniff_media_kind(&mov), Some("video"));
+    }
+
+    #[test]
+    fn sniff_rejects_active_content() {
+        // HTML/SVG/text must never pass as media
+        assert_eq!(sniff_media_kind(b"<html><body>hi</body></html>"), None);
+        assert_eq!(sniff_media_kind(b"<?xml version=\"1.0\"?><svg"), None);
+        assert_eq!(sniff_media_kind(b""), None);
+        assert_eq!(sniff_media_kind(b"Just some text"), None);
+    }
+
+    #[test]
+    fn ext_allowlists_reject_active_extensions() {
+        assert!(IMAGE_EXTS.contains(&"jpg".to_string().as_str()));
+        assert!(!IMAGE_EXTS.contains(&"html".to_string().as_str()));
+        assert!(!IMAGE_EXTS.contains(&"svg".to_string().as_str()));
+        assert!(VIDEO_EXTS.contains(&"mp4".to_string().as_str()));
+        assert!(!VIDEO_EXTS.contains(&"php".to_string().as_str()));
+    }
 }
