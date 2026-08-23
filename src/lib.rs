@@ -508,7 +508,18 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
         .unwrap();
 
     let shared_system = web::Data::new(services::system_stats::start_system_monitor());
-    let rate_limiter = rate_limit::RateLimiter::new();
+    let trusted_proxies: Vec<std::net::IpAddr> = config
+        .rate_limit_trusted_proxies
+        .iter()
+        .filter_map(|s| match s.trim().parse::<std::net::IpAddr>() {
+            Ok(ip) => Some(ip),
+            Err(_) => {
+                error!("Ignoring invalid rate_limit_trusted_proxies entry: {:?}", s);
+                None
+            }
+        })
+        .collect();
+    let rate_limiter = rate_limit::RateLimiter::with_trusted_proxies(trusted_proxies);
 
     let _server_config = config.clone();
     let cors_allowed_origins = config.cors_allowed_origins.clone();

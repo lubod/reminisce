@@ -20,20 +20,24 @@ fn is_private_or_local(ip: IpAddr) -> bool {
 
 /// Resolve the effective client IP for rate limiting.
 ///
-/// Proxy-supplied headers are only trusted when the immediate peer is a
-/// loopback/private/link-local address (i.e. the request arrived via the local
-/// reverse proxy, which is the deployment's shape). Public peers are treated as
-/// direct connections, so their self-supplied `X-Forwarded-For`/`X-Real-IP`
-/// headers are ignored — previously any client could rotate its IP header to
-/// obtain a fresh rate-limit bucket and bypass e.g. the login brute-force limit.
+/// Proxy-supplied headers are only trusted when the immediate peer is loopback
+/// or explicitly listed in the configured trusted-proxy allowlist
+/// (`rate_limit_trusted_proxies`). Trusting all RFC1918 peers was removed: the
+/// backend binds 0.0.0.0 on the LAN, so any LAN device could previously rotate
+/// its `X-Real-IP` header per request and bypass even the login bucket.
 ///
 /// When trusted: `X-Real-IP` wins (nginx sets it from `$remote_addr`,
 /// overwriting client input), else the *last* `X-Forwarded-For` entry (nginx
 /// appends `$remote_addr`, so the last value is the proxy's view, whereas the
 /// first value is attacker-controlled).
-fn parse_client_ip(peer: Option<IpAddr>, x_real_ip: Option<&str>, x_forwarded_for: Option<&str>) -> IpAddr {
+fn parse_client_ip(
+    peer: Option<IpAddr>,
+    x_real_ip: Option<&str>,
+    x_forwarded_for: Option<&str>,
+    trusted_proxies: &[IpAddr],
+) -> IpAddr {
     let peer = peer.unwrap_or_else(|| IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)));
-    let trusted_proxy = is_private_or_local(peer);
+    let trusted_proxy = peer.is_loopback() || trusted_proxies.contains(&peer);
     if !trusted_proxy {
         return peer;
     }
@@ -93,6 +97,9 @@ pub struct RateLimiter {
     // Sharded state: each IP is pinned to one shard so concurrent requests from
     // different IPs do not contend on a single global mutex.
     shards: Arc<Vec<Mutex<LimiterState>>>,
+    // Explicit proxy IPs whose forwarded-client headers may be trusted. Loopback
+    // is always trusted implicitly (local nginx); anything else must be listed.
+    trusted_proxies: Arc<Vec<IpAddr>>,
 }
 
 const SHARD_COUNT: usize = 16;
@@ -117,6 +124,12 @@ fn shard_index(ip: IpAddr) -> usize {
 
 impl RateLimiter {
     pub fn new() -> Self {
+        Self::with_trusted_proxies(Vec::new())
+    }
+
+    /// `trusted_proxies`: peer IPs (e.g. the nginx host IP) whose
+    /// `X-Real-IP`/`X-Forwarded-For` headers may override the rate-limit key.
+    pub fn with_trusted_proxies(trusted_proxies: Vec<IpAddr>) -> Self {
         Self {
             shards: Arc::new(
                 (0..SHARD_COUNT)
@@ -126,6 +139,7 @@ impl RateLimiter {
                     }))
                     .collect(),
             ),
+            trusted_proxies: Arc::new(trusted_proxies),
         }
     }
 }
@@ -187,7 +201,12 @@ where
             .get("x-forwarded-for")
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string());
-        let ip = parse_client_ip(peer_ip, x_real_ip.as_deref(), xff.as_deref());
+        let ip = parse_client_ip(
+            peer_ip,
+            x_real_ip.as_deref(),
+            xff.as_deref(),
+            &self.limiter.trusted_proxies,
+        );
 
         // Determine limits based on target path
         let path = req.path();
@@ -217,9 +236,9 @@ where
         let is_login = path.contains("/user-login") || path.contains("/login") || path.contains("/register");
 
         // General limits: max 2000 tokens, refills 100 tokens/second (supports large gallery loads & parallel requests)
-        // Stricter login limits: max 50 tokens, refills 2 tokens/second
+        // Stricter login limits: max 10 tokens, refills 1 token every 2 seconds
         let (max_tokens, refill_rate) = if is_login {
-            (50.0, 2.0)
+            (10.0, 0.5)
         } else {
             (2000.0, 100.0)
         };
@@ -241,13 +260,18 @@ where
             state.last_cleanup = now;
         }
 
-        // Emergency eviction if flooded with distinct IPs beyond MAX_BUCKETS
+        // Emergency eviction if flooded with distinct IPs beyond MAX_BUCKETS:
+        // sweep all stale entries in one pass first (the old single-oldest
+        // eviction was O(n) per request under sustained flood).
         if state.buckets.len() >= MAX_BUCKETS && !state.buckets.contains_key(&ip) {
-            if let Some(oldest_ip) = state.buckets.iter()
-                .min_by_key(|(_, b)| b.last_update)
-                .map(|(ip, _)| *ip)
-            {
-                state.buckets.remove(&oldest_ip);
+            state.buckets.retain(|_, b| now.duration_since(b.last_update).as_secs() < 600);
+            if state.buckets.len() >= MAX_BUCKETS {
+                if let Some(oldest_ip) = state.buckets.iter()
+                    .min_by_key(|(_, b)| b.last_update)
+                    .map(|(ip, _)| *ip)
+                {
+                    state.buckets.remove(&oldest_ip);
+                }
             }
         }
 
@@ -292,7 +316,7 @@ mod tests {
         // A public (direct) peer cannot regenerate its bucket by lying in headers.
         let peer = ip("203.0.113.7");
         assert_eq!(
-            parse_client_ip(Some(peer), Some("1.2.3.4"), Some("1.2.3.4, 5.6.7.8")),
+            parse_client_ip(Some(peer), Some("1.2.3.4"), Some("1.2.3.4, 5.6.7.8"), &[]),
             peer,
             "public peer headers must be ignored",
         );
@@ -303,7 +327,7 @@ mod tests {
         // Loopback peer (nginx -> backend on host network): X-Real-IP is the real
         // client as set by nginx and must be used.
         assert_eq!(
-            parse_client_ip(Some(ip("127.0.0.1")), Some("198.51.100.9"), Some("5.6.7.8")),
+            parse_client_ip(Some(ip("127.0.0.1")), Some("198.51.100.9"), Some("5.6.7.8"), &[]),
             ip("198.51.100.9"),
         );
     }
@@ -313,7 +337,7 @@ mod tests {
         // $proxy_add_x_forwarded_for = "$remote_addr, $http_x_forwarded_for",
         // so the LAST entry is the proxy's view and the FIRST is attacker input.
         assert_eq!(
-            parse_client_ip(Some(ip("127.0.0.1")), None, Some("1.2.3.4, 198.51.100.9")),
+            parse_client_ip(Some(ip("127.0.0.1")), None, Some("1.2.3.4, 198.51.100.9"), &[]),
             ip("198.51.100.9"),
         );
     }
@@ -321,13 +345,49 @@ mod tests {
     #[test]
     fn rate_limit_falls_back_to_peer_on_garbage_headers() {
         assert_eq!(
-            parse_client_ip(Some(ip("10.0.0.5")), Some("not-an-ip"), Some("also-bad")),
+            parse_client_ip(Some(ip("10.0.0.5")), Some("not-an-ip"), Some("also-bad"), &[]),
             ip("10.0.0.5"),
         );
-        assert_eq!(parse_client_ip(None, None, None), ip("127.0.0.1"));
+        assert_eq!(parse_client_ip(None, None, None, &[]), ip("127.0.0.1"));
     }
 
     #[test]
+
+    #[test]
+    fn rate_limit_ignores_headers_from_private_peer_not_in_allowlist() {
+        // RFC1918 peers are no longer blanket-trusted: a LAN device connecting
+        // directly to the backend must not be able to rotate its bucket.
+        let peer = ip("192.168.1.50");
+        assert_eq!(
+            parse_client_ip(Some(peer), Some("1.2.3.4"), Some("1.2.3.4"), &[]),
+            peer,
+            "private peer outside the allowlist must be treated as direct",
+        );
+    }
+
+    #[test]
+    fn rate_limit_trusts_configured_proxy_allowlist() {
+        let peer = ip("10.138.94.9");
+        assert_eq!(
+            parse_client_ip(Some(peer), Some("198.51.100.9"), None, &[ip("10.138.94.9")]),
+            ip("198.51.100.9"),
+            "explicitly allowed proxy IP may set X-Real-IP",
+        );
+    }
+
+    #[test]
+    fn login_account_lockout_blocks_after_threshold_and_clears() {
+        let user = "lockout-test-user";
+        for _ in 0..(LOGIN_FAILURE_THRESHOLD - 1) {
+            record_login_failure(user);
+        }
+        assert!(login_allowed_for_account(user), "below threshold still allowed");
+        record_login_failure(user);
+        assert!(!login_allowed_for_account(user), "at threshold must be blocked");
+        clear_login_failures(user);
+        assert!(login_allowed_for_account(user), "success must clear history");
+    }
+
     fn token_bucket_allows_full_capacity_and_denies_when_empty() {
         let mut tb = TokenBucket::new(10.0);
         assert!(tb.consume(10.0, 1.0, 10.0), "a full burst must be allowed");
@@ -421,3 +481,61 @@ mod tests {
     }
 }
 
+
+// ---------------------------------------------------------------------------
+// Per-account login failure lockout
+//
+// The IP bucket alone cannot stop a distributed or LAN-wide brute force aimed
+// at a single username. This in-memory tracker fails closed per account:
+// after LOGIN_FAILURE_THRESHOLD failures inside the window, further attempts
+// for that username are rejected until the window empties.
+// ---------------------------------------------------------------------------
+
+const LOGIN_FAILURE_THRESHOLD: usize = 8;
+const LOGIN_FAILURE_WINDOW_SECS: u64 = 900; // 15 minutes
+
+fn login_failure_store() -> &'static std::sync::Mutex<HashMap<String, Vec<Instant>>> {
+    static STORE: std::sync::OnceLock<std::sync::Mutex<HashMap<String, Vec<Instant>>>> = std::sync::OnceLock::new();
+    STORE.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+}
+
+/// Returns true when logins are currently allowed for this account.
+pub fn login_allowed_for_account(username: &str) -> bool {
+    let key = username.trim().to_lowercase();
+    if key.is_empty() {
+        return false;
+    }
+    let mut store = login_failure_store().lock().unwrap_or_else(|e| e.into_inner());
+    let now = Instant::now();
+    if let Some(failures) = store.get_mut(&key) {
+        failures.retain(|t| now.duration_since(*t).as_secs() < LOGIN_FAILURE_WINDOW_SECS);
+        failures.len() < LOGIN_FAILURE_THRESHOLD
+    } else {
+        true
+    }
+}
+
+/// Record a failed login attempt for this account.
+pub fn record_login_failure(username: &str) {
+    let key = username.trim().to_lowercase();
+    if key.is_empty() {
+        return;
+    }
+    let mut store = login_failure_store().lock().unwrap_or_else(|e| e.into_inner());
+    let now = Instant::now();
+    let failures = store.entry(key).or_default();
+    failures.push(now);
+    failures.retain(|t| now.duration_since(*t).as_secs() < LOGIN_FAILURE_WINDOW_SECS);
+    // Bound memory: drop fully-expired accounts while we hold the lock.
+    store.retain(|_, v| !v.is_empty());
+}
+
+/// Clear failure history after a successful login.
+pub fn clear_login_failures(username: &str) {
+    let key = username.trim().to_lowercase();
+    if key.is_empty() {
+        return;
+    }
+    let mut store = login_failure_store().lock().unwrap_or_else(|e| e.into_inner());
+    store.remove(&key);
+}

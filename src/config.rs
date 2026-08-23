@@ -32,6 +32,10 @@ pub struct Config {
     // the SPA behind nginx never needs cross-origin access.
     #[serde(default)]
     pub cors_allowed_origins: Vec<String>,
+    // Peer IPs whose X-Forwarded-For/X-Real-IP headers may override the
+    // rate-limit key (e.g. the nginx host). Loopback is always trusted.
+    #[serde(default)]
+    pub rate_limit_trusted_proxies: Vec<String>,
 
     // Database connection pool configuration
     #[serde(default = "default_db_tls")]

@@ -472,6 +472,17 @@ async fn perform_login(
         })));
     }
 
+    // Per-account brute-force lockout (in addition to the per-IP bucket):
+    // repeated failures for one username within the window fail closed.
+    if !crate::rate_limit::login_allowed_for_account(username) {
+        warn!("Login blocked by account lockout: {}", username);
+        USER_LOGIN_FAILURES_TOTAL.inc();
+        return Err(HttpResponse::TooManyRequests().json(serde_json::json!({
+            "status": "error",
+            "message": "Too many failed attempts. Try again later."
+        })));
+    }
+
     let client = match pool.0.get().await {
         Ok(client) => client,
         Err(e) => {
@@ -489,6 +500,7 @@ async fn perform_login(
         Ok(None) => {
             warn!("User not found: {}", username);
             USER_LOGIN_FAILURES_TOTAL.inc();
+            crate::rate_limit::record_login_failure(username);
             return Err(HttpResponse::Unauthorized().json(serde_json::json!({
                 "status": "error",
                 "message": "Invalid username or password"
@@ -512,6 +524,7 @@ async fn perform_login(
     if !is_active {
         warn!("Inactive user attempted login: {}", username);
         USER_LOGIN_FAILURES_TOTAL.inc();
+        crate::rate_limit::record_login_failure(username);
         return Err(HttpResponse::Unauthorized().json(serde_json::json!({
             "status": "error",
             "message": "Account is disabled"
@@ -555,6 +568,7 @@ async fn perform_login(
 
                     info!("User logged in successfully: {}", username);
                     USER_LOGINS_TOTAL.inc();
+                    crate::rate_limit::clear_login_failures(username);
 
                     let is_secure = config.environment.as_deref() != Some("development") && config.environment.as_deref() != Some("dev");
                     let cookie = actix_web::cookie::Cookie::build("access_token", t.clone())
@@ -579,6 +593,7 @@ async fn perform_login(
         Ok(false) => {
             warn!("Invalid password for user: {}", username);
             USER_LOGIN_FAILURES_TOTAL.inc();
+            crate::rate_limit::record_login_failure(username);
             Err(HttpResponse::Unauthorized().json(serde_json::json!({
                 "status": "error",
                 "message": "Invalid username or password"
