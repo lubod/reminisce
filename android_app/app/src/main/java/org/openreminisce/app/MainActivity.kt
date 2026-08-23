@@ -1,6 +1,7 @@
 package org.openreminisce.app
 
 import org.openreminisce.app.util.applyKeepScreenOn
+import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import android.util.Log
