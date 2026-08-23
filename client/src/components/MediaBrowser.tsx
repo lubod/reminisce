@@ -338,11 +338,13 @@ export const MediaBrowser = observer(() => {
                                         }
                                     }}
                                 >
-                                    {item.thumbnailUrl ? (
-                                        <img src={item.thumbnailUrl} alt={item.name} className="object-cover w-full h-full group-hover:scale-110 transition-transform duration-500" loading="lazy" />
-                                    ) : (
-                                        <div className="flex items-center justify-center h-full text-gray-600 italic text-xs">Loading...</div>
-                                    )}
+                                    <img
+                                        src={item.thumbnailUrl}
+                                        alt=""
+                                        className="object-cover w-full h-full group-hover:scale-110 transition-transform duration-500"
+                                        loading="lazy"
+                                        onError={(e) => { e.currentTarget.style.visibility = "hidden"; }}
+                                    />
                                     {item.media_type === 'video' && (
                                         <div className="absolute inset-0 flex items-center justify-center bg-black/20">
                                             <Play size={32} className="text-white fill-white/50" />
@@ -368,7 +370,7 @@ export const MediaBrowser = observer(() => {
                                     <button
                                         onClick={(e) => {
                                             e.stopPropagation();
-                                            mediaStore.toggleStarMedia(item.hash);
+                                            mediaStore.toggleStarMedia(item.hash, item.device_id);
                                         }}
                                         className={`absolute top-2 right-2 p-1.5 rounded-full transition-all ${
                                             item.starred

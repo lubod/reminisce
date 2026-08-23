@@ -352,10 +352,24 @@ describe("map auto-fetch + star/delete + fetchImages", () => {
         s.images = [target];
         s.allMedia = [target];
 
-        await s.toggleStarMedia(target.hash);
+        await s.toggleStarMedia(target.hash, target.device_id);
 
         expect(s.images[0].starred).toBe(true);
         expect(s.allMedia[0].starred).toBe(true);
+    });
+
+    it("toggleStarMedia matches on hash AND device_id", async () => {
+        const s = makeStore();
+        const mine = item({ hash: "dup", device_id: "devA", starred: false, media_type: "image" });
+        const other = item({ hash: "dup", device_id: "devB", starred: false, media_type: "image" });
+        s.images = [mine];
+        s.allMedia = [other];
+
+        await s.toggleStarMedia(mine.hash, mine.device_id);
+
+        expect(s.images[0].starred).toBe(true);
+        // Same hash but different device must stay untouched.
+        expect(s.allMedia[0].starred).toBe(false);
     });
 
     it("toggleStarMedia rolls back to the previous value on server failure", async () => {
@@ -366,7 +380,7 @@ describe("map auto-fetch + star/delete + fetchImages", () => {
 
         api.state.rejectPost = true;
         try {
-            await s.toggleStarMedia(target.hash);
+            await s.toggleStarMedia(target.hash, target.device_id);
         } finally {
             api.state.rejectPost = false;
         }

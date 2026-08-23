@@ -78,6 +78,7 @@ export class MediaStore {
     // discarded so out-of-order responses can't overwrite newer results.
     private requestSeq = 0;
     private locationRequestSeq = 0;
+    private metadataRequestSeq = 0;
     
     // Data Collections
     images: MediaItem[] = [];
@@ -681,13 +682,7 @@ export class MediaStore {
         await this.loadFullMedia(index);
     };
 
-    private revokeIfBlob = (url: string | null) => {
-        if (url?.startsWith('blob:')) URL.revokeObjectURL(url);
-    };
-
     closeMediaLightbox = () => {
-        this.revokeIfBlob(this.fullMediaUrl);
-        this.revokeIfBlob(this.comparisonMediaUrl);
         this.selectedMediaIndex = null;
         this.fullMediaUrl = null;
         this.comparisonMediaUrl = null;
@@ -724,8 +719,6 @@ export class MediaStore {
         if (!item) return;
 
         try {
-            this.revokeIfBlob(this.fullMediaUrl);
-
             const url = this.getAuthenticatedUrl(
                 item.media_type === 'video' ? `/api/video/${item.hash}` : `/api/image/${item.hash}`
             );
@@ -747,7 +740,6 @@ export class MediaStore {
         const item = this.activeLightboxItems[index];
         if (!item) return;
         try {
-            this.revokeIfBlob(this.comparisonMediaUrl);
             const url = this.getAuthenticatedUrl(
                 item.media_type === 'video' ? `/api/video/${item.hash}` : `/api/image/${item.hash}`
             );
@@ -756,26 +748,30 @@ export class MediaStore {
     };
 
     clearComparisonMedia = () => {
-        this.revokeIfBlob(this.comparisonMediaUrl);
         this.comparisonMediaUrl = null;
     };
 
     // --- Metadata Actions ---
 
     loadImageMetadata = async (hash: string) => {
-        const seq = this.requestSeq;
+        const seq = ++this.metadataRequestSeq;
         try {
             const response = await axios.get<ImageMetadata>(`/image/${hash}/metadata`);
-            if (seq !== this.requestSeq) return; // stale response — discard
+            if (seq !== this.metadataRequestSeq) return; // stale response — discard
             runInAction(() => { this.imageMetadata = response.data; this.lastLoadedMetadataHash = hash; });
         } catch (error) { logger.error("Metadata fetch failed", error); }
     };
 
     clearImageMetadata = () => { this.imageMetadata = null; this.lastLoadedMetadataHash = null; };
 
-    toggleStarMedia = async (hash: string) => {
+    toggleStarMedia = async (hash: string, deviceId?: string) => {
+        // Identity is (hash, device_id): the same hash can exist on several
+        // devices. Items without a device_id compare as "".
+        const d = deviceId;
+        const sameItem = (a: MediaItem) => a.hash === hash && (a.device_id ?? "") === (d ?? "");
+
         // Find the item in any array
-        const item = this.images.find(i => i.hash === hash) || this.videos.find(v => v.hash === hash) || this.allMedia.find(i => i.hash === hash);
+        const item = this.images.find(sameItem) || this.videos.find(sameItem) || this.allMedia.find(sameItem);
         if (!item) return;
 
         const previousStarred = !!item.starred;
@@ -784,15 +780,15 @@ export class MediaStore {
         // Update all occurrences of this item across all arrays
         runInAction(() => {
             // Update in images array
-            const imageItem = this.images.find(i => i.hash === hash);
+            const imageItem = this.images.find(sameItem);
             if (imageItem) imageItem.starred = newStarred;
 
             // Update in videos array
-            const videoItem = this.videos.find(v => v.hash === hash);
+            const videoItem = this.videos.find(sameItem);
             if (videoItem) videoItem.starred = newStarred;
 
             // Update in allMedia array
-            const allMediaItem = this.allMedia.find(i => i.hash === hash);
+            const allMediaItem = this.allMedia.find(sameItem);
             if (allMediaItem) allMediaItem.starred = newStarred;
 
             // Update metadata if open in lightbox
@@ -806,13 +802,13 @@ export class MediaStore {
             // Update with server response
             runInAction(() => {
                 const starred = response.data.starred;
-                const imageItem = this.images.find(i => i.hash === hash);
+                const imageItem = this.images.find(sameItem);
                 if (imageItem) imageItem.starred = starred;
 
-                const videoItem = this.videos.find(v => v.hash === hash);
+                const videoItem = this.videos.find(sameItem);
                 if (videoItem) videoItem.starred = starred;
 
-                const allMediaItem = this.allMedia.find(i => i.hash === hash);
+                const allMediaItem = this.allMedia.find(sameItem);
                 if (allMediaItem) allMediaItem.starred = starred;
 
                 if (this.imageMetadata?.hash === hash) this.imageMetadata.starred = starred;
@@ -820,13 +816,13 @@ export class MediaStore {
         } catch  {
             // Rollback on error
             runInAction(() => {
-                const imageItem = this.images.find(i => i.hash === hash);
+                const imageItem = this.images.find(sameItem);
                 if (imageItem) imageItem.starred = previousStarred;
 
-                const videoItem = this.videos.find(v => v.hash === hash);
+                const videoItem = this.videos.find(sameItem);
                 if (videoItem) videoItem.starred = previousStarred;
 
-                const allMediaItem = this.allMedia.find(i => i.hash === hash);
+                const allMediaItem = this.allMedia.find(sameItem);
                 if (allMediaItem) allMediaItem.starred = previousStarred;
 
                 if (this.imageMetadata?.hash === hash) this.imageMetadata.starred = previousStarred;
@@ -1010,13 +1006,12 @@ export class MediaStore {
             if (labelIds.length > 0) params.append('label_ids', labelIds.join(','));
             const response = await axios.get<{hash: string, name: string, created_at: string, place?: string}>(`/image/random?${params.toString()}`);
             const item = response.data;
-            const imageResponse = await axios.get(`/image/${item.hash}`, { responseType: 'blob' });
             return {
                 hash: item.hash,
                 name: item.name,
                 created_at: item.created_at,
                 place: item.place,
-                thumbnailUrl: URL.createObjectURL(imageResponse.data)
+                thumbnailUrl: this.getAuthenticatedUrl(`/api/image/${item.hash}`)
             };
         } catch (error) {
             logger.error("Failed to fetch random image for presentation", error);

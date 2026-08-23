@@ -76,8 +76,13 @@ export const Dashboard = observer(() => {
             } else if (activeTab === 'overview') {
                 void statsStore.fetchSystemStats();
             } else if (activeTab === 'backup') {
-                void statsStore.fetchP2PBackupStatus();
-                void statsStore.fetchDiscoveredPeers();
+                // While a rebalance is running, the 4s fast-poll below owns these
+                // endpoints; skip here to avoid duplicate requests.
+                const reb = statsStore.p2pBackupStatus?.rebalance;
+                if (!(reb?.is_active || (reb && reb.progress_percent < 100))) {
+                    void statsStore.fetchP2PBackupStatus();
+                    void statsStore.fetchDiscoveredPeers();
+                }
             }
         };
 
@@ -103,6 +108,7 @@ export const Dashboard = observer(() => {
             void statsStore.fetchDiscoveredPeers();
 
             const fastInterval = setInterval(() => {
+                if (document.hidden !== false) return;
                 const reb = statsStore.p2pBackupStatus?.rebalance;
                 if (reb?.is_active || (reb && reb.progress_percent < 100)) {
                     void statsStore.fetchP2PBackupStatus();

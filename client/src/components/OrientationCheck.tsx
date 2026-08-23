@@ -112,11 +112,7 @@ export const OrientationCheck = observer(() => {
                             onClick={() => openFull(idx)}
                             onKeyDown={(e) => { if (e.key === 'Enter') openFull(idx); }}
                         >
-                            {item.thumbnailUrl ? (
-                                <img src={item.thumbnailUrl} alt={item.name} className="object-cover w-full h-full group-hover:scale-110 transition-transform duration-500" loading="lazy" />
-                            ) : (
-                                <div className="flex items-center justify-center h-full text-gray-600 italic text-xs">Loading...</div>
-                            )}
+                            <img src={item.thumbnailUrl} alt={item.name} className="object-cover w-full h-full group-hover:scale-110 transition-transform duration-500" loading="lazy" />
                             {isAdmin && (
                                 <button
                                     onClick={(e) => {

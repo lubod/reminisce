@@ -505,34 +505,30 @@ describe("MediaStore lightbox", () => {
         expect(s.comparisonMediaUrl).toBeNull();
     });
 
-    it("closeMediaLightbox revokes blob URLs and resets all lightbox state", async () => {
-        const revoke = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+    it("closeMediaLightbox resets all lightbox state", async () => {
         const s = makeStore();
         s.selectedMediaIndex = 2;
-        s.fullMediaUrl = "blob:full";
-        s.comparisonMediaUrl = "blob:comp";
+        s.fullMediaUrl = "/api/image/x";
+        s.comparisonMediaUrl = "/api/image/y";
         s.compareMode = true;
         s.imageMetadata = { hash: "x", name: "n", description: null, place: null, created_at: "", exif: null, starred: false };
         s.lastLoadedMetadataHash = "x";
 
         await s.closeMediaLightbox();
 
-        expect(revoke).toHaveBeenCalledWith("blob:full");
-        expect(revoke).toHaveBeenCalledWith("blob:comp");
         expect(s.selectedMediaIndex).toBeNull();
         expect(s.fullMediaUrl).toBeNull();
         expect(s.comparisonMediaUrl).toBeNull();
         expect(s.compareMode).toBe(false);
         expect(s.imageMetadata).toBeNull();
         expect(s.lastLoadedMetadataHash).toBeNull();
-        revoke.mockRestore();
     });
 
-    it("fetchRandomImage returns a blob-URL item on success", async () => {
+    it("fetchRandomImage returns a plain cookie-authenticated URL on success", async () => {
         const s = makeStore();
         const result = await s.fetchRandomImage();
         expect(result?.hash).toBe("rnd");
-        expect(result?.thumbnailUrl).toBe("blob:mock");
+        expect(result?.thumbnailUrl).toBe("/api/image/rnd");
     });
 
     it("fetchRandomImage returns null on failure", async () => {

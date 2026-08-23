@@ -315,7 +315,7 @@ export const MediaLightbox = observer(() => {
                     className="p-2 bg-black bg-opacity-50 rounded hover:bg-opacity-70 text-white"
                     onClick={(e) => {
                         e.stopPropagation();
-                        void mediaStore.toggleStarMedia(selectedMedia.hash);
+                        void mediaStore.toggleStarMedia(selectedMedia.hash, selectedMedia.device_id);
                     }}
                     title="Star / Unstar"
                 >
