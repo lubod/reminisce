@@ -561,7 +561,7 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
         let cors = actix_cors::Cors::default()
             .allowed_origin_fn(move |origin: &actix_web::http::header::HeaderValue, head: &actix_web::dev::RequestHead| {
                 let origin_str = origin.to_str().unwrap_or("");
-                let Some((scheme, authority)) = origin_str.split_once("://") else {
+                let Some((_, authority)) = origin_str.split_once("://") else {
                     return false;
                 };
                 let origin_authority = authority.split('/').next().unwrap_or("");
@@ -574,12 +574,13 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
                     return false;
                 };
                 let (h_host, h_port) = split_authority(host_hdr);
-                // nginx $host drops the port; treat missing ports as the
-                // scheme default so "https://host:443" == "https://host" etc.
-                let default_port = if scheme.eq_ignore_ascii_case("https") { "443" } else { "80" };
-                let o_eff: &str = o_port.as_deref().unwrap_or(default_port);
-                let h_eff: &str = h_port.as_deref().unwrap_or(default_port);
-                if o_host == h_host && o_eff == h_eff {
+                // Reverse proxies often strip the port from Host ($host),
+                // while the browser keeps it in Origin — so a missing port on
+                // either side matches any port on the other. Same hostname is
+                // still required (SameSite-equivalent CSRF posture).
+                if o_host == h_host
+                    && (o_port == h_port || o_port.is_none() || h_port.is_none())
+                {
                     return true;
                 }
                 configured.iter().any(|c| c == origin_str)
