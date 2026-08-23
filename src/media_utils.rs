@@ -131,6 +131,233 @@ pub fn inject_exif_orientation(jpeg_bytes: &[u8], orientation: u16) -> Vec<u8> {
     out
 }
 
+/// Ensure a JPEG's EXIF carries `orientation`.
+///
+/// - JPEG without an Exif APP1 → minimal APP1 inserted (existing helper).
+/// - Exif APP1 already HAS the Orientation tag → value rewritten in place.
+/// - Exif APP1 WITHOUT an Orientation entry → new IFD0 entry spliced in:
+///   entry count +1, data after the IFD0 entries shifts by 12 bytes, and every
+///   out-of-line value offset / next-IFD pointer is fixed up.
+/// - Anything malformed, oversized, or non-JPEG returns untouched — worst case
+///   is today's behavior (served unpatched), never a corrupt image.
+pub fn ensure_exif_orientation(jpeg_bytes: &[u8], orientation: u16) -> Vec<u8> {
+    if !(1..=8).contains(&orientation) {
+        return jpeg_bytes.to_vec();
+    }
+    if read_exif_orientation_from_bytes(jpeg_bytes) == Some(orientation) {
+        return jpeg_bytes.to_vec();
+    }
+    // Only touch plausible complete JPEGs (must reach a Start-of-Scan).
+    let has_sos = jpeg_bytes.windows(2).any(|w| w == b"\xFF\xDA");
+    if !has_sos {
+        return jpeg_bytes.to_vec();
+    }
+    match find_exif_app1(jpeg_bytes) {
+        None => inject_exif_orientation(jpeg_bytes, orientation),
+        Some(loc) => splice_orientation_into_app1(jpeg_bytes, loc, orientation)
+            .unwrap_or_else(|| jpeg_bytes.to_vec()),
+    }
+}
+
+/// Locate the first Exif APP1 segment. Returns `(marker_pos, total_len)`
+/// where total_len includes the two marker bytes.
+fn find_exif_app1(jpeg: &[u8]) -> Option<(usize, usize)> {
+    if jpeg.len() < 4 || jpeg[0] != 0xFF || jpeg[1] != 0xD8 {
+        return None;
+    }
+    let mut pos = 2usize;
+    while pos + 4 <= jpeg.len() {
+        if jpeg[pos] != 0xFF {
+            break;
+        }
+        let marker = jpeg[pos + 1];
+        if marker == 0xFF {
+            pos += 1; // fill byte
+            continue;
+        }
+        if marker == 0xDA {
+            break; // start of scan — no EXIF beyond this point
+        }
+        let seg_len = u16::from_be_bytes([jpeg[pos + 2], jpeg[pos + 3]]) as usize;
+        if seg_len < 2 {
+            break;
+        }
+        if marker == 0xE1
+            && pos + 10 <= jpeg.len()
+            && &jpeg[pos + 4..pos + 10] == b"Exif\0\0"
+        {
+            return Some((pos, seg_len + 2));
+        }
+        pos += 2 + seg_len;
+    }
+    None
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Endian {
+    Little,
+    Big,
+}
+
+impl Endian {
+    fn parse(b: &[u8]) -> Option<Endian> {
+        match b {
+            b"II" => Some(Endian::Little),
+            b"MM" => Some(Endian::Big),
+            _ => None,
+        }
+    }
+    fn u16(self, b: &[u8]) -> Option<u16> {
+        b.get(0..2).map(|s| match self {
+            Endian::Little => u16::from_le_bytes([s[0], s[1]]),
+            Endian::Big => u16::from_be_bytes([s[0], s[1]]),
+        })
+    }
+    fn u32(self, b: &[u8]) -> Option<u32> {
+        b.get(0..4).map(|s| match self {
+            Endian::Little => u32::from_le_bytes([s[0], s[1], s[2], s[3]]),
+            Endian::Big => u32::from_be_bytes([s[0], s[1], s[2], s[3]]),
+        })
+    }
+    fn push_u16(self, out: &mut Vec<u8>, v: u16) {
+        out.extend_from_slice(&match self {
+            Endian::Little => v.to_le_bytes(),
+            Endian::Big => v.to_be_bytes(),
+        });
+    }
+    fn push_u32(self, out: &mut Vec<u8>, v: u32) {
+        out.extend_from_slice(&match self {
+            Endian::Little => v.to_le_bytes(),
+            Endian::Big => v.to_be_bytes(),
+        });
+    }
+}
+
+/// Byte size of one IFD value of `typ` × `count` (None for unknown types).
+fn tiff_value_size(typ: u16, count: u32) -> Option<u32> {
+    let unit: u32 = match typ {
+        1 | 2 | 6 | 7 => 1,
+        3 | 8 => 2,
+        4 | 9 | 11 => 4,
+        5 | 10 | 12 => 8,
+        _ => return None,
+    };
+    unit.checked_mul(count)
+}
+
+const ORIENTATION_TAG: u16 = 0x0112;
+
+fn splice_orientation_into_app1(
+    jpeg: &[u8],
+    (app1_pos, app1_total): (usize, usize),
+    orientation: u16,
+) -> Option<Vec<u8>> {
+    // Segment layout: FF E1 | len(2) | "Exif\0\0"(6) | tiff...
+    if app1_total < 14 || app1_pos + app1_total > jpeg.len() {
+        return None;
+    }
+    let seg = &jpeg[app1_pos..app1_pos + app1_total];
+    let tiff = &seg[10..];
+    if tiff.len() < 8 {
+        return None;
+    }
+    let endian = Endian::parse(&tiff[0..2])?;
+    if endian.u16(&tiff[2..4])? != 42 {
+        return None;
+    }
+    let ifd0_off = endian.u32(&tiff[4..8])? as usize;
+    if ifd0_off < 8 || ifd0_off + 2 > tiff.len() {
+        return None;
+    }
+    let count = endian.u16(&tiff[ifd0_off..ifd0_off + 2])? as usize;
+    let entries_end = ifd0_off + 2 + count * 12;
+    if count == 0 || count >= 0xFFFF || entries_end + 4 > tiff.len() {
+        return None;
+    }
+
+    // Walk IFD0 entries once.
+    let mut orient_val_tiff_off: Option<usize> = None; // offset of the entry's value field, relative to TIFF start
+    for i in 0..count {
+        let e = ifd0_off + 2 + i * 12;
+        let tag = endian.u16(tiff.get(e..e + 12)?.get(0..2)?)?;
+        if tag == ORIENTATION_TAG {
+            orient_val_tiff_off = Some(e + 8);
+        }
+    }
+
+    if let Some(voff) = orient_val_tiff_off {
+        // ── Case A: tag exists → rewrite its 2-byte SHORT value in place.
+        let abs = app1_pos + 10 + voff;
+        if abs + 2 > jpeg.len() {
+            return None;
+        }
+        let mut out = jpeg.to_vec();
+        out[abs..abs + 2].copy_from_slice(&match endian {
+            Endian::Little => orientation.to_le_bytes(),
+            Endian::Big => orientation.to_be_bytes(),
+        });
+        return Some(out);
+    }
+
+    // ── Case B: insert a new entry. Segment grows by 12 bytes.
+    if app1_total + 12 - 2 > 0xFFFF {
+        return None; // would overflow the APP1 length field
+    }
+
+    let e4: usize = entries_end + 4; // old start of out-of-line value area
+
+    let mut out: Vec<u8> = Vec::with_capacity(jpeg.len() + 12);
+    out.extend_from_slice(&jpeg[..app1_pos]); // everything before the segment
+    out.extend_from_slice(&[0xFF, 0xE1]);
+    out.extend_from_slice(&((app1_total + 12 - 2) as u16).to_be_bytes()); // new len
+    out.extend_from_slice(&seg[4..10]); // "Exif\0\0"
+
+    // TIFF header (endian, magic, IFD0 offset) — unchanged.
+    out.extend_from_slice(&tiff[..ifd0_off]);
+
+    // Entry count, +1.
+    endian.push_u16(&mut out, (count as u16) + 1);
+
+    // Original entries; out-of-line pointers that point at or past E4 shift +12.
+    for i in 0..count {
+        let e = ifd0_off + 2 + i * 12;
+        let entry = &tiff[e..e + 12];
+        let tag = endian.u16(entry.get(0..2)?)?;
+        let typ = endian.u16(entry.get(2..4)?)?;
+        let cnt = endian.u32(entry.get(4..8)?)?;
+        out.extend_from_slice(entry);
+        let inline = matches!(tiff_value_size(typ, cnt), Some(sz) if sz <= 4);
+        if !inline && tag != ORIENTATION_TAG {
+            if let Some(old) = endian.u32(entry.get(8..12)?) {
+                if (old as usize) >= e4 {
+                    let idx = out.len() - 4;
+                    out[idx..idx + 4].copy_from_slice(&match endian {
+                        Endian::Little => (old + 12).to_le_bytes(),
+                        Endian::Big => (old + 12).to_be_bytes(),
+                    });
+                }
+            }
+        }
+    }
+
+    // The inserted Orientation entry.
+    endian.push_u16(&mut out, ORIENTATION_TAG);
+    endian.push_u16(&mut out, 3); // SHORT
+    endian.push_u32(&mut out, 1); // count
+    endian.push_u16(&mut out, orientation); // value
+    endian.push_u16(&mut out, 0); // padding
+
+    // Next-IFD pointer (usually 0 = none); shifts if present.
+    let next_ifd = endian.u32(&tiff[entries_end..e4])?;
+    endian.push_u32(&mut out, if next_ifd == 0 { 0 } else { next_ifd + 12 });
+
+    // Everything after the original IFD0 block moves verbatim.
+    out.extend_from_slice(&tiff[e4..]);
+
+    out.extend_from_slice(&jpeg[app1_pos + app1_total..]);
+    Some(out)
+}
+
 /// Rotate a PNG's pixel data according to an EXIF orientation value and
 /// re-encode as PNG (lossless).  Returns `None` if the bytes cannot be decoded.
 pub fn rotate_png_bytes(png_bytes: &[u8], orientation: u16) -> Option<Vec<u8>> {
@@ -1179,3 +1406,116 @@ mod tests {
 
 }
 
+
+#[cfg(test)]
+mod exif_orientation_tests {
+    use super::*;
+
+    fn jpeg_with_exif(entries: &[u8], value_area: &[u8]) -> Vec<u8> {
+        // Minimal II-endian TIFF IFD0 with the given raw entry bytes.
+        let mut tiff: Vec<u8> = vec![];
+        tiff.extend_from_slice(b"II");
+        tiff.extend_from_slice(&42u16.to_le_bytes());
+        tiff.extend_from_slice(&8u32.to_le_bytes()); // IFD0 at 8
+        tiff.extend_from_slice(&((entries.len() / 12) as u16).to_le_bytes());
+        tiff.extend_from_slice(entries);
+        tiff.extend_from_slice(&0u32.to_le_bytes()); // next IFD
+        tiff.extend_from_slice(value_area);
+
+        let mut seg: Vec<u8> = Vec::new();
+        seg.extend_from_slice(b"Exif\x00\x00");
+        seg.extend_from_slice(&tiff);
+        let mut out: Vec<u8> = vec![0xFF, 0xD8];
+        out.extend_from_slice(&[0xFF, 0xE1]);
+        // Segment length counts itself plus the payload.
+        out.extend_from_slice(&((seg.len() + 2) as u16).to_be_bytes());
+        out.extend_from_slice(&seg);
+        out.extend_from_slice(&[0xFF, 0xDA, 0x00, 0x02]); // SOS (plausibility)
+        out.extend_from_slice(&[0xFF, 0xD9]); // EOI
+        out
+    }
+
+    fn minimal_jpeg() -> Vec<u8> {
+        // SOI + DQT + SOS + EOI: structurally plausible enough for the
+        // plausibility guard (reaches Start-of-Scan).
+        vec![0xFF, 0xD8, 0xFF, 0xDB, 0x00, 0x02, 0x00, 0xFF, 0xDA, 0x00, 0x02, 0xFF, 0xD9]
+    }
+
+    #[test]
+    fn jpeg_without_app1_gets_minimal_tag() {
+        let jpg = minimal_jpeg();
+        let out = ensure_exif_orientation(&jpg, 6);
+        assert_eq!(read_exif_orientation_from_bytes(&out), Some(6));
+    }
+
+    #[test]
+    fn app1_without_orientation_entry_splices_one_in() {
+        // One Make (ASCII, 5B, out-of-line) entry.
+        let mut entries: Vec<u8> = Vec::new();
+        entries.extend_from_slice(&0x010Fu16.to_le_bytes()); // Make
+        entries.extend_from_slice(&2u16.to_le_bytes());      // ASCII
+        entries.extend_from_slice(&5u32.to_le_bytes());      // count
+        entries.extend_from_slice(&26u32.to_le_bytes());     // offset -> just past IFD block
+        let jpg = jpeg_with_exif(&entries, b"Test\x00");
+        assert_eq!(read_exif_orientation_from_bytes(&jpg), None);
+
+        let out = ensure_exif_orientation(&jpg, 6);
+        assert_eq!(out.len(), jpg.len() + 12);
+        assert_eq!(read_exif_orientation_from_bytes(&out), Some(6));
+        // The pre-existing Make field must survive the splice.
+        let cursor = std::io::Cursor::new(&out);
+        let exif = kamadak_exif::Reader::new()
+            .read_from_container(&mut std::io::BufReader::new(cursor))
+            .expect("spliced file must still parse as EXIF");
+        let make = exif.get_field(kamadak_exif::Tag::Make, kamadak_exif::In::PRIMARY)
+            .and_then(|f| match &f.value {
+                kamadak_exif::Value::Ascii(v) => Some(String::from_utf8_lossy(&v.iter().flatten().cloned().collect::<Vec<u8>>()).into_owned()),
+                _ => None,
+            })
+            .expect("Make must survive");
+        assert!(make.starts_with("Test"));
+    }
+
+    #[test]
+    fn app1_with_matching_tag_is_byte_identical() {
+        let jpg = minimal_jpeg();
+        let tagged = inject_exif_orientation(&jpg, 6);
+        let out = ensure_exif_orientation(&tagged, 6);
+        assert_eq!(out, tagged);
+    }
+
+    #[test]
+    fn app1_with_different_tag_is_rewritten() {
+        let jpg = minimal_jpeg();
+        let tagged = inject_exif_orientation(&jpg, 1);
+        assert_eq!(tagged.len(), jpg.len() + 36);
+        assert!(tagged.windows(2).any(|w| w == [0xFF, 0xDA]), "fixture must keep SOS");
+        let out = ensure_exif_orientation(&tagged, 8);
+        assert_eq!(out.len(), tagged.len());
+        assert_eq!(read_exif_orientation_from_bytes(&out), Some(8));
+    }
+
+    #[test]
+    fn real_fixture_jpg_survives_splice_and_parses() {
+        let data = std::fs::read("tests/test_image.jpg")
+            .expect("fixture present");
+        let before = read_exif_orientation_from_bytes(&data);
+        let out = ensure_exif_orientation(&data, 6);
+        // Whole file still parses through kamadak.
+        let parsed = read_exif_orientation_from_bytes(&out);
+        if before.is_some() && before != Some(6) {
+            assert_eq!(parsed, Some(6), "existing tag rewritten in place");
+            assert_eq!(out.len(), data.len());
+        } else if before.is_none() {
+            assert_eq!(parsed, Some(6), "entry spliced in");
+            assert_eq!(out.len(), data.len() + 12);
+        }
+    }
+
+    #[test]
+    fn malformed_input_returned_unchanged() {
+        let bad = vec![0xFF, 0xD8, 0xFF, 0xE1, 0x00]; // truncated segment
+        assert_eq!(ensure_exif_orientation(&bad, 6), bad);
+        assert_eq!(ensure_exif_orientation(&[], 6), Vec::<u8>::new());
+    }
+}

@@ -333,9 +333,11 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
                  FROM images
                  WHERE verification_status = 1
                    AND deleted_at IS NULL
-                   AND exif IS NULL
                    AND orientation IS NULL
                    AND orientation_detected_at IS NULL
+                   -- orientation IS NULL already implies the file's own EXIF had no
+                   -- usable Orientation tag (ingest copies it when present), so
+                   -- EXIF-bearing photos with missing tags are scanned as well.
                    AND lower(ext) != 'svg'
                  ORDER BY created_at ASC LIMIT $1",
                 &[&(room_left as i64)],
@@ -1014,6 +1016,13 @@ async fn process_orientation_detection(
             &[&o, &hash, user_id],
         ).await
             .map_err(|e| format!("Failed to store orientation: {}", e))?;
+        // The existing thumbnail was generated from un-rotated pixels; drop it
+        // so the verification worker regenerates it with the new orientation.
+        client.execute(
+            "UPDATE images SET has_thumbnail = false WHERE hash = $1 AND user_id = $2 AND has_thumbnail = true",
+            &[&hash, user_id],
+        ).await
+            .map_err(|e| format!("Failed to invalidate stale thumbnail: {}", e))?;
         info!("Stored AI-detected orientation {} for image {} (label={}, conf={:.3})",
               o, hash, detection.label, detection.confidence);
     } else {

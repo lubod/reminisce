@@ -80,18 +80,25 @@ pub async fn get_image(
                 // JPEG: inject a minimal EXIF APP1 block (no re-encode, zero quality loss).
                 // PNG:  rotate pixels and re-encode as PNG (lossless).
                 // Other formats (SVG, HEIC, …): serve as-is.
-                let data = match (no_exif, orientation) {
-                    (true, Some(o)) if o != 1 => {
+                // Orientation correction on serve:
+                // - JPEG: guarantee the file carries the DB-verified orientation
+                //   tag (inject minimal EXIF, splice into existing EXIF, or
+                //   rewrite a stale tag). Browsers then render it upright.
+                //   Covers photos whose files never had an Orientation tag but
+                //   whose orientation was fixed by AI detection later.
+                // - PNG (no EXIF container): rotate pixels losslessly instead.
+                let data = match orientation.filter(|o| *o != 1) {
+                    Some(o) => {
                         let ext_lc = extension.to_lowercase();
                         if ext_lc == "jpg" || ext_lc == "jpeg" {
-                            crate::media_utils::inject_exif_orientation(&data, o as u16)
-                        } else if ext_lc == "png" {
+                            crate::media_utils::ensure_exif_orientation(&data, o as u16)
+                        } else if no_exif && ext_lc == "png" {
                             crate::media_utils::rotate_png_bytes(&data, o as u16).unwrap_or(data)
                         } else {
                             data
                         }
                     }
-                    _ => data,
+                    None => data,
                 };
                 info!("Serving image: {:?}", image_path);
                 // Only allow-listed media extensions may render inline from our

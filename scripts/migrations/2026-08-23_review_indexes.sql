@@ -17,3 +17,14 @@ CREATE INDEX IF NOT EXISTS images_orientation_backlog_idx
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 CREATE INDEX IF NOT EXISTS admin_boundaries_name_trgm_idx
     ON admin_boundaries USING gin (name gin_trgm_ops);
+
+-- 2026-08-23b: orientation backlog widened — AI detection now also scans
+-- EXIF-bearing photos whose files lack an Orientation tag (the actual cause
+-- of wrongly-oriented photos). Old index matched the retired predicate.
+DROP INDEX IF EXISTS images_orientation_backlog_idx;
+CREATE INDEX IF NOT EXISTS images_orientation_backlog_idx
+    ON images (orientation_detected_at)
+    WHERE orientation IS NULL
+      AND orientation_detected_at IS NULL
+      AND verification_status = 1
+      AND deleted_at IS NULL;
