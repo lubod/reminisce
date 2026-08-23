@@ -252,6 +252,7 @@ pub async fn generate_thumbnail_for_image(
         // EXIF Rotation — use stored orientation if available; fall back to file read for
         // images that were ingested before the orientation column was added.
         let exif_orientation: u16 = orientation
+            .filter(|o| (1..=8).contains(o))
             .map(|o| o as u16)
             .or_else(|| crate::media_utils::read_exif_orientation_from_path(&image_path))
             .unwrap_or(1);

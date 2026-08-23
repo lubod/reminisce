@@ -333,7 +333,7 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
                  FROM images
                  WHERE verification_status = 1
                    AND deleted_at IS NULL
-                   AND orientation IS NULL
+                   AND (orientation IS NULL OR orientation NOT BETWEEN 1 AND 8)
                    AND orientation_detected_at IS NULL
                    -- orientation IS NULL already implies the file's own EXIF had no
                    -- usable Orientation tag (ingest copies it when present), so
@@ -1009,20 +1009,25 @@ async fn process_orientation_detection(
 
     // Mark the attempt complete regardless (below-min-confidence results are treated
     // as "checked, nothing to fix") so EXIF-less images aren't re-sent every cycle.
-    if let Some(o) = stored {
-        client.execute(
-            "UPDATE images SET orientation = $1, orientation_detected_at = NOW() \
-             WHERE hash = $2 AND user_id = $3 AND orientation IS NULL",
+if let Some(o) = stored {
+        // One statement: only invalidate the thumbnail when this call actually
+        // won the orientation write (rows_affected > 0), so a lost race never
+        // drops a healthy thumbnail that another worker just regenerated.
+        let updated = client.execute(
+            "UPDATE images SET orientation = $1, orientation_detected_at = NOW(), has_thumbnail = false \
+             WHERE hash = $2 AND user_id = $3 AND orientation IS NULL AND has_thumbnail = true",
             &[&o, &hash, user_id],
         ).await
             .map_err(|e| format!("Failed to store orientation: {}", e))?;
-        // The existing thumbnail was generated from un-rotated pixels; drop it
-        // so the verification worker regenerates it with the new orientation.
-        client.execute(
-            "UPDATE images SET has_thumbnail = false WHERE hash = $1 AND user_id = $2 AND has_thumbnail = true",
-            &[&hash, user_id],
-        ).await
-            .map_err(|e| format!("Failed to invalidate stale thumbnail: {}", e))?;
+        if updated == 0 {
+            // Lost the race or nothing to invalidate — still mark the attempt
+            // so the row leaves the queue.
+            client.execute(
+                "UPDATE images SET orientation_detected_at = NOW() WHERE hash = $1 AND user_id = $2 AND orientation IS NULL",
+                &[&hash, user_id],
+            ).await
+                .map_err(|e| format!("Failed to mark orientation attempt: {}", e))?;
+        }
         info!("Stored AI-detected orientation {} for image {} (label={}, conf={:.3})",
               o, hash, detection.label, detection.confidence);
     } else {

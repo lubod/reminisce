@@ -20,11 +20,15 @@ CREATE INDEX IF NOT EXISTS admin_boundaries_name_trgm_idx
 
 -- 2026-08-23b: orientation backlog widened — AI detection now also scans
 -- EXIF-bearing photos whose files lack an Orientation tag (the actual cause
--- of wrongly-oriented photos). Old index matched the retired predicate.
+-- of wrongly-oriented photos). Old index matched the retired predicate and
+-- keyed on detection time while the worker sorts by created_at.
 DROP INDEX IF EXISTS images_orientation_backlog_idx;
 CREATE INDEX IF NOT EXISTS images_orientation_backlog_idx
-    ON images (orientation_detected_at)
+    ON images (created_at)
     WHERE orientation IS NULL
       AND orientation_detected_at IS NULL
       AND verification_status = 1
       AND deleted_at IS NULL;
+      -- note: worker also filters lower(ext) != svg; svg rows are rare
+      -- enough that index-only matching is fine (they get filtered on read).
+

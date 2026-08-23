@@ -76,10 +76,6 @@ pub async fn get_image(
 
         match tokio::fs::read(&image_path).await {
             Ok(data) => {
-                // Apply DB orientation for images that have no EXIF in the file.
-                // JPEG: inject a minimal EXIF APP1 block (no re-encode, zero quality loss).
-                // PNG:  rotate pixels and re-encode as PNG (lossless).
-                // Other formats (SVG, HEIC, …): serve as-is.
                 // Orientation correction on serve:
                 // - JPEG: guarantee the file carries the DB-verified orientation
                 //   tag (inject minimal EXIF, splice into existing EXIF, or
@@ -87,7 +83,7 @@ pub async fn get_image(
                 //   Covers photos whose files never had an Orientation tag but
                 //   whose orientation was fixed by AI detection later.
                 // - PNG (no EXIF container): rotate pixels losslessly instead.
-                let data = match orientation.filter(|o| *o != 1) {
+                let data = match orientation.filter(|o| (2..=8).contains(o)) {
                     Some(o) => {
                         let ext_lc = extension.to_lowercase();
                         if ext_lc == "jpg" || ext_lc == "jpeg" {

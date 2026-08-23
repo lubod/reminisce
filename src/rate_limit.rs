@@ -37,8 +37,11 @@ fn parse_client_ip(
     x_forwarded_for: Option<&str>,
     trusted_proxies: &[IpAddr],
 ) -> IpAddr {
-    let peer = peer.unwrap_or_else(|| IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)));
-    let trusted_proxy = peer.is_loopback() || trusted_proxies.contains(&peer);
+    // Normalize IPv4-mapped IPv6 (::ffff:a.b.c.d) so a proxy connecting over
+    // v6-mapped v4 doesn't lose trusted status (which would collapse all of
+    // its clients into one shared login bucket).
+    let peer = peer.map(|p| p.to_canonical()).unwrap_or_else(|| IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)));
+    let trusted_proxy = peer.is_loopback() || trusted_proxies.iter().any(|tp| tp.to_canonical() == peer);
     if !trusted_proxy {
         return peer;
     }
@@ -408,6 +411,29 @@ mod tests {
             ip("10.0.0.5"),
         );
         assert_eq!(parse_client_ip(None, None, None, &[]), ip("127.0.0.1"));
+    }
+
+    #[test]
+    fn rate_limit_normalizes_ipv4_mapped_ipv6_peers() {
+        // nginx listening on a dual-stack socket presents peers as ::ffff:x.y.z.w
+        let mapped_loopback: IpAddr = "::ffff:127.0.0.1".parse().unwrap();
+        assert_eq!(
+            parse_client_ip(Some(mapped_loopback), Some("198.51.100.9"), None, &[]),
+            ip("198.51.100.9"),
+            "mapped loopback must keep trusted status",
+        );
+        let mapped_lan: IpAddr = "::ffff:192.168.1.50".parse().unwrap();
+        let allow = vec!["::ffff:10.138.94.9".parse::<IpAddr>().unwrap()];
+        assert_eq!(
+            parse_client_ip(Some(mapped_lan), Some("1.2.3.4"), None, &allow),
+            ip("192.168.1.50"),
+            "mapped private peer outside allowlist stays direct (canonicalized)",
+        );
+        assert_eq!(
+            parse_client_ip(Some(ip("10.138.94.9")), Some("198.51.100.7"), None, &["::ffff:10.138.94.9".parse().unwrap()]),
+            ip("198.51.100.7"),
+            "v4 proxy matches v6-mapped allowlist entry",
+        );
     }
 
     #[test]

@@ -131,8 +131,9 @@ pub fn sniff_media_kind(data: &[u8]) -> Option<&'static str> {
     if data.len() >= 12 && &data[4..8] == b"ftyp" {
         match &data[8..12] {
             b"heic" | b"heix" | b"hevc" | b"heim" | b"heis" | b"hevm" | b"hevs"
-            | b"mif1" | b"msf1" => return Some("image"), // HEIC/HEIF stills
-            b"isom" | b"iso2" | b"mp41" | b"mp42" | b"avc1" | b"dash" | b"M4V " => return Some("video"),
+            | b"mif1" | b"avif" => return Some("image"), // HEIC/AVIF stills
+            b"isom" | b"iso2" | b"mp41" | b"mp42" | b"avc1" | b"dash" | b"M4V "
+            | b"msf1" | b"avis" => return Some("video"), // msf1 = HEIF sequence (may be video)
             b"qt  " => return Some("video"), // QuickTime MOV
             _ => {}
         }

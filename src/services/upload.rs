@@ -2,7 +2,7 @@ use actix_multipart::Multipart;
 use actix_web::{web, HttpResponse, Error, post};
 use futures::{TryStreamExt};
 use serde::{Deserialize, Serialize};
-use tracing::{error};
+use tracing::{error, warn};
 use uuid::Uuid;
 use chrono::Utc;
 
@@ -178,6 +178,8 @@ pub async fn upload_image(
         }))),
         Err(e) => {
             error!("Failed to ingest image: {}", e);
+            // Rejected content never moved into the store — remove the temp.
+            utils::cleanup_temp_files_spawn(Some(image_temp_path), None);
             Ok(HttpResponse::InternalServerError().json(serde_json::json!({"status": "error", "message": e.to_string()})))
         }
     }
@@ -215,12 +217,48 @@ pub async fn batch_upload_image(
     };
     let user_uuid = Uuid::parse_str(&claims.user_id).map_err(|_| actix_web::error::ErrorUnauthorized("Invalid user ID"))?;
 
+    // Aggregate bounds: the per-file cap alone allowed N×200 MB per request.
+    const MAX_BATCH_FILES: usize = 50;
+    const MAX_BATCH_TOTAL_BYTES: u64 = 1024 * 1024 * 1024; // 1 GB
+    let mut batch_total_bytes: u64 = 0;
+    let mut batch_file_count: usize = 0;
+
     while let Ok(Some(mut field)) = payload.try_next().await {
+        batch_file_count += 1;
+        if batch_file_count > MAX_BATCH_FILES || batch_total_bytes > MAX_BATCH_TOTAL_BYTES {
+            return Ok(HttpResponse::PayloadTooLarge().json(serde_json::json!({
+                "status": "error",
+                "message": format!(
+                    "Batch limit exceeded (max {} files / {} GB total); processed {} file(s)",
+                    MAX_BATCH_FILES,
+                    MAX_BATCH_TOTAL_BYTES / (1024 * 1024 * 1024),
+                    results.len()
+                )
+            })));
+        }
+
         let content_disposition = field.content_disposition();
         let filename = content_disposition.get_filename().unwrap_or("unknown").to_string();
-        
+
         let temp_dir = std::path::Path::new(config.get_images_dir()).join(".tmp");
-        let (temp_path, hash) = crate::media_utils::streaming_hash_to_temp(&mut field, &temp_dir, 200 * 1024 * 1024).await?;
+        let streamed = crate::media_utils::streaming_hash_to_temp(&mut field, &temp_dir, 200 * 1024 * 1024).await;
+        let (temp_path, hash) = match streamed {
+            Ok(v) => v,
+            Err(e) => {
+                // Stream interruption/limit must surface as a per-item failure,
+                // never as a silently-truncated successful ingest.
+                warn!("Batch item {} stream failed: {}", batch_file_count, e);
+                results.push(serde_json::json!({
+                    "status": "error",
+                    "filename": filename,
+                    "message": e.to_string(),
+                }));
+                continue;
+            }
+        };
+        if let Ok(meta) = tokio::fs::metadata(&temp_path).await {
+            batch_total_bytes += meta.len();
+        }
 
         let res = ingest::process_image_file(
             &temp_path,
@@ -247,6 +285,8 @@ pub async fn batch_upload_image(
             })),
             Err(e) => {
                 error!("Failed to ingest image in batch: {}", e);
+                // Ingest rejection left the temp file behind — clean it up.
+                utils::cleanup_temp_files_spawn(Some(temp_path), None);
                 results.push(serde_json::json!({"status": "error", "hash": hash, "message": e.to_string()}));
             }
         }

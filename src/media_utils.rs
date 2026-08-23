@@ -88,24 +88,11 @@ pub fn inject_exif_orientation(jpeg_bytes: &[u8], orientation: u16) -> Vec<u8> {
         return jpeg_bytes.to_vec();
     }
 
-    // Scan segments after SOI; bail out if an APP1 EXIF block already exists
-    let mut pos = 2usize;
-    while pos + 4 <= jpeg_bytes.len() {
-        if jpeg_bytes[pos] != 0xFF {
-            break;
-        }
-        let marker = jpeg_bytes[pos + 1];
-        if marker == 0xE1
-            && pos + 10 <= jpeg_bytes.len()
-            && &jpeg_bytes[pos + 4..pos + 10] == b"Exif\0\0"
-        {
-            return jpeg_bytes.to_vec();
-        }
-        let seg_len = u16::from_be_bytes([jpeg_bytes[pos + 2], jpeg_bytes[pos + 3]]) as usize;
-        if seg_len < 2 {
-            break;
-        }
-        pos += 2 + seg_len;
+    // An existing Exif APP1 means we cannot prepend another one (undefined
+    // behavior across parsers) — leave the file untouched. The richer splice
+    // path in ensure_exif_orientation handles this case when needed.
+    if find_exif_app1(jpeg_bytes).is_some() {
+        return jpeg_bytes.to_vec();
     }
 
     // Build a 36-byte minimal EXIF APP1 block (little-endian TIFF, 1 IFD entry)
@@ -121,7 +108,7 @@ pub fn inject_exif_orientation(jpeg_bytes: &[u8], orientation: u16) -> Vec<u8> {
     app1[22..24].copy_from_slice(&[0x03, 0x00]);       // type SHORT
     app1[24..28].copy_from_slice(&[0x01, 0x00, 0x00, 0x00]); // count 1
     app1[28] = (orientation & 0xFF) as u8;             // value low byte
-    app1[29] = (orientation >> 8) as u8;               // value high byte
+    app1[29] = ((orientation >> 8) & 0xFF) as u8;      // value high byte
     // bytes 30-35 stay zero (SHORT padding + next-IFD offset)
 
     let mut out = Vec::with_capacity(jpeg_bytes.len() + 36);
@@ -330,10 +317,7 @@ fn splice_orientation_into_app1(
             return None;
         }
         let n = endian.u16(tiff.get(off..off + 2)?)? as usize;
-        let ifd_entries_end = match off.checked_add(2).and_then(|v| v.checked_add(n.checked_mul(12)?)) {
-            Some(v) => v,
-            None => return None,
-        };
+        let ifd_entries_end = off.checked_add(2)?.checked_add(n.checked_mul(12)?)?;
         if n == 0 || n > 0x2000 || ifd_entries_end + 4 > tiff.len() {
             return None;
         }
