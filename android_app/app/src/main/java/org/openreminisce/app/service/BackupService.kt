@@ -15,7 +15,6 @@ class BackupService : Service() {
         private const val NOTIFICATION_ID = 1
         private const val CHANNEL_ID = "backup_channel"
         private const val PREFS_NAME = "BackupState"
-        private const val KEY_IS_BACKUP_RUNNING = "is_backup_running"
         private const val KEY_BACKUP_TYPE = "backup_type"
         private const val KEY_IS_QUICK_BACKUP = "is_quick_backup"
     }
@@ -27,7 +26,6 @@ class BackupService : Service() {
     private fun setBackupRunning(isRunning: Boolean, backupType: String = "image", isQuickBackup: Boolean = false) {
         val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
         with(prefs.edit()) {
-            putBoolean(KEY_IS_BACKUP_RUNNING, isRunning)
             if (isRunning) {
                 putString(KEY_BACKUP_TYPE, backupType)
                 putBoolean(KEY_IS_QUICK_BACKUP, isQuickBackup)
@@ -41,21 +39,34 @@ class BackupService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent == null) {
+            // START_STICKY restart after process death: there is no user request
+            // behind this restart, so do not spin up backup work again.
+            Log.w(TAG, "Restarted without intent (START_STICKY restart) — not resuming backup")
+            return START_NOT_STICKY
+        }
         Log.d(TAG, "Backup service started")
-        Log.d(TAG, "Intent action: ${intent?.action}")
-        Log.d(TAG, "Backup type from intent: ${intent?.getStringExtra("backup_type")}")
-        Log.d(TAG, "Quick backup from intent: ${intent?.getBooleanExtra("quick_backup", false)}")
-        
+        Log.d(TAG, "Intent action: ${intent.action}")
+        Log.d(TAG, "Backup type from intent: ${intent.getStringExtra("backup_type")}")
+        Log.d(TAG, "Quick backup from intent: ${intent.getBooleanExtra("quick_backup", false)}")
+
         // Set backup as running in persistent storage
-        setBackupRunning(true, intent?.getStringExtra("backup_type") ?: "image", intent?.getBooleanExtra("quick_backup", false) ?: false)
-        
+        setBackupRunning(true, intent.getStringExtra("backup_type") ?: "image", intent.getBooleanExtra("quick_backup", false))
+
         // Create notification channel for Android 8.0 and above
         createNotificationChannel()
-        
+
         // Create a notification for the foreground service with HIGH priority to prevent sleep
+        val contentIntent = android.app.PendingIntent.getActivity(
+            this,
+            0,
+            android.content.Intent(this, org.openreminisce.app.MainActivity::class.java),
+            android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT
+        )
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Upload Service")
             .setContentText("Performing upload operation...")
+            .setContentIntent(contentIntent)
             .setSmallIcon(R.drawable.ic_launcher_foreground) // Use app's icon instead of generic one
             .setPriority(NotificationCompat.PRIORITY_HIGH) // HIGH priority to prevent system from killing it
             .setOngoing(true) // Make it ongoing to indicate it's a foreground service
@@ -102,12 +113,18 @@ class BackupService : Service() {
     private var currentWorkId: java.util.UUID? = null
     private var workInfoObserver: androidx.lifecycle.Observer<androidx.work.WorkInfo>? = null
     private val handler = android.os.Handler(android.os.Looper.getMainLooper())
-    private val pollingRunnable: Runnable = object : Runnable {
-        override fun run() {
-            // Periodically check work status as a backup mechanism
-            currentWorkId?.let { workId ->
-                // Use a background thread for this operation
-                Thread {
+
+    @Volatile
+    private var completionHandled = false
+
+    // Single background poller (replaces thread-per-poll); LiveData observer stays the primary path.
+    private var pollExecutor: java.util.concurrent.ScheduledExecutorService? = null
+
+    private fun startPolling() {
+        if (pollExecutor != null) return
+        pollExecutor = java.util.concurrent.Executors.newSingleThreadScheduledExecutor().also { executor ->
+            executor.scheduleWithFixedDelay({
+                currentWorkId?.let { workId ->
                     try {
                         val workInfo = WorkManager.getInstance(this@BackupService).getWorkInfoById(workId).get()
                         if (workInfo != null && workInfo.state.isFinished) {
@@ -115,17 +132,20 @@ class BackupService : Service() {
                             // WorkManager LiveData (and removeObserver) are main-thread-only;
                             // hopping back here prevents IllegalStateException from the poller.
                             handler.post { handleWorkCompletion(workInfo) }
-                        } else {
-                            // Continue polling if not finished
-                            handler.postDelayed(this, 5000) // Check every 5 seconds
                         }
                     } catch (e: Exception) {
                         Log.e(TAG, "Error polling work status", e)
-                        handler.postDelayed(this, 5000) // Retry on error
                     }
-                }.start()
-            }
+                }
+            }, 10, 5, TimeUnit.SECONDS) // Start polling after 10 seconds, check every 5 seconds
         }
+    }
+
+    private fun stopPolling() {
+        pollExecutor?.let {
+            it.shutdownNow()
+        }
+        pollExecutor = null
     }
 
     private fun startBackupWork(intent: Intent?) {
@@ -133,6 +153,9 @@ class BackupService : Service() {
         val quickBackup = intent?.getBooleanExtra("quick_backup", false) ?: false
 
         Log.d(TAG, "Starting backup work - Type: $backupType, Quick: $quickBackup")
+
+        // Reset so the observer + poller can't double-fire across runs
+        completionHandled = false
 
         val constraints = Constraints.Builder()
             .setRequiredNetworkType(NetworkType.CONNECTED)  // Backup needs the home server; without a network the run would fail instantly. The work stays enqueued until connectivity returns.
@@ -210,10 +233,13 @@ class BackupService : Service() {
         Log.d(TAG, "Attached work info observer")
 
         // Start polling as a backup mechanism in case observeForever stops working
-        handler.postDelayed(pollingRunnable, 10000) // Start polling after 10 seconds
+        startPolling()
     }
 
     private fun handleWorkCompletion(workInfo: WorkInfo, @Suppress("UNUSED_PARAMETER") backupType: String? = null, quickBackup: Boolean? = null) {
+        if (completionHandled) return
+        completionHandled = true
+
         Log.d(TAG, "Work is finished with state: ${workInfo.state}")
 
         // Get quick backup flag from shared preferences if not provided
@@ -270,7 +296,7 @@ class BackupService : Service() {
         }
 
         // Stop polling
-        handler.removeCallbacks(pollingRunnable)
+        stopPolling()
 
         Log.d(TAG, "Stopping backup service")
         // Clear the backup running state
@@ -280,6 +306,8 @@ class BackupService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        // Stop the poller
+        stopPolling()
         // Clean up observer when service is destroyed
         workInfoObserver?.let { observer ->
             currentWorkId?.let { workId ->

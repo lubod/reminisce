@@ -20,6 +20,7 @@ import org.openreminisce.app.util.BackupProgressDialogHelper
 import org.openreminisce.app.util.DatabaseHelper
 import org.openreminisce.app.util.NetworkHelper
 import org.openreminisce.app.util.PreferenceHelper
+import org.openreminisce.app.util.maybePromptBatteryOptimization
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -76,11 +77,7 @@ class WebGalleryActivity : AppCompatActivity() {
         val filter = android.content.IntentFilter("org.openreminisce.app.BACKUP_STATUS")
         filter.addAction("org.openreminisce.app.BACKUP_PROGRESS")
 
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(backupStatusReceiver, filter, android.content.Context.RECEIVER_NOT_EXPORTED)
-        } else {
-            androidx.core.content.ContextCompat.registerReceiver(this, backupStatusReceiver, filter, androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
-        }
+        androidx.core.content.ContextCompat.registerReceiver(this, backupStatusReceiver, filter, androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
 
         // Handle back button press for WebView navigation
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
@@ -99,6 +96,8 @@ class WebGalleryActivity : AppCompatActivity() {
     }
 
     private fun startQuickBackup() {
+        maybePromptBatteryOptimization()
+
         isBackingUp = true
 
         applyKeepScreenOn(true)
@@ -133,6 +132,8 @@ class WebGalleryActivity : AppCompatActivity() {
     }
 
     private fun startFullBackup() {
+        maybePromptBatteryOptimization()
+
         isBackingUp = true
 
         applyKeepScreenOn(true)
@@ -160,7 +161,6 @@ class WebGalleryActivity : AppCompatActivity() {
         // Set cancellation flag
         val prefs = getSharedPreferences("BackupState", MODE_PRIVATE)
         prefs.edit().apply {
-            putBoolean("is_backup_running", false)
             putBoolean("cancel_backup", true)
             remove("backup_type")
             remove("is_quick_backup")
@@ -186,25 +186,22 @@ class WebGalleryActivity : AppCompatActivity() {
         val failedCount = intent.getIntExtra("failedCount", 0)
         val type = intent.getStringExtra("type") ?: "full"
 
-        runOnUiThread {
-            progressDialogHelper.showCompletion(
-                successfullyBackedUp = successfullyBackedUp,
-                totalProcessed = totalProcessed,
-                skippedExisting = skippedExisting,
-                failedCount = failedCount,
-                backupType = "all",
-                isQuickBackup = type == "quick"
-            ) {
-                // On dismiss - nothing special needed for WebGalleryActivity
-            }
+        // Receiver callbacks always arrive on the main thread — no UI hop needed
+        progressDialogHelper.showCompletion(
+            successfullyBackedUp = successfullyBackedUp,
+            totalProcessed = totalProcessed,
+            skippedExisting = skippedExisting,
+            failedCount = failedCount,
+            backupType = "all",
+            isQuickBackup = type == "quick"
+        ) {
+            // On dismiss - nothing special needed for WebGalleryActivity
         }
     }
 
     private fun handleBackupFailedOrCancelled(status: String?) {
-        runOnUiThread {
-            progressDialogHelper.showFailure(status ?: "failed") {
-                // On dismiss - nothing special needed
-            }
+        progressDialogHelper.showFailure(status ?: "failed") {
+            // On dismiss - nothing special needed
         }
     }
 
@@ -220,20 +217,19 @@ class WebGalleryActivity : AppCompatActivity() {
         val fileProgress = intent.getFloatExtra("fileProgress", 0f)
         val fileUploadProgress = intent.getFloatExtra("fileUploadProgress", 0f)
 
-        runOnUiThread {
-            progressDialogHelper.updateProgress(
-                overallProgress = overallProgress,
-                currentAction = currentAction,
-                currentFile = currentFile,
-                fileIndex = fileIndex,
-                totalFiles = totalFiles,
-                backedUpCount = backedUpCount,
-                skippedCount = skippedCount,
-                failedCount = failedCount,
-                fileProgress = fileProgress,
-                fileUploadProgress = fileUploadProgress
-            )
-        }
+        // Receiver callbacks always arrive on the main thread — no UI hop needed
+        progressDialogHelper.updateProgress(
+            overallProgress = overallProgress,
+            currentAction = currentAction,
+            currentFile = currentFile,
+            fileIndex = fileIndex,
+            totalFiles = totalFiles,
+            backedUpCount = backedUpCount,
+            skippedCount = skippedCount,
+            failedCount = failedCount,
+            fileProgress = fileProgress,
+            fileUploadProgress = fileUploadProgress
+        )
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -544,6 +540,7 @@ class WebGalleryActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        applyKeepScreenOn(false)
         super.onDestroy()
         try {
             unregisterReceiver(backupStatusReceiver)

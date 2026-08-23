@@ -1,7 +1,6 @@
 package org.openreminisce.app
 
 import org.openreminisce.app.util.applyKeepScreenOn
-import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import android.util.Log
@@ -22,6 +21,7 @@ import org.openreminisce.app.util.DatabaseHelper
 import org.openreminisce.app.util.LogCollector
 import org.openreminisce.app.util.PreferenceHelper
 import org.openreminisce.app.util.SecureStorageHelper
+import org.openreminisce.app.util.maybePromptBatteryOptimization
 import android.widget.TextView
 import android.widget.Toast
 import java.text.SimpleDateFormat
@@ -93,11 +93,7 @@ class MainActivity : AppCompatActivity() {
         val filter = android.content.IntentFilter("org.openreminisce.app.BACKUP_STATUS")
         filter.addAction("org.openreminisce.app.BACKUP_PROGRESS")
 
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(backupStatusReceiver, filter, android.content.Context.RECEIVER_NOT_EXPORTED)
-        } else {
-            androidx.core.content.ContextCompat.registerReceiver(this, backupStatusReceiver, filter, androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
-        }
+        ContextCompat.registerReceiver(this, backupStatusReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
 
         // Handle back button press to handle WebView navigation if in remote tab?
         // Actually navigation is handled inside fragments or separate activities if pushed.
@@ -151,44 +147,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-        /**
-     * Honor/Huawei/xiaomi builds silently freeze background uploads unless the
-     * app is exempted from battery optimizations. Ask a few times max.
-     */
-    private fun maybePromptBatteryOptimization() {
-        val pm = getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
-        if (pm.isIgnoringBatteryOptimizations(packageName)) return
-
-        val prefs = getSharedPreferences("BackupState", MODE_PRIVATE)
-        val askedCount = prefs.getInt("battery_prompt_count", 0)
-        if (askedCount >= 3) return // don't nag forever
-
-        androidx.appcompat.app.AlertDialog.Builder(this)
-            .setTitle("Allow background uploads?")
-            .setMessage(
-                "Your device stops uploads when the screen turns off. " +
-                "Exclude Reminisce from battery optimization so photo backups " +
-                "can continue reliably in the background."
-            )
-            .setPositiveButton("Allow") { _, _ ->
-                try {
-                    startActivity(
-                        android.content.Intent(
-                            android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
-                            android.net.Uri.parse("package:$packageName")
-                        )
-                    )
-                } catch (e: Exception) {
-                    Log.w(TAG, "Battery optimization settings unavailable", e)
-                }
-            }
-            .setNegativeButton("Not now", null)
-            .show()
-
-        prefs.edit().putInt("battery_prompt_count", askedCount + 1).apply()
-    }
-
-private fun startQuickBackup() {
+    private fun startQuickBackup() {
         if (isBackingUp) {
             return
         }
@@ -237,6 +196,8 @@ private fun startQuickBackup() {
             return
         }
 
+        maybePromptBatteryOptimization()
+
         isBackingUp = true
 
 
@@ -266,7 +227,6 @@ private fun startQuickBackup() {
         // Set cancellation flag
         val prefs = getSharedPreferences("BackupState", MODE_PRIVATE)
         prefs.edit().apply {
-            putBoolean("is_backup_running", false)
             putBoolean("cancel_backup", true)
             remove("backup_type")
             remove("is_quick_backup")
@@ -292,25 +252,22 @@ private fun startQuickBackup() {
         val failedCount = intent.getIntExtra("failedCount", 0)
         val type = intent.getStringExtra("type") ?: "full"
 
-        runOnUiThread {
-            progressDialogHelper.showCompletion(
-                successfullyBackedUp = successfullyBackedUp,
-                totalProcessed = totalProcessed,
-                skippedExisting = skippedExisting,
-                failedCount = failedCount,
-                backupType = "all",
-                isQuickBackup = type == "quick"
-            ) {
-                // No specific action on dismiss needed for general MainActivity context
-            }
+        // Receiver callbacks always arrive on the main thread — no UI hop needed
+        progressDialogHelper.showCompletion(
+            successfullyBackedUp = successfullyBackedUp,
+            totalProcessed = totalProcessed,
+            skippedExisting = skippedExisting,
+            failedCount = failedCount,
+            backupType = "all",
+            isQuickBackup = type == "quick"
+        ) {
+            // No specific action on dismiss needed for general MainActivity context
         }
     }
 
     private fun handleBackupFailedOrCancelled(status: String?) {
-        runOnUiThread {
-            progressDialogHelper.showFailure(status ?: "failed") {
-                // Nothing special needed on dismiss
-            }
+        progressDialogHelper.showFailure(status ?: "failed") {
+            // Nothing special needed on dismiss
         }
     }
 
@@ -326,20 +283,19 @@ private fun startQuickBackup() {
         val fileProgress = intent.getFloatExtra("fileProgress", 0f)
         val fileUploadProgress = intent.getFloatExtra("fileUploadProgress", 0f)
 
-        runOnUiThread {
-            progressDialogHelper.updateProgress(
-                overallProgress = overallProgress,
-                currentAction = currentAction,
-                currentFile = currentFile,
-                fileIndex = fileIndex,
-                totalFiles = totalFiles,
-                backedUpCount = backedUpCount,
-                skippedCount = skippedCount,
-                failedCount = failedCount,
-                fileProgress = fileProgress,
-                fileUploadProgress = fileUploadProgress
-            )
-        }
+        // Receiver callbacks always arrive on the main thread — no UI hop needed
+        progressDialogHelper.updateProgress(
+            overallProgress = overallProgress,
+            currentAction = currentAction,
+            currentFile = currentFile,
+            fileIndex = fileIndex,
+            totalFiles = totalFiles,
+            backedUpCount = backedUpCount,
+            skippedCount = skippedCount,
+            failedCount = failedCount,
+            fileProgress = fileProgress,
+            fileUploadProgress = fileUploadProgress
+        )
     }
 
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
@@ -453,6 +409,7 @@ private fun startQuickBackup() {
     }
 
     override fun onDestroy() {
+        applyKeepScreenOn(false)
         super.onDestroy()
         try {
             unregisterReceiver(backupStatusReceiver)

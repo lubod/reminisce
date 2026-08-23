@@ -107,6 +107,12 @@
     <string name="clear_hash_cache">Clear Hash Cache</string>
     <string name="hash_cache_cleared">Hash cache cleared successfully</string>
 
+    <!-- Battery optimization prompt -->
+    <string name="battery_prompt_title">Allow background uploads?</string>
+    <string name="battery_prompt_message">Your device stops uploads when the screen turns off. Exclude Reminisce from battery optimization so photo backups can continue reliably in the background. You can undo this later in Settings › Apps › Reminisce › Battery</string>
+    <string name="battery_prompt_allow">Allow</string>
+    <string name="battery_prompt_later">Not now</string>
+
     <!-- Media info bottom sheet -->
     <string name="tab_details">Details</string>
     <string name="tab_exif">EXIF</string>

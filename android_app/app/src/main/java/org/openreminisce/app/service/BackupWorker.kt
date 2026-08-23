@@ -39,7 +39,6 @@ class BackupWorker(context: Context, val params: WorkerParameters) : Worker(cont
     @Volatile
     private var activeCall: Call? = null
     private var wakeLock: android.os.PowerManager.WakeLock? = null
-    private var cpuWakeLock: android.os.PowerManager.WakeLock? = null
 
     // Throttling mechanism for progress updates using lock-free AtomicLong
     private val lastProgressUpdateTime = AtomicLong(0L)
@@ -69,16 +68,7 @@ class BackupWorker(context: Context, val params: WorkerParameters) : Worker(cont
                 acquire(6 * 60 * 60 * 1000L) // 6 hours max timeout
             }
 
-            // Also acquire a separate CPU wake lock for double protection
-            cpuWakeLock = powerManager.newWakeLock(
-                android.os.PowerManager.PARTIAL_WAKE_LOCK,
-                "${WAKE_LOCK_TAG}:CPU"
-            ).apply {
-                setReferenceCounted(false)
-                acquire(6 * 60 * 60 * 1000L)
-            }
-
-            Log.d(TAG, "Wake locks acquired (PARTIAL_WAKE_LOCK) for background backup execution")
+            Log.d(TAG, "Wake lock acquired (PARTIAL_WAKE_LOCK) for background backup execution")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to acquire wake lock", e)
         }
@@ -89,18 +79,10 @@ class BackupWorker(context: Context, val params: WorkerParameters) : Worker(cont
             wakeLock?.let {
                 if (it.isHeld) {
                     it.release()
-                    Log.d(TAG, "Screen wake lock released")
+                    Log.d(TAG, "PARTIAL wake lock released")
                 }
             }
             wakeLock = null
-
-            cpuWakeLock?.let {
-                if (it.isHeld) {
-                    it.release()
-                    Log.d(TAG, "CPU wake lock released")
-                }
-            }
-            cpuWakeLock = null
         } catch (e: Exception) {
             Log.e(TAG, "Failed to release wake lock", e)
         }
@@ -133,9 +115,18 @@ class BackupWorker(context: Context, val params: WorkerParameters) : Worker(cont
             "Starting..."
         }
 
+        // Tapping the notification opens the app
+        val contentIntent = android.app.PendingIntent.getActivity(
+            applicationContext,
+            0,
+            android.content.Intent(applicationContext, org.openreminisce.app.MainActivity::class.java),
+            android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
         val notification = androidx.core.app.NotificationCompat.Builder(applicationContext, CHANNEL_ID)
             .setContentTitle("Upload Active: $progressText")
             .setContentText(currentFile)
+            .setContentIntent(contentIntent)
             .setSmallIcon(org.openreminisce.app.R.drawable.ic_launcher_foreground)
             .setPriority(androidx.core.app.NotificationCompat.PRIORITY_HIGH)
             .setOngoing(true)
@@ -194,12 +185,20 @@ class BackupWorker(context: Context, val params: WorkerParameters) : Worker(cont
         acquireWakeLock()
 
         return try {
-            // Promote to foreground service to prevent being killed during sleep
-            try {
-                setForegroundAsync(getForegroundInfo())
-                Log.d(TAG, "Worker promoted to foreground service")
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to promote worker to foreground", e)
+            // Promote to foreground service to prevent being killed during sleep.
+            // setForegroundAsync returns a ListenableFuture: a synchronous try/catch
+            // around it would never see the actual failure, so inspect the future
+            // via addListener instead (Runnable::run executes the listener inline
+            // on whichever thread completes the future).
+            setForegroundAsync(getForegroundInfo()).also { fgsFuture ->
+                fgsFuture.addListener({
+                    try {
+                        fgsFuture.get()
+                        Log.d(TAG, "Worker promoted to foreground service")
+                    } catch (e: Exception) {
+                        Log.e(TAG, "FGS promotion failed — relying on PARTIAL wake lock", e)
+                    }
+                }, Runnable::run)
             }
 
             Log.d(TAG, "Input data processed")
@@ -275,6 +274,11 @@ class BackupWorker(context: Context, val params: WorkerParameters) : Worker(cont
         LogCollector.i(TAG, "Backup type: images+videos, Quick: $quickBackup")
 
         val imageResult = performMediaBackup(baseUrl, token, quickBackup, false)
+        if (!imageResult) {
+            // Image pass failed or was cancelled — don't start the video pass.
+            // backupStats already reflects the image run at this point.
+            return false
+        }
         val imageStats = backupStats
         val videoResult = performMediaBackup(baseUrl, token, quickBackup, true)
         val videoStats = backupStats
@@ -288,9 +292,8 @@ class BackupWorker(context: Context, val params: WorkerParameters) : Worker(cont
             failedFiles = (imageStats?.failedFiles ?: emptyList()) + (videoStats?.failedFiles ?: emptyList())
         )
 
-        val result = imageResult && videoResult
-        Log.d(TAG, "Backup operation completed with result: $result")
-        return result
+        Log.d(TAG, "Backup operation completed with result: $videoResult")
+        return videoResult
     }
 
     private fun performMediaBackup(baseUrl: String, token: String, quickBackup: Boolean, isVideo: Boolean): Boolean {
@@ -519,15 +522,15 @@ class BackupWorker(context: Context, val params: WorkerParameters) : Worker(cont
             phase1Result += chunkResult
             phase1CheckedCount += chunk.size
             
-            Log.d(TAG, "Phase 1 chunk ${chunkIndex+1}/${phase1Chunks.size}: ${chunkResult.existsForDevice.size} exist, ${chunkResult.deduplicated.size} dedup, ${chunkResult.needsUpload.size} need upload")
+            Log.d(TAG, "Phase 1 chunk ${chunkIndex+1}/${phase1Chunks.size}: ${chunkResult.existsForDevice.size} exist, ${chunkResult.needsUpload.size} need upload")
         }
 
-        Log.d(TAG, "Phase 1: ${phase1Result.existsForDevice.size} exist for device, ${phase1Result.deduplicated.size} deduplicated, ${phase1Result.needsUpload.size} need upload")
-        LogCollector.i(TAG, "Batch check: ${phase1Result.existsForDevice.size} exist, ${phase1Result.deduplicated.size} dedup, ${phase1Result.needsUpload.size} upload")
+        Log.d(TAG, "Phase 1: ${phase1Result.existsForDevice.size} exist for device, ${phase1Result.needsUpload.size} need upload")
+        LogCollector.i(TAG, "Batch check: ${phase1Result.existsForDevice.size} exist, ${phase1Result.needsUpload.size} upload")
 
         // Detailed summary for debugging
-        val totalChecked = phase1Result.existsForDevice.size + phase1Result.deduplicated.size + phase1Result.needsUpload.size
-        val willSkip = phase1Result.existsForDevice.size + phase1Result.deduplicated.size
+        val totalChecked = phase1Result.existsForDevice.size + phase1Result.needsUpload.size
+        val willSkip = phase1Result.existsForDevice.size
         val willUpload = phase1Result.needsUpload.size
         LogCollector.i(TAG, "=== PHASE 1 SUMMARY ===")
         LogCollector.i(TAG, "Total files checked: $totalChecked")
@@ -535,14 +538,13 @@ class BackupWorker(context: Context, val params: WorkerParameters) : Worker(cont
         LogCollector.i(TAG, "Will UPLOAD (new files): $willUpload")
         LogCollector.i(TAG, "========================")
 
-        // Count skipped and deduplicated files
-        // We treat deduplicated files as "skipped" for the UI progress because they don't require data transfer
-        skippedExisting = phase1Result.existsForDevice.size + phase1Result.deduplicated.size
+        // Count skipped files
+        skippedExisting = phase1Result.existsForDevice.size
         successfullyBackedUp = 0 // Will increment only for actual file uploads
 
         // Show individual "skipped" progress for Phase 1 cached files
         var phase1SkippedIndex = 0
-        val allPhase1SkippedHashes = phase1Result.existsForDevice + phase1Result.deduplicated
+        val allPhase1SkippedHashes = phase1Result.existsForDevice
         for (skippedHash in allPhase1SkippedHashes) {
             phase1SkippedIndex++
 
@@ -597,7 +599,7 @@ class BackupWorker(context: Context, val params: WorkerParameters) : Worker(cont
 
         // Add all cached files that are NOT explicitly skipped (already on server)
         var prepareUploadCount = 0
-        val confirmedSkippedHashes = phase1Result.existsForDevice + phase1Result.deduplicated
+        val confirmedSkippedHashes = phase1Result.existsForDevice
         
         Log.d(TAG, "Phase 2: Preparing upload list. confirmedSkipped=${confirmedSkippedHashes.size}, totalCached=${mediaWithValidCache.size}")
         
@@ -845,20 +847,19 @@ class BackupWorker(context: Context, val params: WorkerParameters) : Worker(cont
                 BatchCheckResult.EMPTY
             }
 
-            Log.d(TAG, "Chunk ${chunkIndex + 1}: ${chunkBatchResult.existsForDevice.size} exist, ${chunkBatchResult.deduplicated.size} dedup, ${chunkBatchResult.needsUpload.size} need upload")
+            Log.d(TAG, "Chunk ${chunkIndex + 1}: ${chunkBatchResult.existsForDevice.size} exist, ${chunkBatchResult.needsUpload.size} need upload")
 
             // Update counters from batch check results
-            skippedExisting += chunkBatchResult.existsForDevice.size + chunkBatchResult.deduplicated.size
+            skippedExisting += chunkBatchResult.existsForDevice.size
             // successfullyBackedUp only increments for actual uploads, not deduplication
 
-            // Step 3: Upload files (only skip if explicitly marked as existing/deduplicated)
+            // Step 3: Upload files (only skip if explicitly marked as existing)
             for (chunkFile in chunkWithHashes) {
                 processedCount++
 
-                // Skip if already exists for device or was deduplicated
-                if (chunkBatchResult.existsForDevice.contains(chunkFile.hash) || chunkBatchResult.deduplicated.contains(chunkFile.hash)) {
-                    val isDedup = chunkBatchResult.deduplicated.contains(chunkFile.hash)
-                    Log.d(TAG, "${chunkFile.fullPath} ${if(isDedup) "deduplicated by server" else "already exists for device"}, skipping")
+                // Skip if already exists for device
+                if (chunkBatchResult.existsForDevice.contains(chunkFile.hash)) {
+                    Log.d(TAG, "${chunkFile.fullPath} already exists for device, skipping")
                     
                     if (!isStopped) {
                         setProgressThrottled(androidx.work.Data.Builder()
@@ -966,22 +967,19 @@ class BackupWorker(context: Context, val params: WorkerParameters) : Worker(cont
     /**
      * Data class to hold batch check results
      * @param existsForDevice Hashes that exist for current device (skip upload)
-     * @param deduplicated Hashes that existed for other device - server created metadata (skip upload)
      * @param needsUpload Hashes that need full upload
      */
     private data class BatchCheckResult(
         val existsForDevice: Set<String>,
-        val deduplicated: Set<String>,
         val needsUpload: Set<String>
     ) {
         companion object {
-            val EMPTY = BatchCheckResult(emptySet(), emptySet(), emptySet())
+            val EMPTY = BatchCheckResult(emptySet(), emptySet())
         }
 
         operator fun plus(other: BatchCheckResult): BatchCheckResult {
             return BatchCheckResult(
                 existsForDevice + other.existsForDevice,
-                deduplicated + other.deduplicated,
                 needsUpload + other.needsUpload
             )
         }
@@ -994,7 +992,7 @@ class BackupWorker(context: Context, val params: WorkerParameters) : Worker(cont
      * @param token Authentication token
      * @param type "image" or "video"
      * @param client OkHttpClient to use
-     * @return BatchCheckResult with exists_for_device, deduplicated, and needs_upload sets
+     * @return BatchCheckResult with existing_hashes and needs_upload sets
      */
     private fun batchCheckFiles(
         files: List<FileMetadata>,
@@ -1071,8 +1069,7 @@ class BackupWorker(context: Context, val params: WorkerParameters) : Worker(cont
 
                 // Determine which files need upload
                 val needsUpload = mutableSetOf<String>()
-                val deduplicated = mutableSetOf<String>() // Not used by current backend, but kept for compatibility
-                
+
                 // Check each requested file against existing hashes
                 for (file in files) {
                     if (!existingHashes.contains(file.hash)) {
@@ -1082,7 +1079,7 @@ class BackupWorker(context: Context, val params: WorkerParameters) : Worker(cont
 
                 LogCollector.i(TAG, "Batch check result: exist=${existingHashes.size}, upload=${needsUpload.size}")
 
-                return BatchCheckResult(existingHashes, deduplicated, needsUpload)
+                return BatchCheckResult(existingHashes, needsUpload)
             } else if (response.code == 401) {
                 Log.e(TAG, "Authentication failed (401) during batch check")
                 LogCollector.e(TAG, "Batch check FAILED (401 auth error)")
