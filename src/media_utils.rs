@@ -246,6 +246,8 @@ fn tiff_value_size(typ: u16, count: u32) -> Option<u32> {
 }
 
 const ORIENTATION_TAG: u16 = 0x0112;
+const EXIF_SUB_IFD_TAG: u16 = 0x8769;
+const GPS_SUB_IFD_TAG: u16 = 0x8825;
 
 fn splice_orientation_into_app1(
     jpeg: &[u8],
@@ -261,6 +263,8 @@ fn splice_orientation_into_app1(
     if tiff.len() < 8 {
         return None;
     }
+    #[cfg(test)]
+    eprintln!("DBG enter: pos={} total={} jlen={}", app1_pos, app1_total, jpeg.len());
     let endian = Endian::parse(&tiff[0..2])?;
     if endian.u16(&tiff[2..4])? != 42 {
         return None;
@@ -276,7 +280,7 @@ fn splice_orientation_into_app1(
     }
 
     // Walk IFD0 entries once.
-    let mut orient_val_tiff_off: Option<usize> = None; // offset of the entry's value field, relative to TIFF start
+    let mut orient_val_tiff_off: Option<usize> = None;
     for i in 0..count {
         let e = ifd0_off + 2 + i * 12;
         let tag = endian.u16(tiff.get(e..e + 12)?.get(0..2)?)?;
@@ -304,7 +308,73 @@ fn splice_orientation_into_app1(
         return None; // would overflow the APP1 length field
     }
 
-    let e4: usize = entries_end + 4; // old start of out-of-line value area
+    let e4: usize = entries_end + 4; // old start of the out-of-line value area
+
+    // ── Discover every pointer field that must shift +12.
+    //
+    // Inserting the Orientation entry moves everything from the original
+    // next-IFD field onward by 12 bytes — including Exif sub-IFD tables,
+    // GPS tables and the IFD1 thumbnail chain. Every out-of-line value
+    // offset and every chained-IFD root pointer pointing into that region
+    // has to be bumped, not just IFD0's own pointers.
+    let mut marks: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    fn walk_ifd(
+        tiff: &[u8],
+        endian: Endian,
+        off: usize,
+        depth: u8,
+        e4: usize,
+        marks: &mut std::collections::HashSet<usize>,
+    ) -> Option<()> {
+        if off + 2 > tiff.len() {
+            return None;
+        }
+        let n = endian.u16(tiff.get(off..off + 2)?)? as usize;
+        let ifd_entries_end = match off.checked_add(2).and_then(|v| v.checked_add(n.checked_mul(12)?)) {
+            Some(v) => v,
+            None => return None,
+        };
+        if n == 0 || n > 0x2000 || ifd_entries_end + 4 > tiff.len() {
+            return None;
+        }
+        for i in 0..n {
+            let e = off + 2 + i * 12;
+            let entry = tiff.get(e..e + 12)?;
+            let tag = endian.u16(entry.get(0..2)?)?;
+            let typ = endian.u16(entry.get(2..4)?)?;
+            let cnt = endian.u32(entry.get(4..8)?)?;
+            let size = tiff_value_size(typ, cnt)?;
+            let old = endian.u32(entry.get(8..12)?)? as usize;
+            if size > 4 {
+                // Out-of-line value: field holds a TIFF-space offset.
+                if old >= e4 && old <= tiff.len() {
+                    marks.insert(e + 8);
+                    if depth < 2 && matches!(tag, EXIF_SUB_IFD_TAG | GPS_SUB_IFD_TAG) {
+                        walk_ifd(tiff, endian, old, depth + 1, e4, marks)?;
+                    }
+                }
+            } else if cnt == 1 && typ == 4 {
+                // Inline LONG: only sub-IFD roots store table offsets here.
+                if matches!(tag, EXIF_SUB_IFD_TAG | GPS_SUB_IFD_TAG)
+                    && old >= e4
+                    && old <= tiff.len()
+                {
+                    marks.insert(e + 8);
+                    walk_ifd(tiff, endian, old, depth + 1, e4, marks)?;
+                }
+            }
+        }
+        // Chain to IFD1 (thumbnail IFD): same shifting rules apply.
+        let next = endian.u32(tiff.get(ifd_entries_end..ifd_entries_end + 4)?)? as usize;
+        if next != 0 && next >= e4 && next <= tiff.len() {
+            marks.insert(ifd_entries_end);
+            if depth == 0 {
+                walk_ifd(tiff, endian, next, depth + 1, e4, marks)?;
+            }
+        }
+        Some(())
+    }
+    walk_ifd(tiff, endian, ifd0_off, 0, e4, &mut marks)?;
 
     let mut out: Vec<u8> = Vec::with_capacity(jpeg.len() + 12);
     out.extend_from_slice(&jpeg[..app1_pos]); // everything before the segment
@@ -318,25 +388,18 @@ fn splice_orientation_into_app1(
     // Entry count, +1.
     endian.push_u16(&mut out, (count as u16) + 1);
 
-    // Original entries; out-of-line pointers that point at or past E4 shift +12.
+    // Original entries; any marked pointer field shifts +12.
     for i in 0..count {
         let e = ifd0_off + 2 + i * 12;
         let entry = &tiff[e..e + 12];
-        let tag = endian.u16(entry.get(0..2)?)?;
-        let typ = endian.u16(entry.get(2..4)?)?;
-        let cnt = endian.u32(entry.get(4..8)?)?;
         out.extend_from_slice(entry);
-        let inline = matches!(tiff_value_size(typ, cnt), Some(sz) if sz <= 4);
-        if !inline && tag != ORIENTATION_TAG {
-            if let Some(old) = endian.u32(entry.get(8..12)?) {
-                if (old as usize) >= e4 {
-                    let idx = out.len() - 4;
-                    out[idx..idx + 4].copy_from_slice(&match endian {
-                        Endian::Little => (old + 12).to_le_bytes(),
-                        Endian::Big => (old + 12).to_be_bytes(),
-                    });
-                }
-            }
+        if marks.contains(&(e + 8)) {
+            let old = endian.u32(entry.get(8..12)?)? as usize;
+            let idx = out.len() - 4;
+            out[idx..idx + 4].copy_from_slice(&match endian {
+                Endian::Little => ((old + 12) as u32).to_le_bytes(),
+                Endian::Big => ((old + 12) as u32).to_be_bytes(),
+            });
         }
     }
 
@@ -347,14 +410,39 @@ fn splice_orientation_into_app1(
     endian.push_u16(&mut out, orientation); // value
     endian.push_u16(&mut out, 0); // padding
 
-    // Next-IFD pointer (usually 0 = none); shifts if present.
-    let next_ifd = endian.u32(&tiff[entries_end..e4])?;
-    endian.push_u32(&mut out, if next_ifd == 0 { 0 } else { next_ifd + 12 });
+    // Next-IFD pointer (usually 0 = none); shifts if marked.
+    let next_field = entries_end;
+    let next_ifd = endian.u32(&tiff[next_field..next_field + 4])? as usize;
+    if marks.contains(&next_field) {
+        endian.push_u32(&mut out, (next_ifd + 12) as u32);
+    } else {
+        endian.push_u32(&mut out, next_ifd as u32);
+    }
 
-    // Everything after the original IFD0 block moves verbatim.
+    // Everything after the original IFD0 block moves verbatim, except marked
+    // pointer fields. Old TIFF offset p maps to new TIFF offset p + 12.
+    #[cfg(test)]
+    eprintln!("DBG parts: marker2+len2={} exif6={} hdr={} cnt2={} entries={} orient12={} nxt4={} rest={}",
+        4, 6, ifd0_off, 2, count*12, 12, 4, tiff.len()-e4);
+    let rest_start_out = out.len();
     out.extend_from_slice(&tiff[e4..]);
+    #[cfg(test)]
+    eprintln!("DBG mid_out={} expected_final={} jlen={}", out.len(), jpeg.len()+12, jpeg.len());
+    for &m in &marks {
+        if m >= e4 && m + 4 <= tiff.len() {
+            let old = endian.u32(&tiff[m..m + 4])? as usize;
+            if old >= e4 && (old as u64) + 12 <= tiff.len() as u64 {
+                let idx = rest_start_out + (m - e4);
+                out[idx..idx + 4].copy_from_slice(&match endian {
+                    Endian::Little => ((old + 12) as u32).to_le_bytes(),
+                    Endian::Big => ((old + 12) as u32).to_be_bytes(),
+                });
+            }
+        }
+    }
 
     out.extend_from_slice(&jpeg[app1_pos + app1_total..]);
+    debug_assert_eq!(out.len(), jpeg.len() + 12);
     Some(out)
 }
 
@@ -1496,22 +1584,151 @@ mod exif_orientation_tests {
     }
 
     #[test]
-    fn real_fixture_jpg_survives_splice_and_parses() {
-        let data = std::fs::read("tests/test_image.jpg")
-            .expect("fixture present");
-        let before = read_exif_orientation_from_bytes(&data);
-        let out = ensure_exif_orientation(&data, 6);
-        // Whole file still parses through kamadak.
-        let parsed = read_exif_orientation_from_bytes(&out);
-        if before.is_some() && before != Some(6) {
-            assert_eq!(parsed, Some(6), "existing tag rewritten in place");
-            assert_eq!(out.len(), data.len());
-        } else if before.is_none() {
-            assert_eq!(parsed, Some(6), "entry spliced in");
-            assert_eq!(out.len(), data.len() + 12);
-        }
+    fn real_camera_jpg_case_a_rewrites_without_corruption() {
+        // Real camera fixture (has IFD0 tags incl. an Exif sub-IFD pointer).
+        // The serve path hits Case A here (tag exists): rewrite must be
+        // in-place and must not disturb the sub-IFD chain.
+        let data = std::fs::read("tests/test_image.jpg").expect("fixture");
+        let loc = find_exif_app1(&data).expect("fixture has EXIF");
+        let current = read_exif_orientation_from_bytes(&data);
+        let target = if current == Some(6) { 8u16 } else { 6u16 };
+
+        let out = super::splice_orientation_into_app1(&data, loc, target)
+            .expect("case-A rewrite must succeed");
+        assert_eq!(out.len(), data.len(), "case-A must be in-place");
+        assert_eq!(read_exif_orientation_from_bytes(&out), Some(target));
+
+        let cursor = std::io::Cursor::new(&out);
+        let exif = kamadak_exif::Reader::new()
+            .read_from_container(&mut std::io::BufReader::new(cursor))
+            .expect("rewritten camera file must still parse");
+        assert!(exif.get_field(kamadak_exif::Tag::Make, kamadak_exif::In::PRIMARY).is_some());
+        assert!(exif.get_field(kamadak_exif::Tag::DateTimeOriginal, kamadak_exif::In::PRIMARY).is_some(),
+            "sub-IFD corrupted during case-A rewrite");
     }
 
+    #[test]
+    fn synthetic_sub_ifd_case_b_splice_keeps_chained_offsets() {
+        // II-endian layout exercising the dangerous path: IFD0 holds
+        //  - Make          (ASCII, out-of-line value AFTER the IFD block)
+        //  - Exif sub-IFD  (inline LONG pointer to a table further down)
+        // and the sub-IFD holds DateTimeOriginal (LONG, out-of-line).
+        // Inserting Orientation shifts everything past IFD0 by 12 — every
+        // chained offset above must move with it.
+        // Layout: hdr(8) | 2 entries(24) | nextIFD(4) => values start @38.
+        // Make value @38..43, sub-IFD table @43..61, its value @61..65.
+        const MAKE_OFF: u32 = 38;
+        const SUB_OFF: u32 = 43;
+        const DTO_VAL_OFF: u32 = 61;
+
+        let mut tiff: Vec<u8> = Vec::new();
+        tiff.extend_from_slice(b"II");
+        tiff.extend_from_slice(&42u16.to_le_bytes());
+        tiff.extend_from_slice(&8u32.to_le_bytes());
+        tiff.extend_from_slice(&2u16.to_le_bytes()); // IFD0 entries
+        // Make: ASCII(2), count 5, out-of-line @26
+        tiff.extend_from_slice(&0x010Fu16.to_le_bytes());
+        tiff.extend_from_slice(&2u16.to_le_bytes());
+        tiff.extend_from_slice(&5u32.to_le_bytes());
+        tiff.extend_from_slice(&MAKE_OFF.to_le_bytes());
+        // Exif sub-IFD root: LONG(4), count 1, inline offset
+        tiff.extend_from_slice(&0x8769u16.to_le_bytes());
+        tiff.extend_from_slice(&4u16.to_le_bytes());
+        tiff.extend_from_slice(&1u32.to_le_bytes());
+        tiff.extend_from_slice(&SUB_OFF.to_le_bytes());
+        tiff.extend_from_slice(&0u32.to_be_bytes()); // next IFD (BE marker junk on purpose? no—zero)
+        tiff.extend_from_slice(b"Test\x00");          // Make value
+        while (tiff.len() as u32) < SUB_OFF {
+            tiff.push(0);
+        }
+
+        // Sub-IFD table @SUB_OFF
+        tiff.extend_from_slice(&1u16.to_le_bytes()); // 1 entry
+        tiff.extend_from_slice(&0x9003u16.to_le_bytes()); // DateTimeOriginal
+        tiff.extend_from_slice(&4u16.to_le_bytes()); // LONG
+        tiff.extend_from_slice(&1u32.to_le_bytes()); // count
+        tiff.extend_from_slice(&DTO_VAL_OFF.to_le_bytes()); // out-of-line
+        tiff.extend_from_slice(&0u32.to_le_bytes()); // next IFD
+        while (tiff.len() as u32) < DTO_VAL_OFF {
+            tiff.push(0);
+        }
+        tiff.extend_from_slice(&1717171717u32.to_be_bytes()); // arbitrary datetime-ish value
+
+        let mut jpg: Vec<u8> = vec![0xFF, 0xD8];
+        jpg.extend_from_slice(&[0xFF, 0xE1]);
+        jpg.extend_from_slice(&((6 + tiff.len() + 2) as u16).to_be_bytes());
+        jpg.extend_from_slice(b"Exif\x00\x00");
+        jpg.extend_from_slice(&tiff);
+        jpg.extend_from_slice(&[0xFF, 0xDA, 0x00, 0x02, 0xFF, 0xD9]);
+
+        // Sanity: parseable pre-splice, no Orientation yet.
+        {
+            let c = std::io::Cursor::new(&jpg);
+            let exif = kamadak_exif::Reader::new()
+                .read_from_container(&mut std::io::BufReader::new(c))
+                .expect("fixture parses");
+            assert!(read_exif_orientation_from_bytes(&jpg).is_none());
+            assert!(exif.get_field(kamadak_exif::Tag::DateTimeOriginal, kamadak_exif::In::PRIMARY).is_some(),
+                "fixture must carry a resolvable sub-IFD DateTimeOriginal");
+        }
+
+        let loc = find_exif_app1(&jpg).unwrap();
+        let out = super::splice_orientation_into_app1(&jpg, loc, 6)
+            .expect("sub-IFD splice must succeed");
+        assert_eq!(out.len(), jpg.len() + 12);
+        assert_eq!(read_exif_orientation_from_bytes(&out), Some(6));
+
+        let c = std::io::Cursor::new(&out);
+        let exif = kamadak_exif::Reader::new()
+            .read_from_container(&mut std::io::BufReader::new(c))
+            .expect("post-splice parse");
+        let make = exif.get_field(kamadak_exif::Tag::Make, kamadak_exif::In::PRIMARY)
+            .and_then(|f| match &f.value {
+                kamadak_exif::Value::Ascii(v) => Some(String::from_utf8_lossy(&v.iter().flatten().cloned().collect::<Vec<u8>>()).into_owned()),
+                _ => None,
+            });
+        assert_eq!(make.as_deref(), Some("Test"), "IFD0 out-of-line value corrupted");
+        assert!(exif.get_field(kamadak_exif::Tag::DateTimeOriginal, kamadak_exif::In::PRIMARY).is_some(),
+            "chained sub-IFD corrupted: DateTimeOriginal lost");
+    }
+
+    #[test]
+    fn big_endian_mm_fixture_splices_and_reads_back() {
+        // Minimal MM-endian TIFF: IFD0 with one out-of-line ASCII entry.
+        let mut tiff: Vec<u8> = Vec::new();
+        tiff.extend_from_slice(b"MM");
+        tiff.extend_from_slice(&42u16.to_be_bytes());
+        tiff.extend_from_slice(&8u32.to_be_bytes());
+        tiff.extend_from_slice(&1u16.to_be_bytes()); // 1 entry
+        tiff.extend_from_slice(&0x010Fu16.to_be_bytes()); // Make
+        tiff.extend_from_slice(&2u16.to_be_bytes()); // ASCII
+        tiff.extend_from_slice(&5u32.to_be_bytes());
+        tiff.extend_from_slice(&26u32.to_be_bytes()); // value offset
+        tiff.extend_from_slice(&0u32.to_be_bytes()); // next IFD
+        tiff.extend_from_slice(b"Test\x00");
+
+        let mut jpg: Vec<u8> = vec![0xFF, 0xD8];
+        jpg.extend_from_slice(&[0xFF, 0xE1]);
+        jpg.extend_from_slice(&((6 + tiff.len() + 2) as u16).to_be_bytes());
+        jpg.extend_from_slice(b"Exif\x00\x00");
+        jpg.extend_from_slice(&tiff);
+        jpg.extend_from_slice(&[0xFF, 0xDA, 0x00, 0x02, 0xFF, 0xD9]);
+
+        let out = ensure_exif_orientation(&jpg, 3);
+        assert_eq!(out.len(), jpg.len() + 12);
+        assert_eq!(read_exif_orientation_from_bytes(&out), Some(3));
+        let cursor = std::io::Cursor::new(&out);
+        let exif = kamadak_exif::Reader::new()
+            .read_from_container(&mut std::io::BufReader::new(cursor))
+            .expect("MM splice must still parse");
+        let make = exif.get_field(kamadak_exif::Tag::Make, kamadak_exif::In::PRIMARY)
+            .and_then(|f| match &f.value {
+                kamadak_exif::Value::Ascii(v) => Some(String::from_utf8_lossy(&v.iter().flatten().cloned().collect::<Vec<u8>>()).into_owned()),
+                _ => None,
+            })
+            .expect("Make must survive MM splice");
+        assert!(make.starts_with("Test"));
+    }
     #[test]
     fn malformed_input_returned_unchanged() {
         let bad = vec![0xFF, 0xD8, 0xFF, 0xE1, 0x00]; // truncated segment
