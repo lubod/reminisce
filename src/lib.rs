@@ -1,5 +1,4 @@
 use utoipa::OpenApi;
-use utoipa_swagger_ui::SwaggerUi;
 use std::sync::Arc;
 
 
@@ -76,12 +75,31 @@ use actix_web::dev::ServiceRequest;
 use actix_web::http::header;
 use tracing::field::Empty;
 
+// Swagger UI is a development convenience: compiled out of release builds so
+// production never advertises the full route surface unauthenticated.
+#[cfg(debug_assertions)]
+fn configure_swagger(cfg: &mut web::ServiceConfig) {
+    use utoipa_swagger_ui::SwaggerUi;
+    cfg.service(
+        SwaggerUi::new("/swagger-ui/{_:.*}").url("/api-doc/openapi.json", crate::openapi::ApiDoc::openapi())
+    );
+}
+
+#[cfg(not(debug_assertions))]
+fn configure_swagger(_cfg: &mut web::ServiceConfig) {}
+
 async fn metrics_handler(
     req: actix_web::HttpRequest,
     config: web::Data<Config>,
 ) -> Result<HttpResponse, actix_web::Error> {
-    if let Err(response) = crate::auth_utils::authenticate_request(&req, "metrics", config.get_api_key()).await {
-        return Ok(response);
+    let claims = match crate::auth_utils::authenticate_request(&req, "metrics", config.get_api_key()).await {
+        Ok(c) => c,
+        Err(response) => return Ok(response),
+    };
+    if claims.role != "admin" {
+        return Ok(HttpResponse::Forbidden().json(serde_json::json!({
+            "error": "Forbidden: Admin role required"
+        })));
     }
 
     let encoder = TextEncoder::new();
@@ -493,8 +511,23 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
     let rate_limiter = rate_limit::RateLimiter::new();
 
     let _server_config = config.clone();
+    let cors_allowed_origins = config.cors_allowed_origins.clone();
     HttpServer::new(move || {
-        let cors = actix_cors::Cors::permissive();
+        // CORS: same-origin only unless explicit origins are configured. Never
+        // reflect arbitrary Origins for a cookie-authenticated API.
+        let mut cors = actix_cors::Cors::default()
+            .allowed_methods(vec!["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+            .allowed_headers(vec!["Authorization", "Content-Type", "X-Requested-With"])
+            .max_age(3600);
+        if cors_allowed_origins.is_empty() {
+            info!("CORS: no origins configured — same-origin requests only");
+        } else {
+            for origin in &cors_allowed_origins {
+                cors = cors.allowed_origin(origin);
+                info!("CORS: allowing origin {}", origin);
+            }
+            cors = cors.supports_credentials();
+        }
 
         App::new()
             .wrap(TracingLogger::<CustomRootSpanBuilder>::new())
@@ -508,9 +541,7 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
             .app_data(import_job_store.clone())
             .app_data(shared_system.clone())
             .app_data(duplicate_status.clone())
-            .service(
-                SwaggerUi::new("/swagger-ui/{_:.*}").url("/api-doc/openapi.json", crate::openapi::ApiDoc::openapi())
-            )
+            .configure(configure_swagger)
             .route("/metrics", web::get().to(metrics_handler))
             .service(ping)
             .service(health_check)

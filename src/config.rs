@@ -28,6 +28,10 @@ pub struct Config {
     pub enable_media_backup: Arc<AtomicBool>,
     #[serde(default)]
     pub allowed_import_dirs: Option<Vec<String>>,
+    // CORS allowlist for browser clients. Empty (default) = same-origin only;
+    // the SPA behind nginx never needs cross-origin access.
+    #[serde(default)]
+    pub cors_allowed_origins: Vec<String>,
 
     // Database connection pool configuration
     #[serde(default = "default_db_tls")]

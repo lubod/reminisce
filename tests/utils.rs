@@ -42,6 +42,7 @@ pub fn create_test_config() -> config::Config {
         p2p_tunnel_public_url: None,
         p2p_namespace: "test".to_string(),
         allowed_import_dirs: Some(vec![std::env::temp_dir().to_string_lossy().to_string()]),
+        cors_allowed_origins: Vec::new(),
         p2p_data_shards: 3,
         p2p_parity_shards: 2,
         workers: config::WorkerConfig::default(),
