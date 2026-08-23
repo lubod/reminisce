@@ -27,6 +27,24 @@ Constants (in `np2p/src/storage/mod.rs`):
 - `PARITY_SHARDS = 2`
 - `TOTAL_SHARDS = 5`
 
+## Mesh admission control
+
+Three layers decide who may participate; all default to permissive but log loudly:
+
+| Layer | Mechanism | Enable |
+|-------|-----------|--------|
+| Home server | `p2p_allowed_node_ids` in `config.yaml` — `PeerRegistry.upsert` refuses unlisted IDs from LAN discovery **and** coordinator syncs | set the ID list |
+| Coordinator | `--allowed-node <64-hex>` (repeatable) — rejects `RegisterNode` with `403 "Node not allowed"` even with a valid certificate | pass flags on the VPS |
+| Storage node | `--authorized-node-id <home-server-id>` — already fail-closed, refuses shards from any other owner | always pin |
+
+Node IDs are printed at each component's startup (`P2P Node ID:` / `Node ID:`) and equal the Ed25519 public key pinned into the QUIC certificate.
+
+### Identity & key derivation
+
+- Default node identity derives from `api_secret_key` via a single BLAKE3 hash; because the public `node_id` is broadcast, it is an offline brute-force oracle on that secret.
+- Set `p2p_identity_kdf: argon2id` to derive identities through Argon2id instead. This produces a **new node_id** — re-pin storage nodes during a maintenance window.
+- Per-file key wrapping uses envelope **v1** (`0x01 ‖ nonce ‖ AEAD`) under an Argon2id-derived master key; legacy v0 wraps and raw plaintext keys remain readable, so no data migration is required.
+
 ## Node Selection (Rendezvous Hashing)
 
 Each file is deterministically assigned to nodes using rendezvous / highest-random-weight (HRW) hashing:

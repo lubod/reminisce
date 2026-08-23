@@ -66,6 +66,11 @@ Copy `config-fullstack.yaml.example` to `config-fullstack.yaml`. Required fields
 | `p2p_coordinator_node_id` | Required with `p2p_coordinator_addr` | The coordinator's 64-hex Node ID (printed in the coordinator startup log). Bound to the QUIC connection so a spoofed coordinator cannot impersonate the real one. If set without `p2p_coordinator_addr` it is ignored; if `p2p_coordinator_addr` is set without it, coordinator/tunnel use is disabled with a clear error. |
 | `p2p_discovery_port` | No | UDP port for LAN peer discovery broadcasts (default `5066`) |
 | `p2p_deterministic_identity` | No | Derive P2P node identity from `api_secret_key` (default `false`). Enables true full-disk-loss recovery but changes node_id — use for new setups |
+| `p2p_allowed_node_ids` | No | **Mesh admission allow-list.** Only these storage-node IDs (64-hex) may receive shards; empty = open admission with a loud startup warning. List your Pi/home-server IDs here |
+| `p2p_identity_kdf` | No | `legacy` (default, fast BLAKE3) or `argon2id` (memory-hard). **`argon2id` changes the node ID** — re-pair storage nodes during a maintenance window |
+| `cors_allowed_origins` | No | Extra CORS origins beyond same-origin. Empty = same-origin only (the SPA behind nginx never needs more) |
+| `rate_limit_trusted_proxies` | No | Peer IPs whose `X-Real-IP`/`X-Forwarded-For` may override the rate-limit key (your nginx host). Loopback is always trusted; RFC1918 is **not** implicitly trusted |
+| `db_pool_max_size` / `db_pool_min_size` | No | Per-pool connection budget (defaults 50/10; three pools exist — keep total under Postgres `max_connections`). Note: deadpool grows lazily to max; min is informational |
 | `p2p_tunnel_local_port` | No | Local HTTP port the reverse tunnel should forward to |
 | `otlp_endpoint` | No | OpenTelemetry OTLP gRPC endpoint for distributed tracing |
 | `environment` | No | Label for tracing spans (`production`, `dev`) |
@@ -83,6 +88,21 @@ The periodic P2P database snapshot worker is configured under the `workers:` key
 Requires `pg_dump` available on the server `PATH` (present in the Docker image).
 
 Each snapshot also writes a self-contained restore manifest to `<p2p_data_dir>/db_manifests/<backup_hash>.json` (mode `0600`) so the database can be rebuilt even after a full DB loss. Keep `p2p_data_dir` on persistent storage and back it up alongside your media — it holds `node.key` (P2P identity) and the snapshot manifests needed for disaster recovery. To restore, use the `disaster_recovery` binary (see `docs/p2p-backup.md`).
+
+### Upload limits and media validation
+
+- Multipart metadata fields are capped at **64 KB** each.
+- File streams are capped at **200 MB per image** and **20 GB per video** (HTTP 413 + temp cleanup on overflow).
+- Ingest validates both the file extension (per-kind allow-list) **and magic bytes**, so HTML/SVG/text cannot enter the store under a media name; non-media extensions are served as inert `attachment/octet-stream`.
+
+### Schema migrations
+
+Idempotent SQL lives in `scripts/migrations/*.sql`. Apply to **both** databases after deploying a release that mentions one:
+
+```bash
+docker exec -i reminisce-postgres   psql -U postgres -d reminisce_db   < scripts/migrations/<file>.sql
+docker exec -i reminisce-geotagging psql -U postgres -d geotagging_db -f /tmp/geo.sql   # geo-only statements
+```
 
 ## TLS / HTTPS
 
@@ -120,6 +140,22 @@ np2pd --data-dir /mnt/disk/p2p \
 The home server will auto-discover Pi nodes via LAN UDP broadcast (`p2p_discovery_port`) or via the coordinator for WAN. `--coordinator-node-id` is mandatory whenever `--coordinator-addr` is used (identity binding); the value is printed in the coordinator's startup log. On the home server, set `p2p_coordinator_node_id` in the config (see the table above).
 
 > **Coordinator tunnel**: on the VPS, register the home server as the tunnel backend with `--allowed-tunnel-node-id <home-server-node-id>` (refused by default). Never rely on the old "any node may register" default; if you must, pass `--allow-any-tunnel` explicitly.
+
+#### Docker-based nodes (Raspberry Pi fleet)
+
+Production Pi nodes run the `lubod/reminisce-p2p:latest` image via docker compose:
+
+```bash
+# build + publish arm64 from the dev box:
+docker buildx build --platform linux/arm64 --builder arm-builder   -f docker/Dockerfile.p2p --target storage   -t lubod/reminisce-p2p:latest --push .
+
+# then on each Pi:
+cd ~/reminisce-node && docker compose pull && docker compose up -d
+```
+
+> The runtime images run as **uid 10001** — if `/data` is a bind mount, `chown -R 10001:10001` it once after adopting this image or the node will loop on `Permission denied`.
+
+> **Coordinator admission**: pass `--allowed-node <64-hex>` once per trusted node (home server + every Pi). Without any flag the coordinator still accepts identity-verified registrations but logs `[COORD] Node admission OPEN`; unlisted nodes get `403 "Node not allowed"` once the list is non-empty.
 
 ## Observability
 

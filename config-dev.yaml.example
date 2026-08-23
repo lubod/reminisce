@@ -35,3 +35,24 @@ ai_grpc_url: "http://localhost:50051"
 log_dir: "/app/logs"
 ai_http_url: "http://localhost:8081"
 environment: "development"
+
+# ─── Hardening options (2026-08) ───────────────────────────────
+# Mesh admission: only these storage-node IDs may receive shards.
+# Empty/absent = open admission (a warning is logged at startup).
+# p2p_allowed_node_ids:
+#   - <64-hex-home-server-node-id>
+#   - <64-hex-storage-node-id>
+#
+# Memory-hard identity derivation. WARNING: changes your node_id;
+# re-pair storage nodes when switching. Default: legacy (fast hash).
+# p2p_identity_kdf: argon2id
+#
+# Extra CORS origins (the SPA is same-origin; usually leave empty).
+# cors_allowed_origins:
+#   - https://photos.example.com
+#
+# Reverse proxies allowed to set X-Real-IP/X-Forwarded-For for rate
+# limiting. Loopback is always trusted; RFC1918 is NOT implicit.
+# rate_limit_trusted_proxies:
+#   - 192.168.1.197
+

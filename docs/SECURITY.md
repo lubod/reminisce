@@ -101,3 +101,17 @@ operational defaults you should not undo.
 
 Self-hosted project — no formal channel. Please open an issue with affected version and
 reproducer.
+
+
+## Hardening log — 2026-08-23 review batch
+
+Applied across the codebase; details in git history (`289ef95..5bddeb4`):
+
+- **Authorization**: P2P restore scoped to the owning user (was a cross-user read by hash); object-level checks now mirror `thumbnail.rs`.
+- **Session/token**: `?token=` query-param auth removed; `/metrics` requires admin; Swagger UI compiled out of release builds.
+- **CORS**: same-origin via Host match (+ explicit `cors_allowed_origins`); wildcard reflection removed for this cookie-authenticated API.
+- **Rate limiting**: forwarded-client headers trusted only from loopback or `rate_limit_trusted_proxies`; login bucket tightened; per-account failure lockout (8 fails / 15 min).
+- **Uploads**: 64 KB metadata-field cap; 200 MB image / 20 GB video stream caps (413 + cleanup); extension allow-list **plus** magic-byte sniffing before a file enters the store; non-media served inert.
+- **Streaming uploads**: temp files are flushed + fsynced before handoff (fixes an intermittent empty-read race for any fast reader of a fresh upload).
+- **P2P**: mesh admission allow-list (see p2p-backup.md); Argon2id key-envelope v1 and optional hardened identity KDF; message-length caps, QUIC transport limits, connection/stream semaphores, relay timeouts, durable shard writes (fsync), panic-supervised stream handlers, reconnect backoff.
+- **Integrity**: shard rebalancing verifies blake3 before re-upload so corruption can't be laundered into the canonical catalog.
