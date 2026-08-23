@@ -78,9 +78,17 @@ impl AiClient {
     }
 
     async fn channel(&self) -> Result<Channel, String> {
+        // A hung TCP/TLS connect would otherwise stall a worker task (and any
+        // pool client it holds) indefinitely; RPC_TIMEOUT only covers post-
+        // connect request time.
+        const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
         let endpoint = Channel::from_shared(self.grpc_url.clone())
-            .map_err(|e| format!("invalid gRPC URL '{}': {}", self.grpc_url, e))?;
-        let channel = endpoint.connect().await.map_err(|e| format!("gRPC connect failed: {}", e))?;
+            .map_err(|e| format!("invalid gRPC URL '{}': {}", self.grpc_url, e))?
+            .connect_timeout(CONNECT_TIMEOUT);
+        let channel = tokio::time::timeout(CONNECT_TIMEOUT, endpoint.connect())
+            .await
+            .map_err(|_| format!("gRPC connect to {} timed out after {}s", self.grpc_url, CONNECT_TIMEOUT.as_secs()))?
+            .map_err(|e| format!("gRPC connect failed: {}", e))?;
         Ok(channel)
     }
 

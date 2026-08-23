@@ -91,6 +91,10 @@ async fn backup_cycle(
     // Ensure the temp file is removed even on failure.
     let result = backup_dump_file(pool, config, p2p_service, &nodes, &dump_path).await;
     let _ = tokio::fs::remove_file(&dump_path).await;
+    // Remove the enclosing 0700 dir dump_database created (best-effort).
+    if let Some(parent) = dump_path.parent() {
+        let _ = tokio::fs::remove_dir(parent).await;
+    }
     let did_work = result?;
 
     if did_work {
@@ -256,7 +260,18 @@ async fn backup_dump_file(
 /// Run `pg_dump -Fc` for the configured database into a temp file (async).
 async fn dump_database(config: &Config) -> Result<PathBuf, String> {
     let database_url = config.database_url.as_ref().ok_or("Database URL not configured")?;
-    let output_path = std::env::temp_dir().join(format!("reminisce_db_backup_{}.dump", chrono::Utc::now().timestamp()));
+    // Plaintext full-DB dump must not be world-readable while it exists: create
+    // it under a 0600 file in a private temp dir instead of /tmp root.
+    let private_dir = std::env::temp_dir().join(format!("reminisce_db_backup_{}", std::process::id()));
+    tokio::fs::create_dir_all(&private_dir)
+        .await
+        .map_err(|e| format!("Failed to create private backup dir: {}", e))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = tokio::fs::set_permissions(&private_dir, std::fs::Permissions::from_mode(0o700)).await;
+    }
+    let output_path = private_dir.join(format!("reminisce_db_backup_{}.dump", chrono::Utc::now().timestamp()));
 
     let output = tokio::process::Command::new("pg_dump")
         .arg("--format=custom")

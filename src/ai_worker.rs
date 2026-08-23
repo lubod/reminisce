@@ -205,7 +205,7 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
                 "SELECT hash, ext, name, user_id, 'image' as file_type, created_at FROM images
                  WHERE verification_status = 1 AND deleted_at IS NULL AND embedding IS NULL AND embedding_generated_at IS NULL
                    AND lower(ext) != 'svg'
-                 LIMIT $1",
+                 ORDER BY created_at ASC LIMIT $1",
                 &[&(total_batch_limit as i64)],
             )
             .await
@@ -240,7 +240,7 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
                 .query(
                     "SELECT hash, ext, name, user_id, 'video' as file_type, created_at FROM videos
                      WHERE verification_status = 1 AND deleted_at IS NULL AND embedding IS NULL AND embedding_generated_at IS NULL
-                     LIMIT $1",
+                     ORDER BY created_at ASC LIMIT $1",
                     &[&(room_left as i64)],
                 )
                 .await
@@ -283,7 +283,7 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
                    AND i.deleted_at IS NULL
                    AND i.face_detection_completed_at IS NULL
                    AND lower(i.ext) != 'svg'
-                 LIMIT $1",
+                 ORDER BY created_at ASC LIMIT $1",
                 &[&(room_left as i64)],
             )
             .await
@@ -337,7 +337,7 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
                    AND orientation IS NULL
                    AND orientation_detected_at IS NULL
                    AND lower(ext) != 'svg'
-                 LIMIT $1",
+                 ORDER BY created_at ASC LIMIT $1",
                 &[&(room_left as i64)],
             )
             .await
@@ -380,7 +380,7 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
                 "SELECT hash, ext, name, user_id, 'image' as file_type, created_at FROM images
                  WHERE verification_status = 1 AND deleted_at IS NULL AND description IS NULL
                    AND lower(ext) != 'svg'
-                 LIMIT $1",
+                 ORDER BY created_at ASC LIMIT $1",
                 &[&(room_left as i64)],
             )
             .await
@@ -425,7 +425,7 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
                    AND embedding IS NOT NULL
                    AND quality_score_generated_at IS NULL
                    AND lower(ext) != 'svg'
-                 LIMIT $1",
+                 ORDER BY created_at ASC LIMIT $1",
                 &[&(room_left as i64)],
             )
             .await
@@ -510,14 +510,25 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
             let quality_sem_clone = quality_semaphore.clone();
             let users_set_clone = users_with_new_faces_clone.clone();
 
-            async move {
-                let client = match pool_clone.0.get().await {
-                    Ok(c) => c,
+            // Pool-client discipline: a task holds a connection ONLY while its
+            // semaphore permit is held and only around DB statements — never
+            // while queued on a semaphore, and never across the inter-file
+            // sleep. Previously one client was grabbed per task up front, so a
+            // batch of tasks waiting on permits starved the shared worker pool.
+            async fn db_client(
+                pool: &web::Data<MainDbPool>,
+                hash: &str,
+            ) -> Option<deadpool_postgres::Object> {
+                match pool.0.get().await {
+                    Ok(c) => Some(c),
                     Err(e) => {
                         error!("Failed to get database client for {}: {}", hash, e);
-                        return;
+                        None
                     }
-                };
+                }
+            }
+
+            async move {
 
                 let delay_secs = Utc::now().signed_duration_since(created_at).num_seconds().max(0) as f64;
 
@@ -530,7 +541,8 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
                             return;
                         }
                     };
-                    info!("Starting AI description for {} : {}", file_type, hash);
+                    let Some(client) = db_client(&pool_clone, &hash).await else { return };
+info!("Starting AI description for {} : {}", file_type, hash);
                     let start_time = Instant::now();
                     // Persist an in-progress marker BEFORE calling the AI service. A ROCm
                     // fault (e.g. HSA_STATUS_ERROR_EXCEPTION 0x1016 on the AMD iGPU) aborts
@@ -641,7 +653,8 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
                             return;
                         }
                     };
-                    info!("Starting embedding generation for {}: {}", file_type, hash);
+                    let Some(client) = db_client(&pool_clone, &hash).await else { return };
+info!("Starting embedding generation for {}: {}", file_type, hash);
                     let start_time = Instant::now();
                     let res = if file_type == "video" {
                         generate_and_store_video_embedding(&hash, &file_path, &user_id, &config_clone, &client).await
@@ -685,7 +698,8 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
                             return;
                         }
                     };
-                    info!("Starting AI orientation detection for image: {}", hash);
+                    let Some(client) = db_client(&pool_clone, &hash).await else { return };
+info!("Starting AI orientation detection for image: {}", hash);
                     let start_time = Instant::now();
                     match process_orientation_detection(&file_path, &hash, &user_id, &config_clone, &client).await {
                         Ok(()) => {
@@ -725,7 +739,8 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
                             return;
                         }
                     };
-                    info!("Starting face detection for image: {}", hash);
+                    let Some(client) = db_client(&pool_clone, &hash).await else { return };
+info!("Starting face detection for image: {}", hash);
                     let start_time = Instant::now();
                     match process_face_detection(&file_path, &hash, &user_id, db_orientation, &config_clone, &client).await {
                         Ok(count) => {
@@ -776,6 +791,7 @@ async fn process_files(pool: web::Data<MainDbPool>, config: web::Data<Config>) -
                             return;
                         }
                     };
+                    let Some(client) = db_client(&pool_clone, &hash).await else { return };
                     info!("Starting quality scoring for image: {}", hash);
                     let file_size = std::fs::metadata(&file_path)
                         .map(|m| m.len().min(i32::MAX as u64) as i32)

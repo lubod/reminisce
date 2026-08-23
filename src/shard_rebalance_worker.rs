@@ -287,10 +287,21 @@ async fn migrate_shard(
         }
     };
 
-    let shard_hash = blake3::hash(&shard_data).to_hex().to_string();
+    // Integrity gate: the bytes we are about to make canonical must hash to
+    // exactly what the old record declared. Without this a corrupted shard
+    // retrieved from the old node would be re-uploaded and its bad hash
+    // written over the good one — laundering corruption into the catalog.
+    let new_shard_hash = blake3::hash(&shard_data).to_hex().to_string();
+    if new_shard_hash != old_shard_hash {
+        return Err(format!(
+            "Shard integrity check failed for {}[{}]: retrieved {} but expected {} — aborting migration",
+            file_hash, shard_index, &new_shard_hash[..16], &old_shard_hash[..16.min(old_shard_hash.len())]
+        )
+        .into());
+    }
     upload_shard_to_node(p2p_service, new_node_addr, &shard_data).await?;
 
-    Ok(shard_hash)
+    Ok(new_shard_hash)
 }
 
 /// Look up the old node's address and pull the shard from it.

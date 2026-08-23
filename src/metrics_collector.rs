@@ -16,6 +16,9 @@ pub async fn start_metrics_collector(
 ) {
     let mut sampler = Sampler::new();
     let mut interval = time::interval(Duration::from_secs(15));
+    // A slow tick (DB stall, sysinfo refresh) must not trigger a catch-up burst
+    // of duplicate sample inserts.
+    interval.set_missed_tick_behavior(time::MissedTickBehavior::Delay);
 
     loop {
         tokio::select! {

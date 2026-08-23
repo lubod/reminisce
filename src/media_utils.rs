@@ -3,6 +3,7 @@ use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use futures::TryStreamExt;
 use log::{error, info, warn};
 use std::path::PathBuf;
+use std::time::Duration;
 use tokio::fs;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -340,8 +341,13 @@ pub async fn check_if_exists(
     user_id: &uuid::Uuid,
     table: &str,
     pool: web::Data<MainDbPool>,
-) -> Result<ExistenceCheckResult, tokio_postgres::Error> {
-    let client = pool.0.get().await.expect("Failed to get database client");
+) -> Result<ExistenceCheckResult, String> {
+    // Pool exhaustion under load used to panic here; degrade to an error
+    // response instead of tearing down the request task.
+    let client = pool.0.get().await.map_err(|e| {
+        error!("Failed to get database client in check_if_exists: {}", e);
+        format!("database pool unavailable: {}", e)
+    })?;
 
     let query_string = match table {
         "images" => "
@@ -356,11 +362,13 @@ pub async fn check_if_exists(
         ",
         _ => {
             warn!("Invalid table name provided to check_if_exists: {}", table);
-            return Err(tokio_postgres::Error::__private_api_timeout());
+            return Err(format!("Invalid table name provided to check_if_exists: {}", table));
         }
     };
 
-    let row = client.query_one(query_string, &[user_id, &hash]).await?;
+    let row = client.query_one(query_string, &[user_id, &hash])
+        .await
+        .map_err(|e| e.to_string())?;
     Ok(ExistenceCheckResult {
         exists_for_user: row.get(0),
         exists_verified: row.get(1),

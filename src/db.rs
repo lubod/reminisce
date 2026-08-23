@@ -36,6 +36,9 @@ pub fn create_pool_with_options(
 
     // Configure pool with explicit settings
     let mut pool_config = PoolConfig::new(options.max_size);
+    // NOTE: deadpool 0.9 has no warm/min-idle pool size — pools grow lazily to
+    // max_size on demand, so DbPoolOptions.min_size is intentionally unused.
+    let _ = options.min_size;
     pool_config.timeouts = Timeouts {
         wait: Some(Duration::from_secs(options.timeout_secs)),
         create: Some(Duration::from_secs(options.timeout_secs)),
