@@ -91,7 +91,14 @@ class BackupService : Service() {
         }
         
         // Start the actual backup work using WorkManager
-        startBackupWork(intent)
+        try {
+            startBackupWork(intent)
+        } catch (t: Throwable) {
+            // Never take the whole process down from here — log for Share Logs
+            Log.e(TAG, "Failed to start backup work", t)
+            org.openreminisce.app.util.LogCollector.e(TAG, "Failed to start backup work: ${t.javaClass.name}: ${t.message}")
+            stopSelf()
+        }
         
         return START_STICKY
     }
