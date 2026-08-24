@@ -1202,7 +1202,8 @@ class BackupWorker(context: Context, val params: WorkerParameters) : Worker(cont
         try {
             val response = AuthHelper.executeWithTokenRefresh(applicationContext, client, request)
 
-            response.use { resp ->
+        val resp = response
+        try {
                 // Check if cancelled after upload completed but before processing response
                 if (isStopped) {
                     Log.d(TAG, "Upload cancelled after completion: $fileName")
@@ -1313,7 +1314,9 @@ class BackupWorker(context: Context, val params: WorkerParameters) : Worker(cont
                     Log.e(TAG, "Upload failed: ${resp.code} - $responseBody for $fileName")
                     LogCollector.e(TAG, "Upload FAILED (${resp.code}): $fileName - $responseBody")
                 }
-            }
+        } finally {
+            resp.close()
+        }
         } catch (e: java.io.IOException) {
             // This exception is thrown when the call is cancelled
             if (isStopped) {
