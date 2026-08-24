@@ -38,10 +38,12 @@ class WebGalleryActivity : AppCompatActivity() {
     private var isBackingUp = false
 
     private fun isBackupRunning(): Boolean {
-        if (isBackingUp) return true
-        val prefs = getSharedPreferences("BackupState", MODE_PRIVATE)
-        val runningUntil = prefs.getLong("backup_running_until", 0L)
-        return runningUntil > System.currentTimeMillis()
+        // In-session state only. The persisted backup_running_until
+        // window is NOT consulted: Android auto-backup restores it on
+        // reinstall, which used to block every start with a bare toast.
+        // Duplicate protection comes from the instance flag plus the
+        // REPLACE policy on the unique WorkManager job.
+        return isBackingUp
     }
 
     private val backupStatusReceiver = object : android.content.BroadcastReceiver() {

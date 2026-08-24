@@ -52,6 +52,10 @@ class ReminisceApplication : Application() {
             val workManager = WorkManager.getInstance(this)
 
             // Cancel ALL work (not just by tag) to ensure nothing auto-restarts
+            // Nothing survives a cold start by design; also drop any
+            // running-window flag that Android auto-backup restored.
+            getSharedPreferences("BackupState", MODE_PRIVATE).edit()
+                .remove("backup_running_until").apply()
             workManager.cancelAllWork()
             Log.d("ReminisceApplication", "Cancelled ALL work on app start")
 
