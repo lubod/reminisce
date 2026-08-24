@@ -4,6 +4,12 @@
 //! WHERE conditions and parameters, avoiding string concatenation errors.
 
 use crate::constants::tables;
+use crate::utils;
+
+/// Constant-safe query returned by build methods when the configured table
+/// failed whitelist validation: evaluates to zero rows instead of interpolating
+/// an unvalidated table name into SQL.
+const SAFE_FALLBACK_QUERY: &str = "SELECT 1 WHERE false";
 
 /// Represents a SQL query parameter position and value type
 pub struct QueryParam {
@@ -17,18 +23,38 @@ pub struct MediaQueryBuilder {
     param_count: usize,
     user_id_param: Option<usize>,
     label_id_param: Option<usize>,
+    table_validated: bool,
 }
 
 impl MediaQueryBuilder {
-    /// Create a new query builder for the given table
+    /// Create a new query builder for the given table. The table is validated
+    /// against the strict whitelist (`utils::validate_table_name`); if it fails,
+    /// the error is logged once here and every build_* method returns the
+    /// constant-safe fallback query instead of interpolated SQL.
     pub fn new(table: &str) -> Self {
+        let table_validated = match utils::validate_table_name(table) {
+            Ok(()) => true,
+            Err(reason) => {
+                log::error!(
+                    "Query builder rejected table '{}': {}",
+                    table, reason
+                );
+                false
+            }
+        };
         Self {
             table: table.to_string(),
             conditions: vec!["t.deleted_at IS NULL".to_string()],
             param_count: 0,
             user_id_param: None,
             label_id_param: None,
+            table_validated,
         }
+    }
+
+    /// True when the configured table passed whitelist validation.
+    pub fn table_validated(&self) -> bool {
+        self.table_validated
     }
 
     /// Set the user_id parameter for starred images JOIN
@@ -118,6 +144,9 @@ impl MediaQueryBuilder {
     /// Build SELECT query body (SELECT ... FROM ... JOIN ... WHERE ...)
     /// Returns the query string without ORDER BY, LIMIT, and OFFSET
     pub fn build_select_body(&self, lon_param: Option<usize>, lat_param: Option<usize>) -> String {
+        if !self.table_validated {
+            return SAFE_FALLBACK_QUERY.to_string();
+        }
         let has_location = lon_param.is_some() && lat_param.is_some();
 
         let select_clause = if self.table == tables::IMAGES {
@@ -197,6 +226,9 @@ impl MediaQueryBuilder {
     /// Build SELECT clause for listing thumbnails
     /// If lon_param and lat_param are provided, includes distance calculation
     pub fn build_select_query(&mut self, limit_param: usize, offset_param: usize, lon_param: Option<usize>, lat_param: Option<usize>, sort_by: Option<&str>, sort_order: Option<&str>) -> String {
+        if !self.table_validated {
+            return SAFE_FALLBACK_QUERY.to_string();
+        }
         let body = self.build_select_body(lon_param, lat_param);
         let dir = if sort_order == Some("asc") { "ASC" } else { "DESC" };
         let order = if sort_by == Some("size") {
@@ -211,6 +243,9 @@ impl MediaQueryBuilder {
 
     /// Build COUNT query for total thumbnails
     pub fn build_count_query(&self, use_inner_join: bool) -> String {
+        if !self.table_validated {
+            return SAFE_FALLBACK_QUERY.to_string();
+        }
         // Use appropriate starred table based on media type
         let starred_table = if self.table == tables::IMAGES {
             tables::STARRED_IMAGES
@@ -402,5 +437,18 @@ mod tests {
     fn test_is_table_type_helpers() {
         assert!(MediaQueryBuilder::new(tables::IMAGES).is_images_table());
         assert!(MediaQueryBuilder::new(tables::VIDEOS).is_videos_table());
+    }
+
+    #[test]
+    fn test_invalid_table_falls_back_to_safe_query() {
+        let mut builder = MediaQueryBuilder::new("images; DROP TABLE users");
+        assert!(!builder.table_validated());
+        let select = builder.build_select_query(1, 2, None, None, None, None);
+        let count = builder.build_count_query(false);
+        assert_eq!(select, "SELECT 1 WHERE false");
+        assert_eq!(count, "SELECT 1 WHERE false");
+        // No interpolated table anywhere in the emitted SQL.
+        assert!(!select.contains("DROP"));
+        assert!(!count.contains("DROP"));
     }
 }

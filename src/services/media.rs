@@ -204,13 +204,28 @@ pub async fn get_video(
         match actix_files::NamedFile::open(&video_path) {
             Ok(file) => {
                 info!("Serving video: {:?}", video_path);
-                Ok(file
-                    .set_content_type(mime_type)
-                    .set_content_disposition(actix_web::http::header::ContentDisposition {
-                        disposition: actix_web::http::header::DispositionType::Inline,
-                        parameters: vec![actix_web::http::header::DispositionParam::Filename(original_name.clone())],
-                    })
-                    .into_response(&req))
+                // Same inline-safe defense as images: only allow-listed video
+                // extensions may render inline from our origin; anything else is
+                // forced to download as inert octet-stream.
+                const INLINE_SAFE_VIDEO_EXTS: &[&str] = &["mp4", "mov", "webm", "m4v"];
+                let ext_lc = extension.to_lowercase();
+                if INLINE_SAFE_VIDEO_EXTS.contains(&ext_lc.as_str()) {
+                    Ok(file
+                        .set_content_type(mime_type)
+                        .set_content_disposition(actix_web::http::header::ContentDisposition {
+                            disposition: actix_web::http::header::DispositionType::Inline,
+                            parameters: vec![actix_web::http::header::DispositionParam::Filename(original_name.clone())],
+                        })
+                        .into_response(&req))
+                } else {
+                    Ok(file
+                        .set_content_type(mime_guess::mime::APPLICATION_OCTET_STREAM)
+                        .set_content_disposition(actix_web::http::header::ContentDisposition {
+                            disposition: actix_web::http::header::DispositionType::Attachment,
+                            parameters: vec![actix_web::http::header::DispositionParam::Filename(original_name.clone())],
+                        })
+                        .into_response(&req))
+                }
             }
             Err(e) => {
                 error!(

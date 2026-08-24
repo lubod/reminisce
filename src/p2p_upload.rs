@@ -20,6 +20,42 @@ pub const SHARD_COUNT: usize = 5;
 pub const MIN_NODES_REQUIRED: usize = 1;
 /// Files larger than this are uploaded via segmented streaming (caps peak RAM).
 pub const SEGMENT_THRESHOLD: usize = 256 * 1024 * 1024; // 256 MB
+/// Recently completed remote shard stores, used by the audit sweep's orphan GC
+/// as a grace period: a shard uploaded moments ago may not be committed to
+/// `p2p_shards` yet (upload ACK precedes the DB transaction), and the sweep
+/// would otherwise delete it as an "orphan". Bounded by prune-on-insert.
+pub fn note_recent_store(node_id: &str, shard_hash_hex: &str) {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+    static RECENT: std::sync::OnceLock<Mutex<HashMap<(String, String), Instant>>> = std::sync::OnceLock::new();
+    const GRACE: Duration = Duration::from_secs(15 * 60);
+    let map = RECENT.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut g = map.lock().unwrap_or_else(|e| e.into_inner());
+    let now = Instant::now();
+    g.retain(|_, t| now.duration_since(*t) < GRACE);
+    if g.len() > 50_000 {
+        return; // bound memory under pathological load; sweep just runs conservative
+    }
+    g.insert((node_id.to_string(), shard_hash_hex.to_string()), now);
+}
+
+/// True when (node, hash) was stored recently enough that the audit sweep must
+/// not treat it as an orphan.
+pub fn is_recently_stored(node_id: &str, shard_hash_hex: &str) -> bool {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+    static RECENT: std::sync::OnceLock<Mutex<HashMap<(String, String), Instant>>> = std::sync::OnceLock::new();
+    const GRACE: Duration = Duration::from_secs(15 * 60);
+    let map = RECENT.get_or_init(|| Mutex::new(HashMap::new()));
+    let g = map.lock().unwrap_or_else(|e| e.into_inner());
+    match g.get(&(node_id.to_string(), shard_hash_hex.to_string())) {
+        Some(t) => t.elapsed() < GRACE,
+        None => false,
+    }
+}
+
 /// Max bytes per StoreShardChunk protocol message. Kept safely under the protocol
 /// receive cap (see np2p::network::protocol::Protocol::receive) so bincode framing
 /// overhead never trips it — 16 MiB chunks leave generous headroom under 128 MiB.
@@ -119,7 +155,15 @@ pub async fn store_shard(
 
         let _ = send.finish();
         match attempt_result {
-            Ok(true) => { conn.close(0u32.into(), b"done"); return Ok(shard_hash_hex); }
+            Ok(true) => {
+                conn.close(0u32.into(), b"done");
+                // Record for the audit sweep grace period (node_id falls back to
+                // addr string when unresolved — sweep compares the same way).
+                let owner = p2p_service.registry.find_by_addr(addr)
+                    .unwrap_or_else(|| addr.to_string());
+                note_recent_store(&owner, &shard_hash_hex);
+                return Ok(shard_hash_hex);
+            }
             Ok(false) => last_err = "node rejected shard".to_string(),
             Err(e) => last_err = e,
         }

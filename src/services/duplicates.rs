@@ -123,13 +123,19 @@ async fn build_groups(
 
     let n = hashes.len();
     let mut uf = UnionFind::new(n);
-    let mut group_max_sim: HashMap<usize, f32> = HashMap::new();
 
-    for (ha, hb, sim) in &pairs {
-        let ia = hash_index[ha];
-        let ib = hash_index[hb];
-        uf.union(ia, ib);
-        let root = uf.find(ia);
+    for (ha, hb, _) in &pairs {
+        uf.union(hash_index[ha], hash_index[hb]);
+    }
+
+    // Second pass over the ORIGINAL pairs now that all unions are done: each
+    // pair's similarity is attributed to the CURRENT root of its endpoints.
+    // (Capturing roots during union recorded stale roots that later merged
+    // away, losing group max-similarity.)
+    let mut group_max_sim: HashMap<usize, f32> = HashMap::new();
+    for (ha, _hb, sim) in &pairs {
+        // Both endpoints share the same root after the union pass.
+        let root = uf.find(hash_index[ha]);
         let e = group_max_sim.entry(root).or_insert(0.0f32);
         if *sim > *e { *e = *sim; }
     }

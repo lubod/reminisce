@@ -15,6 +15,10 @@ use crate::services::ingest;
 
 pub type ImportJobStore = Mutex<HashMap<String, ImportJob>>;
 
+/// Monotonic insertion counter used to identify the OLDEST job when pruning the
+/// global store (HashMap iteration order is arbitrary).
+static JOB_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 // (path, blake3_hash, file_name, is_image, file_mtime)
 type PendingFile = (PathBuf, String, String, bool, Option<chrono::DateTime<Utc>>);
 
@@ -33,6 +37,10 @@ pub struct ImportJob {
     pub imported: usize,
     pub failed: usize,
     pub errors: Vec<String>,
+    /// Owning user; status is only served to this user.
+    pub user_id: Uuid,
+    #[serde(skip)]
+    pub seq: u64,
 }
 
 #[derive(Deserialize, ToSchema)]
@@ -148,14 +156,34 @@ pub async fn import_directory(
 
     let job_id = Uuid::new_v4().to_string();
     {
-        let mut store = job_store.lock().unwrap();
+        let mut store = job_store.lock().unwrap_or_else(|e| e.into_inner());
+        let seq = JOB_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         store.insert(job_id.clone(), ImportJob {
             status: JobStatus::Running,
             scanned: 0,
             imported: 0,
             failed: 0,
             errors: vec![],
+            user_id: user_uuid,
+            seq,
         });
+
+        // Global prune: keep only the ~20 most recent jobs. Oldest finished
+        // (Done/Failed) jobs are removed first; running jobs are never pruned.
+        if store.len() > 20 {
+            let mut finished: Vec<(u64, String)> = store
+                .iter()
+                .filter(|(_, j)| !matches!(j.status, JobStatus::Running))
+                .map(|(id, j)| (j.seq, id.clone()))
+                .collect();
+            finished.sort_by_key(|(s, _)| *s);
+            for (_, old_id) in &finished {
+                if store.len() <= 20 {
+                    break;
+                }
+                store.remove(old_id);
+            }
+        }
     }
 
     let job_id_task = job_id.clone();
@@ -424,15 +452,18 @@ pub async fn get_import_status(
     config: web::Data<Config>,
     job_store: web::Data<ImportJobStore>,
 ) -> Result<HttpResponse, Error> {
-    match utils::authenticate_request(&req, "get_import_status", config.get_api_key()).await {
-        Ok(_) => {}
+    let claims = match utils::authenticate_request(&req, "get_import_status", config.get_api_key()).await {
+        Ok(claims) => claims,
         Err(resp) => return Ok(resp),
     };
+    let caller_uuid = utils::parse_user_uuid(&claims.user_id)?;
 
     let job_id = path.into_inner();
-    let store = job_store.lock().unwrap();
+    let store = job_store.lock().unwrap_or_else(|e| e.into_inner());
     match store.get(&job_id) {
-        Some(job) => Ok(HttpResponse::Ok().json(job)),
-        None => Ok(HttpResponse::NotFound().json(serde_json::json!({"error": "Job not found"}))),
+        // Jobs are private to their owner: report 404 (not 403) so job IDs of
+        // other users cannot be probed.
+        Some(job) if job.user_id == caller_uuid => Ok(HttpResponse::Ok().json(job)),
+        _ => Ok(HttpResponse::NotFound().json(serde_json::json!({"error": "Job not found"}))),
     }
 }

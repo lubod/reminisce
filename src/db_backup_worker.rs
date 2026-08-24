@@ -45,6 +45,7 @@ pub async fn db_backup_loop(
     loop {
         if let Err(e) = backup_cycle(&pool, &config, &p2p_service).await {
             error!("DB backup cycle failed: {}", e);
+        crate::metrics::APPLICATION_ERRORS_TOTAL.inc();
             DB_BACKUP_FAILURES_TOTAL.inc();
         }
 
@@ -257,9 +258,67 @@ async fn backup_dump_file(
     Ok(true)
 }
 
+/// Components of a `postgres://user[:pass]@host[:port][/db]` URL, so CLI tools
+/// can receive explicit `-h/-p/-U` args and the password can travel via the
+/// `PGPASSWORD` environment variable instead of process argv (visible in `ps`).
+pub struct PgUrlParts {
+    pub host: String,
+    pub port: u16,
+    pub user: String,
+    pub password: Option<String>,
+    pub dbname: String,
+}
+
+/// Minimal parser for PostgreSQL connection URLs. Splits credentials at the LAST
+/// `@` (so passwords may contain `@`), and user/password at the first `:` (so
+/// passwords may contain `:`). No percent-decoding; query strings are dropped.
+pub fn parse_pg_url(url: &str) -> Result<PgUrlParts, String> {
+    let rest = url
+        .strip_prefix("postgres://")
+        .or_else(|| url.strip_prefix("postgresql://"))
+        .ok_or_else(|| format!("unsupported database URL scheme (expected postgres://…): {}", url))?;
+
+    let rest = rest.split('?').next().unwrap_or(rest);
+    let (authority, dbname_raw) = rest.split_once('/').unwrap_or((rest, ""));
+
+    let (userinfo, hostport) = match authority.rsplit_once('@') {
+        Some((u, h)) => (Some(u), h),
+        None => (None, authority),
+    };
+
+    if hostport.is_empty() {
+        return Err("database URL is missing a host".to_string());
+    }
+    let (user, password) = match userinfo {
+        Some(ui) => match ui.split_once(':') {
+            Some((u, p)) => (u.to_string(), Some(p.to_string())),
+            None => (ui.to_string(), None),
+        },
+        None => ("postgres".to_string(), None),
+    };
+
+    let (host, port) = match hostport.rsplit_once(':') {
+        Some((h, p)) => (
+            h.to_string(),
+            p.parse::<u16>()
+                .map_err(|_| format!("invalid port '{}' in database URL", p))?,
+        ),
+        None => (hostport.to_string(), 5432),
+    };
+
+    if host.is_empty() {
+        return Err("database URL is missing a host".to_string());
+    }
+
+    let dbname = if dbname_raw.is_empty() { "postgres".to_string() } else { dbname_raw.to_string() };
+
+    Ok(PgUrlParts { host, port, user, password, dbname })
+}
+
 /// Run `pg_dump -Fc` for the configured database into a temp file (async).
 async fn dump_database(config: &Config) -> Result<PathBuf, String> {
     let database_url = config.database_url.as_ref().ok_or("Database URL not configured")?;
+    let parts = parse_pg_url(database_url)?;
     // Plaintext full-DB dump must not be world-readable while it exists: create
     // it under a 0600 file in a private temp dir instead of /tmp root.
     let private_dir = std::env::temp_dir().join(format!("reminisce_db_backup_{}", std::process::id()));
@@ -273,11 +332,24 @@ async fn dump_database(config: &Config) -> Result<PathBuf, String> {
     }
     let output_path = private_dir.join(format!("reminisce_db_backup_{}.dump", chrono::Utc::now().timestamp()));
 
-    let output = tokio::process::Command::new("pg_dump")
-        .arg("--format=custom")
+    // Credentials stay out of argv: connection details as explicit flags, the
+    // password via PGPASSWORD.
+    let mut cmd = tokio::process::Command::new("pg_dump");
+    cmd.arg("--format=custom")
         .arg("--file")
         .arg(&output_path)
-        .arg(database_url)
+        .arg("--host")
+        .arg(&parts.host)
+        .arg("--port")
+        .arg(parts.port.to_string())
+        .arg("--username")
+        .arg(&parts.user);
+    if let Some(password) = &parts.password {
+        cmd.env("PGPASSWORD", password);
+    }
+    cmd.arg(&parts.dbname);
+
+    let output = cmd
         .output()
         .await
         .map_err(|e| {
@@ -473,6 +545,38 @@ mod tests {
         let cfg = mini_config(None);
         let res = dump_database(&cfg).await;
         assert!(res.is_err(), "empty database_url -> Err");
+    }
+
+    #[test]
+    fn parse_pg_url_extracts_all_components() {
+        let p = parse_pg_url("postgres://bob:s3cr3t@db.local:5433/reminisce_db").unwrap();
+        assert_eq!(p.host, "db.local");
+        assert_eq!(p.port, 5433);
+        assert_eq!(p.user, "bob");
+        assert_eq!(p.password.as_deref(), Some("s3cr3t"));
+        assert_eq!(p.dbname, "reminisce_db");
+
+        // password containing '@' and ':' (split at last '@', first ':')
+        let p = parse_pg_url("postgres://bob:p@ss:w0rd@10.0.0.9/reminisce_db?sslmode=disable").unwrap();
+        assert_eq!(p.user, "bob");
+        assert_eq!(p.password.as_deref(), Some("p@ss:w0rd"));
+        assert_eq!(p.host, "10.0.0.9");
+        assert_eq!(p.port, 5432);
+        assert_eq!(p.dbname, "reminisce_db");
+
+        // defaults
+        let p = parse_pg_url("postgres://localhost/mydb").unwrap();
+        assert_eq!(p.user, "postgres");
+        assert_eq!(p.password, None);
+        assert_eq!(p.port, 5432);
+        assert_eq!(p.dbname, "mydb");
+
+        let p = parse_pg_url("postgresql://u:p@h/x").unwrap();
+        assert_eq!(p.dbname, "x");
+
+        assert!(parse_pg_url("mysql://a/b").is_err());
+        assert!(parse_pg_url("postgres://:5432/db").is_err());
+        assert!(parse_pg_url("postgres://host:notaport/db").is_err());
     }
 
     #[actix_web::test]

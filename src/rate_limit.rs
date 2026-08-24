@@ -331,12 +331,24 @@ pub fn login_allowed_for_account(username: &str) -> bool {
     }
     let mut store = login_failure_store().lock().unwrap_or_else(|e| e.into_inner());
     let now = Instant::now();
-    if let Some(failures) = store.get_mut(&key) {
+    let allowed = if let Some(failures) = store.get_mut(&key) {
         failures.retain(|t| now.duration_since(*t).as_secs() < LOGIN_FAILURE_WINDOW_SECS);
         failures.len() < LOGIN_FAILURE_THRESHOLD
     } else {
         true
+    };
+
+    // Opportunistic global sweep: when the map has grown large, drop expired
+    // entries for ALL usernames (not just the touched one) while we hold the
+    // lock, so long-tail usernames can't accumulate forever.
+    if store.len() > 500 {
+        store.retain(|_, failures| {
+            failures.retain(|t| now.duration_since(*t).as_secs() < LOGIN_FAILURE_WINDOW_SECS);
+            !failures.is_empty()
+        });
     }
+
+    allowed
 }
 
 /// Record a failed login attempt for this account.

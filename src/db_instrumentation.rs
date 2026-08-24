@@ -1,7 +1,8 @@
 // Database query instrumentation for performance monitoring
 // Logs slow queries and tracks query execution times
 
-use tracing::{info, warn, instrument};
+use log::debug;
+use tracing::{warn, instrument};
 use std::time::Instant;
 use tokio_postgres::Row;
 use crate::metrics::{DB_QUERY_DURATION, SLOW_QUERIES_TOTAL};
@@ -93,11 +94,6 @@ fn log_query_performance(_operation: &str, query: &str, elapsed_ms: u128, succes
             "Slow query detected"
         );
     } else {
-        info!(
-            elapsed_ms = %elapsed_ms,
-            status = %status,
-            query = %query_preview,
-            "Query executed"
-        );
+        debug!("Query executed in {} ms, status={}", elapsed_ms, status);
     }
 }

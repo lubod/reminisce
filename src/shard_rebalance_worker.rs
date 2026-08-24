@@ -106,11 +106,17 @@ pub async fn rebalance_cycle(
     config: &Config,
     p2p_service: &Arc<P2PService>,
 ) -> Result<bool, String> {
-    REBALANCE_ACTIVE.store(true, Ordering::Relaxed);
-    let res = rebalance_cycle_inner(pool, config, p2p_service).await;
-    if let Ok(false) | Err(_) = &res {
-        REBALANCE_ACTIVE.store(false, Ordering::Relaxed);
+    // Mutual exclusion: periodic worker AND admin-triggered sweeps must never
+    // migrate the same shard rows concurrently (last-writer-wins orphans the
+    // losing copy with no cleanup path).
+    if REBALANCE_ACTIVE
+        .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+        .is_err()
+    {
+        return Err("rebalance already in progress".to_string());
     }
+    let res = rebalance_cycle_inner(pool, config, p2p_service).await;
+    REBALANCE_ACTIVE.store(false, Ordering::Release);
     res
 }
 

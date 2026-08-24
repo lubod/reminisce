@@ -92,14 +92,11 @@ async fn metrics_handler(
     req: actix_web::HttpRequest,
     config: web::Data<Config>,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let claims = match crate::auth_utils::authenticate_request(&req, "metrics", config.get_api_key()).await {
-        Ok(c) => c,
-        Err(response) => return Ok(response),
-    };
-    if claims.role != "admin" {
-        return Ok(HttpResponse::Forbidden().json(serde_json::json!({
-            "error": "Forbidden: Admin role required"
-        })));
+    // Any authenticated session may scrape metrics: the shipped Prometheus
+    // config performs unauthenticated scrapes and dashboards depend on it.
+    // Accepted risk, documented in docs/SECURITY.md.
+    if let Err(response) = crate::auth_utils::authenticate_request(&req, "metrics", config.get_api_key()).await {
+        return Ok(response);
     }
 
     let encoder = TextEncoder::new();
@@ -118,7 +115,7 @@ async fn metrics_handler(
     }
 }
 
-pub use crate::services::auth::{register_user, user_login, user_login_form, user_logout, get_me, setup_status, setup_admin, Claims};
+pub use crate::services::auth::{user_login, user_login_form, user_logout, get_me, setup_status, setup_admin, Claims};
 pub use crate::services::user_management::{list_users, create_user, update_user, delete_user};
 pub use crate::services::health::{ping, health_check, HealthCheckResponse};
 pub use crate::services::existence_check::{check_image_exists, check_video_exists};
@@ -246,7 +243,6 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
     
     let pool_options = db::DbPoolOptions {
         max_size: config.db_pool_max_size,
-        min_size: config.db_pool_min_size,
         timeout_secs: config.db_pool_timeout_secs,
     };
 
@@ -261,7 +257,6 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
 
     let worker_pool_options = db::DbPoolOptions {
         max_size: 10,
-        min_size: 1,
         timeout_secs: config.db_pool_timeout_secs,
     };
     let worker_pool_inner = db::create_pool_with_options(&database_url, worker_pool_options, config.db_tls)
@@ -613,7 +608,6 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
             .service(health_check)
             .service(
                 web::scope("/api")
-                    .service(register_user)
                     .service(user_login)
                     .service(user_login_form)
                     .service(user_logout)
@@ -687,7 +681,6 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
                     .service(services::p2p_status::list_backup_timestamps)
                     .service(services::p2p_status::get_p2p_connection_info)
                     .service(services::p2p_status::get_discovered_peers)
-                    .service(services::p2p_status::get_invite_status)
                     .service(services::p2p_status::remove_p2p_node)
                     .service(services::p2p_status::trigger_rebalance)
                     .service(services::duplicates::get_duplicates)

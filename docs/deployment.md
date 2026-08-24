@@ -93,6 +93,7 @@ Each snapshot also writes a self-contained restore manifest to `<p2p_data_dir>/d
 
 - Multipart metadata fields are capped at **64 KB** each.
 - File streams are capped at **200 MB per image** and **20 GB per video** (HTTP 413 + temp cleanup on overflow).
+- Batch uploads: max **50 files / 1 GB aggregate** per request (HTTP 413 with partial results summary).
 - Ingest validates both the file extension (per-kind allow-list) **and magic bytes**, so HTML/SVG/text cannot enter the store under a media name; non-media extensions are served as inert `attachment/octet-stream`.
 
 ### Schema migrations

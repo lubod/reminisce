@@ -238,41 +238,58 @@ pub async fn update_ai_settings(
         }
     }
 
-    let client = utils::get_db_client(&pool.0).await?;
+    let mut client = utils::get_db_client(&pool.0).await?;
+
+    // Provisioning + all field updates happen in ONE transaction so a mid-way
+    // failure cannot leave the row partially updated.
+    let tx = client.transaction().await.map_err(|e| {
+        error!("Failed to begin settings transaction: {}", e);
+        actix_web::error::ErrorInternalServerError("Database error")
+    })?;
 
     // Ensure the user has a settings row (create with defaults if not exists)
-    client
-        .execute(
-            "INSERT INTO ai_settings (user_id)
-             VALUES ($1)
-             ON CONFLICT (user_id) DO NOTHING",
-            &[&user_uuid],
-        )
-        .await
-        .map_err(|e| {
-            error!("Failed to ensure settings exist: {}", e);
-            actix_web::error::ErrorInternalServerError("Database error")
-        })?;
+    tx.execute(
+        "INSERT INTO ai_settings (user_id)
+         VALUES ($1)
+         ON CONFLICT (user_id) DO NOTHING",
+        &[&user_uuid],
+    )
+    .await
+    .map_err(|e| {
+        error!("Failed to ensure settings exist: {}", e);
+        actix_web::error::ErrorInternalServerError("Database error")
+    })?;
 
     // Update provided fields
     if let Some(enable) = req.enable_ai_descriptions {
-        client.execute("UPDATE ai_settings SET enable_ai_descriptions = $1, updated_at = NOW() WHERE user_id = $2", &[&enable, &user_uuid]).await.ok();
+        tx.execute("UPDATE ai_settings SET enable_ai_descriptions = $1, updated_at = NOW() WHERE user_id = $2", &[&enable, &user_uuid]).await
+            .map_err(|e| { error!("Failed to update enable_ai_descriptions: {}", e); actix_web::error::ErrorInternalServerError("Update failed") })?;
     }
     if let Some(enable) = req.enable_embeddings {
-        client.execute("UPDATE ai_settings SET enable_embeddings = $1, updated_at = NOW() WHERE user_id = $2", &[&enable, &user_uuid]).await.ok();
+        tx.execute("UPDATE ai_settings SET enable_embeddings = $1, updated_at = NOW() WHERE user_id = $2", &[&enable, &user_uuid]).await
+            .map_err(|e| { error!("Failed to update enable_embeddings: {}", e); actix_web::error::ErrorInternalServerError("Update failed") })?;
     }
     if let Some(count) = req.embedding_parallel_count {
-        client.execute("UPDATE ai_settings SET embedding_parallel_count = $1, updated_at = NOW() WHERE user_id = $2", &[&(count as i32), &user_uuid]).await.ok();
+        tx.execute("UPDATE ai_settings SET embedding_parallel_count = $1, updated_at = NOW() WHERE user_id = $2", &[&(count as i32), &user_uuid]).await
+            .map_err(|e| { error!("Failed to update embedding_parallel_count: {}", e); actix_web::error::ErrorInternalServerError("Update failed") })?;
     }
     if let Some(enable) = req.enable_face_detection {
-        client.execute("UPDATE ai_settings SET enable_face_detection = $1, updated_at = NOW() WHERE user_id = $2", &[&enable, &user_uuid]).await.ok();
+        tx.execute("UPDATE ai_settings SET enable_face_detection = $1, updated_at = NOW() WHERE user_id = $2", &[&enable, &user_uuid]).await
+            .map_err(|e| { error!("Failed to update enable_face_detection: {}", e); actix_web::error::ErrorInternalServerError("Update failed") })?;
     }
     if let Some(count) = req.face_detection_parallel_count {
-        client.execute("UPDATE ai_settings SET face_detection_parallel_count = $1, updated_at = NOW() WHERE user_id = $2", &[&(count as i32), &user_uuid]).await.ok();
+        tx.execute("UPDATE ai_settings SET face_detection_parallel_count = $1, updated_at = NOW() WHERE user_id = $2", &[&(count as i32), &user_uuid]).await
+            .map_err(|e| { error!("Failed to update face_detection_parallel_count: {}", e); actix_web::error::ErrorInternalServerError("Update failed") })?;
     }
     if let Some(enable) = req.enable_media_backup {
-        client.execute("UPDATE ai_settings SET enable_media_backup = $1, updated_at = NOW() WHERE user_id = $2", &[&enable, &user_uuid]).await.ok();
+        tx.execute("UPDATE ai_settings SET enable_media_backup = $1, updated_at = NOW() WHERE user_id = $2", &[&enable, &user_uuid]).await
+            .map_err(|e| { error!("Failed to update enable_media_backup: {}", e); actix_web::error::ErrorInternalServerError("Update failed") })?;
     }
+
+    tx.commit().await.map_err(|e| {
+        error!("Failed to commit settings update: {}", e);
+        actix_web::error::ErrorInternalServerError("Commit failed")
+    })?;
 
     // Fetch updated settings
     let row = client

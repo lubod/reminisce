@@ -303,12 +303,30 @@ async fn cmd_db(
     if let Some(parent) = out_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(out_path, &dump)?;
+    // The reconstructed dump is a full plaintext copy of the database: create it
+    // 0600 instead of the default umask-derived perms.
+    {
+        use std::io::Write;
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut out_file = options.open(out_path)?;
+        out_file.write_all(&dump)?;
+    }
     println!("Wrote dump to {}", out_path.display());
 
     if pg_restore {
         let url = target_db_url.ok_or("--target-db-url is required with --pg-restore")?;
-        run_pg_restore(&url, out_path, clean).await?;
+        if let Err(e) = run_pg_restore(&url, out_path, clean).await {
+            // Don't leak the plaintext dump when the restore failed.
+            let _ = std::fs::remove_file(out_path);
+            eprintln!("Removed partial dump {}", out_path.display());
+            return Err(e);
+        }
     } else {
         println!("\nNext: restore into a database with, e.g.:");
         println!("  pg_restore -d <target_db_url> {}", out_path.display());
@@ -318,12 +336,30 @@ async fn cmd_db(
 }
 
 async fn run_pg_restore(target_db_url: &str, dump_path: &Path, clean: bool) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    println!("Running pg_restore into {}…", target_db_url);
+    // Credentials stay out of argv (and stdout): parse the URL and pass
+    // -h/-p/-U explicitly with the password via PGPASSWORD.
+    let parts = reminisce::db_backup_worker::parse_pg_url(target_db_url)
+        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
+    println!(
+        "Running pg_restore into {}:{}/{} (user {})…",
+        parts.host, parts.port, parts.dbname, parts.user
+    );
     let mut cmd = tokio::process::Command::new("pg_restore");
     if clean {
         cmd.arg("--clean").arg("--if-exists");
     }
-    cmd.arg("--dbname").arg(target_db_url).arg(dump_path);
+    cmd.arg("--host")
+        .arg(&parts.host)
+        .arg("--port")
+        .arg(parts.port.to_string())
+        .arg("--username")
+        .arg(&parts.user);
+    if let Some(password) = &parts.password {
+        cmd.env("PGPASSWORD", password);
+    }
+    cmd.arg("--dbname")
+        .arg(&parts.dbname)
+        .arg(dump_path);
 
     let output = cmd.output().await.map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {

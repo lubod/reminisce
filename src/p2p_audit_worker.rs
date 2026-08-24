@@ -226,6 +226,12 @@ pub async fn sweep_storage_node_orphans(
 
             for shard_hash_hex in hex_shards {
                 if !valid_set.contains(&shard_hash_hex) {
+                    // Grace period: an upload ACKed moments ago may not be
+                    // committed to p2p_shards yet — never treat fresh stores
+                    // as orphans.
+                    if crate::p2p_upload::is_recently_stored(&node_id, &shard_hash_hex) {
+                        continue;
+                    }
                     match crate::p2p_upload::delete_shard_remote(p2p_service, addr, &node_id, &shard_hash_hex).await {
                         Ok(true) => {
                             total_pruned += 1;

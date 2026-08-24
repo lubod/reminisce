@@ -38,6 +38,20 @@ fn default_limit() -> i64 {
     20
 }
 
+/// Shared reqwest client (OnceLock, mirroring the ai_client pattern): one
+/// connection pool + timeout config reused for every outbound HTTP call instead
+/// of building a fresh client per request.
+pub fn shared_http_client() -> &'static reqwest::Client {
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .user_agent("Reminisce/1.0")
+            .build()
+            .unwrap_or_default()
+    })
+}
+
 /// Forward geocoding: Convert place name to coordinates
 /// Searches the admin_boundaries table for matching place names
 pub async fn geocode_place_name(
@@ -168,6 +182,13 @@ pub async fn search_places(
     if query.query.trim().len() < 2 {
         return Ok(HttpResponse::BadRequest().json(serde_json::json!({
             "error": "Search query must be at least 2 characters"
+        })));
+    }
+
+    // Validate limit: reject outside the supported 1..=50 range
+    if query.limit < 1 || query.limit > 50 {
+        return Ok(HttpResponse::BadRequest().json(serde_json::json!({
+            "error": "limit must be between 1 and 50"
         })));
     }
 

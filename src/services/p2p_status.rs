@@ -61,10 +61,13 @@ pub async fn get_p2p_backup_status(
     p2p_service: web::Data<Arc<P2PService>>,
     pool: web::Data<MainDbPool>,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let _claims = match utils::authenticate_request(&req, "get_p2p_backup_status", config.get_api_key()).await {
-        Ok(claims) => claims,
-        Err(response) => return Ok(response),
+    let claims = match utils::authenticate_request(&req, "get_p2p_backup_status", config.get_api_key()).await {
+        Ok(c) => c,
+        Err(r) => return Ok(r),
     };
+    if claims.role != "admin" {
+        return Ok(HttpResponse::Forbidden().json(serde_json::json!({"error": "admin required"})));
+    }
 
     let active_nodes: Vec<(String, std::net::SocketAddr)> = p2p_service.registry.all()
         .into_iter()
@@ -234,10 +237,13 @@ pub async fn get_p2p_connection_info(
     config: web::Data<Config>,
     p2p_service: web::Data<Arc<P2PService>>,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let _claims = match utils::authenticate_request(&req, "get_p2p_connection_info", config.get_api_key()).await {
-        Ok(claims) => claims,
-        Err(response) => return Ok(response),
+    let claims = match utils::authenticate_request(&req, "get_p2p_connection_info", config.get_api_key()).await {
+        Ok(c) => c,
+        Err(r) => return Ok(r),
     };
+    if claims.role != "admin" {
+        return Ok(HttpResponse::Forbidden().json(serde_json::json!({"error": "admin required"})));
+    }
 
     // Local IP: extracted from the Host header — what the browser actually connected to.
     // This avoids returning Docker bridge IPs (172.17.x.x) that are invisible to clients.
@@ -288,10 +294,13 @@ pub async fn get_discovered_peers(
     p2p_service: web::Data<Arc<P2PService>>,
     pool: web::Data<MainDbPool>,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let _claims = match utils::authenticate_request(&req, "get_discovered_peers", config.get_api_key()).await {
-        Ok(claims) => claims,
-        Err(response) => return Ok(response),
+    let claims = match utils::authenticate_request(&req, "get_discovered_peers", config.get_api_key()).await {
+        Ok(c) => c,
+        Err(r) => return Ok(r),
     };
+    if claims.role != "admin" {
+        return Ok(HttpResponse::Forbidden().json(serde_json::json!({"error": "admin required"})));
+    }
 
     let client = utils::get_db_client(&pool.0).await?;
     let rows = client.query(
@@ -375,10 +384,13 @@ pub async fn verify_p2p_backup(
     config: web::Data<Config>,
     pool: web::Data<MainDbPool>,
 ) -> Result<HttpResponse, actix_web::Error> {
-    let _claims = match utils::authenticate_request(&req, "verify_p2p_backup", config.get_api_key()).await {
-        Ok(claims) => claims,
-        Err(response) => return Ok(response),
+    let claims = match utils::authenticate_request(&req, "verify_p2p_backup", config.get_api_key()).await {
+        Ok(c) => c,
+        Err(r) => return Ok(r),
     };
+    if claims.role != "admin" {
+        return Ok(HttpResponse::Forbidden().json(serde_json::json!({"error": "admin required"})));
+    }
 
     let client = utils::get_db_client(&pool.0).await?;
 
@@ -676,6 +688,10 @@ pub async fn trigger_rebalance(
     let pool_clone = pool.0.clone();
     let config_clone = config.get_ref().clone();
     let p2p_clone = p2p_service.get_ref().clone();
+    if crate::shard_rebalance_worker::REBALANCE_ACTIVE.load(std::sync::atomic::Ordering::Relaxed) {
+        return Ok(HttpResponse::Conflict().json(RebalanceResponse { status: "rebalance already in progress".to_string() }));
+    }
+
     tokio::spawn(async move {
         let _ = crate::shard_rebalance_worker::run_full_rebalance(&pool_clone, &config_clone, &p2p_clone).await;
     });

@@ -85,7 +85,7 @@ pub async fn handle_stream(
                             if pubkey_hex == node_id {
                                 verified = true;
                             } else {
-                                warn!("[COORD] Node ID mismatch: claimed {}, certificate has {}", node_id, pubkey_hex);
+                                warn!("[COORD] Node ID mismatch: claimed {}…, certificate has {}", &node_id[..node_id.len().min(8)], pubkey_hex);
                             }
                         }
                     }

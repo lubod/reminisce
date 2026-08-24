@@ -178,6 +178,7 @@ pub async fn upload_image(
         }))),
         Err(e) => {
             error!("Failed to ingest image: {}", e);
+            crate::metrics::APPLICATION_ERRORS_TOTAL.inc();
             // Rejected content never moved into the store — remove the temp.
             utils::cleanup_temp_files_spawn(Some(image_temp_path), None);
             Ok(HttpResponse::InternalServerError().json(serde_json::json!({"status": "error", "message": e.to_string()})))

@@ -83,10 +83,12 @@ async fn replicate_all(
         warn!("Only {} P2P nodes discovered. 3+ nodes recommended for 3/5 EC redundancy.", nodes.len());
     }
 
-    // Re-queue files that lost shard redundancy (fewer than the full data+parity complement
-    // reachable) so the batches below re-replicate them to a full set. Bounded per cycle so a
-    // node outage can't trigger a 50k+ file burst in one pass.
-    let target_shards = (config.p2p_data_shards + config.p2p_parity_shards) as i64;
+    // Re-queue files that lost redundancy below the RECONSTRUCTION threshold
+    // (data_shards). Losing parity-only shards is handled by the audit
+    // worker's targeted shard repair - resetting p2p_synced_at here would
+    // re-shard entire libraries under fresh keys on every single node flap,
+    // orphaning all surviving shards.
+    let target_shards = config.p2p_data_shards as i64;
     let requeued = match requeue_under_replicated(pool, config.workers.replication_batch_size.max(1), target_shards).await {
         Ok(n) => n,
         Err(e) => {
@@ -232,7 +234,18 @@ async fn replicate_batch(
                     }
                     Err(e) => {
                         error!("Failed to replicate {}: {}", file.hash, e);
+                        crate::metrics::APPLICATION_ERRORS_TOTAL.inc();
                         BACKUP_FAILURES_TOTAL.inc();
+                        // Backoff cooldown so persistently failing head-of-queue
+                        // files cannot starve all new uploads.
+                        if let Ok(client) = pool_clone.get().await {
+                            if crate::utils::validate_table_name(&table_owned).is_ok() {
+                                let _ = client.execute(
+                                    &format!("UPDATE {} SET p2p_last_attempt_at = NOW() WHERE hash = $1", table_owned),
+                                    &[&file.hash],
+                                ).await;
+                            }
+                        }
                     }
                 }
             }

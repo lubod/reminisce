@@ -185,11 +185,17 @@ async fn reverse_geocode_external(latitude: f64, longitude: f64) -> Option<Strin
         latitude, longitude
     );
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
-        .user_agent("Reminisce/1.0")
-        .build()
-        .ok()?;
+    // Shared client: Nominatim's public policy is ~1 req/s — building a fresh
+    // TLS pool per call wasted handshakes and invited rate-limit bans during
+    // bulk imports.
+    static GEO_CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    let client = GEO_CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .user_agent("Reminisce/1.0")
+            .build()
+            .unwrap_or_default()
+    });
 
     match client.get(&url).send().await {
         Ok(response) if response.status().is_success() => {

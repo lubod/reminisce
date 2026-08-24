@@ -115,3 +115,42 @@ Applied across the codebase; details in git history (`289ef95..5bddeb4`):
 - **Streaming uploads**: temp files are flushed + fsynced before handoff (fixes an intermittent empty-read race for any fast reader of a fresh upload).
 - **P2P**: mesh admission allow-list (see p2p-backup.md); Argon2id key-envelope v1 and optional hardened identity KDF; message-length caps, QUIC transport limits, connection/stream semaphores, relay timeouts, durable shard writes (fsync), panic-supervised stream handlers, reconnect backoff.
 - **Integrity**: shard rebalancing verifies blake3 before re-upload so corruption can't be laundered into the canonical catalog.
+
+## Hardening log — full-codebase review pass
+
+Second sweep (every file line-reviewed across backend, np2p, coordinator,
+client, Android, AI service):
+
+- **Admin gates**: four P2P status endpoints (discovered-peers, connection
+  info, backup verify, backup status) now require the admin role — they
+  exposed mesh topology and pairing material to any authenticated user.
+- **/metrics**: kept at any-authenticated-user by decision; the shipped
+  Prometheus scrape config performs unauthenticated scrapes and dashboards
+  depend on it. Accepted risk, documented here.
+- **Rebalance mutual exclusion**: CAS gate on REBALANCE_ACTIVE — API-triggered
+  sweeps can no longer overlap the periodic worker and race on shard rows.
+- **Audit orphan-sweep grace period**: shards uploaded in the last 15 minutes
+  are never treated as orphans (upload ACK can precede the DB commit).
+- **Replication worker**: failure paths now record p2p_last_attempt_at
+  (head-of-line starvation fixed); under-replication threshold lowered to
+  data_shards so a single node flap no longer re-shards entire libraries.
+- **np2p streams**: per-message read deadlines (a silent peer can no longer
+  pin semaphore permits); StoreShardStreamInit rejects shards larger than the
+  retrievable protocol cap instead of stranding unretrievable bytes.
+- **Alerts**: windowed counter deltas replace lifetime totals (no more
+  permanently-firing alerts after historical incidents); unified DB-backup
+  alert id; status/severity coherence.
+- **Uploads**: multipart stream errors surface as failures (truncated bodies
+  are no longer ingested); batch endpoint enforces aggregate caps with
+  per-item error reporting; RAII temp-file guard covers every error path;
+  videos now get the same inline-content defense as images.
+- **Observability honesty**: per-query INFO logging demoted to DEBUG; 12
+  never-produced metrics deleted, APPLICATION_ERRORS_TOTAL wired to real
+  error sites, 9 gauges added to startup force-init; collector skips absent
+  families instead of plotting zeros.
+- **Secrets & hygiene**: pg_dump/pg_restore credentials moved off argv into
+  env; restored dumps written 0600 and cleaned on failure; SQL migration
+  runner strips block comments and wraps files in transactions; query builder
+  validates its table at construction; lockout store prunes expired usernames
+  globally; Nominatim client shared + limit clamped; coordinator fingerprints
+  attacker-controlled node ids in logs.

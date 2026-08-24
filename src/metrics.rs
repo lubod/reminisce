@@ -2,7 +2,6 @@
 //
 // This module defines Prometheus metrics for tracking application-specific
 // events and behaviors beyond standard HTTP metrics.
-
 use prometheus::{
     IntCounter, IntCounterVec, IntGauge, IntGaugeVec, Gauge, GaugeVec, Histogram,
     HistogramOpts, Opts, register_gauge, register_gauge_vec, register_int_counter,
@@ -38,49 +37,9 @@ pub static USER_LOGIN_FAILURES_TOTAL: Lazy<IntCounter> = Lazy::new(|| {
     ).expect("Failed to register user_login_failures_total metric")
 });
 
-/// Currently active user sessions
-pub static ACTIVE_SESSIONS: Lazy<IntGauge> = Lazy::new(|| {
-    register_int_gauge!(
-        "active_sessions",
-        "Number of currently active user sessions"
-    ).expect("Failed to register active_sessions metric")
-});
-
 // ============================================================================
 // Memory/Content Metrics
 // ============================================================================
-
-/// Total number of memories created
-pub static MEMORIES_CREATED_TOTAL: Lazy<IntCounter> = Lazy::new(|| {
-    register_int_counter!(
-        "memories_created_total",
-        "Total number of memories created"
-    ).expect("Failed to register memories_created_total metric")
-});
-
-/// Total number of memories retrieved
-pub static MEMORIES_RETRIEVED_TOTAL: Lazy<IntCounter> = Lazy::new(|| {
-    register_int_counter!(
-        "memories_retrieved_total",
-        "Total number of memories retrieved"
-    ).expect("Failed to register memories_retrieved_total metric")
-});
-
-/// Total number of memories deleted
-pub static MEMORIES_DELETED_TOTAL: Lazy<IntCounter> = Lazy::new(|| {
-    register_int_counter!(
-        "memories_deleted_total",
-        "Total number of memories deleted"
-    ).expect("Failed to register memories_deleted_total metric")
-});
-
-/// Total number of memories shared
-pub static MEMORIES_SHARED_TOTAL: Lazy<IntCounter> = Lazy::new(|| {
-    register_int_counter!(
-        "memories_shared_total",
-        "Total number of memories shared"
-    ).expect("Failed to register memories_shared_total metric")
-});
 
 // ============================================================================
 // Database Metrics
@@ -98,13 +57,6 @@ pub static DB_QUERY_DURATION: Lazy<Histogram> = Lazy::new(|| {
 });
 
 /// Total number of database connection errors
-pub static DB_CONNECTION_ERRORS_TOTAL: Lazy<IntCounter> = Lazy::new(|| {
-    register_int_counter!(
-        "db_connection_errors_total",
-        "Total number of database connection errors"
-    ).expect("Failed to register db_connection_errors_total metric")
-});
-
 /// Total number of slow queries (>100ms)
 pub static SLOW_QUERIES_TOTAL: Lazy<IntCounter> = Lazy::new(|| {
     register_int_counter!(
@@ -116,38 +68,6 @@ pub static SLOW_QUERIES_TOTAL: Lazy<IntCounter> = Lazy::new(|| {
 // ============================================================================
 // P2P/Network Metrics
 // ============================================================================
-
-/// Total number of P2P connections established
-pub static P2P_CONNECTIONS_TOTAL: Lazy<IntCounter> = Lazy::new(|| {
-    register_int_counter!(
-        "p2p_connections_total",
-        "Total number of P2P connections established"
-    ).expect("Failed to register p2p_connections_total metric")
-});
-
-/// Currently active P2P sessions
-pub static ACTIVE_P2P_SESSIONS: Lazy<IntGauge> = Lazy::new(|| {
-    register_int_gauge!(
-        "active_p2p_sessions",
-        "Number of currently active P2P sessions"
-    ).expect("Failed to register active_p2p_sessions metric")
-});
-
-/// Successful NAT traversals
-pub static NAT_TRAVERSAL_SUCCESS_TOTAL: Lazy<IntCounter> = Lazy::new(|| {
-    register_int_counter!(
-        "nat_traversal_success_total",
-        "Total number of successful NAT traversals"
-    ).expect("Failed to register nat_traversal_success_total metric")
-});
-
-/// Failed NAT traversals
-pub static NAT_TRAVERSAL_FAILURES_TOTAL: Lazy<IntCounter> = Lazy::new(|| {
-    register_int_counter!(
-        "nat_traversal_failures_total",
-        "Total number of failed NAT traversals"
-    ).expect("Failed to register nat_traversal_failures_total metric")
-});
 
 // ============================================================================
 // File/Upload Metrics
@@ -167,17 +87,6 @@ pub static BYTES_UPLOADED_TOTAL: Lazy<IntCounter> = Lazy::new(|| {
         "bytes_uploaded_total",
         "Total number of bytes uploaded"
     ).expect("Failed to register bytes_uploaded_total metric")
-});
-
-/// Upload duration histogram
-pub static UPLOAD_DURATION: Lazy<Histogram> = Lazy::new(|| {
-    register_histogram!(
-        HistogramOpts::new(
-            "upload_duration_seconds",
-            "File upload duration in seconds"
-        )
-        .buckets(vec![0.1, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0])
-    ).expect("Failed to register upload_duration_seconds metric")
 });
 
 // ============================================================================
@@ -229,14 +138,6 @@ pub static APPLICATION_ERRORS_TOTAL: Lazy<IntCounter> = Lazy::new(|| {
         "application_errors_total",
         "Total number of application errors"
     ).expect("Failed to register application_errors_total metric")
-});
-
-/// Total number of validation errors
-pub static VALIDATION_ERRORS_TOTAL: Lazy<IntCounter> = Lazy::new(|| {
-    register_int_counter!(
-        "validation_errors_total",
-        "Total number of validation errors"
-    ).expect("Failed to register validation_errors_total metric")
 });
 
 // ============================================================================
@@ -816,23 +717,11 @@ pub fn init_metrics() {
     Lazy::force(&USER_REGISTRATIONS_TOTAL);
     Lazy::force(&USER_LOGINS_TOTAL);
     Lazy::force(&USER_LOGIN_FAILURES_TOTAL);
-    Lazy::force(&ACTIVE_SESSIONS);
-    Lazy::force(&MEMORIES_CREATED_TOTAL);
-    Lazy::force(&MEMORIES_RETRIEVED_TOTAL);
-    Lazy::force(&MEMORIES_DELETED_TOTAL);
-    Lazy::force(&MEMORIES_SHARED_TOTAL);
     Lazy::force(&DB_QUERY_DURATION);
-    Lazy::force(&DB_CONNECTION_ERRORS_TOTAL);
     Lazy::force(&SLOW_QUERIES_TOTAL);
-    Lazy::force(&P2P_CONNECTIONS_TOTAL);
-    Lazy::force(&ACTIVE_P2P_SESSIONS);
-    Lazy::force(&NAT_TRAVERSAL_SUCCESS_TOTAL);
-    Lazy::force(&NAT_TRAVERSAL_FAILURES_TOTAL);
     Lazy::force(&FILE_UPLOADS_TOTAL);
     Lazy::force(&BYTES_UPLOADED_TOTAL);
-    Lazy::force(&UPLOAD_DURATION);
     Lazy::force(&APPLICATION_ERRORS_TOTAL);
-    Lazy::force(&VALIDATION_ERRORS_TOTAL);
     Lazy::force(&BACKUP_ATTEMPTS_TOTAL);
     Lazy::force(&BACKUP_SUCCESS_TOTAL);
     Lazy::force(&BACKUP_FAILURES_TOTAL);
@@ -884,6 +773,15 @@ pub fn init_metrics() {
     Lazy::force(&P2P_PEER_WRITE_LAST_STATUS);
     Lazy::force(&P2P_PEER_WRITE_SUCCESS_TOTAL);
     Lazy::force(&P2P_PEER_WRITE_FAILURES_TOTAL);
+    Lazy::force(&DB_POOL_SIZE);
+    Lazy::force(&DB_POOL_AVAILABLE);
+    Lazy::force(&DB_POOL_ACTIVE);
+    Lazy::force(&DB_POOL_MAX_SIZE);
+    Lazy::force(&DB_POOL_UTILIZATION);
+    Lazy::force(&TOTAL_IMAGES);
+    Lazy::force(&IMAGES_WITH_EMBEDDING);
+    Lazy::force(&IMAGES_WITH_DESCRIPTION);
+    Lazy::force(&IMAGES_FACE_PROCESSED);
 }
 
 #[cfg(test)]
@@ -903,19 +801,10 @@ mod tests {
             USER_REGISTRATIONS_TOTAL.inc();
             USER_LOGINS_TOTAL.inc();
             USER_LOGIN_FAILURES_TOTAL.inc();
-            MEMORIES_CREATED_TOTAL.inc();
-            MEMORIES_RETRIEVED_TOTAL.inc();
-            MEMORIES_DELETED_TOTAL.inc();
-            MEMORIES_SHARED_TOTAL.inc();
-            DB_CONNECTION_ERRORS_TOTAL.inc();
             SLOW_QUERIES_TOTAL.inc();
-            P2P_CONNECTIONS_TOTAL.inc();
-            NAT_TRAVERSAL_SUCCESS_TOTAL.inc();
-            NAT_TRAVERSAL_FAILURES_TOTAL.inc();
             FILE_UPLOADS_TOTAL.inc();
             BYTES_UPLOADED_TOTAL.inc_by(i as u64);
             APPLICATION_ERRORS_TOTAL.inc();
-            VALIDATION_ERRORS_TOTAL.inc();
             BACKUP_ATTEMPTS_TOTAL.inc();
             BACKUP_SUCCESS_TOTAL.inc();
             BACKUP_FAILURES_TOTAL.inc();
@@ -946,7 +835,6 @@ mod tests {
             P2P_PEER_WRITE_LAST_STATUS.with_label_values(&["node-a"]).set(1);
             P2P_PEER_AVAILABLE_SPACE_BYTES.with_label_values(&["node-a"]).set(1024.0 * i as f64);
 
-            ACTIVE_SESSIONS.set(i);
             DB_POOL_SIZE.set(i);
             DB_POOL_AVAILABLE.set(i);
             DB_POOL_ACTIVE.set(i);
@@ -964,7 +852,6 @@ mod tests {
             DUPLICATE_CHECKED_IMAGES.set(i);
 
             DB_QUERY_DURATION.observe(0.01 * i as f64);
-            UPLOAD_DURATION.observe(0.5);
             BACKUP_SIZE_BYTES.observe(1024.0 * i as f64);
             BACKUP_DURATION_SECONDS.observe(2.0);
             DB_BACKUP_SIZE_BYTES.observe(2048.0);

@@ -57,7 +57,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let out_dir = std::path::Path::new(&args.output);
     std::fs::create_dir_all(out_dir)?;
     let out_path = out_dir.join(&restored.filename);
-    std::fs::write(&out_path, &restored.data)?;
+    {
+        use std::io::Write;
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut out_file = options.open(&out_path)?;
+        out_file.write_all(&restored.data)?;
+    }
 
     println!("Restored {} → {}", args.hash, out_path.display());
     println!("  media type : {}", restored.media_type);

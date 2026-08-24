@@ -70,12 +70,10 @@ pub fn compute_alerts(pool: &web::Data<MainDbPool>, sys: &SharedSystem) -> Vec<A
             &error_5m.to_string(),
         ));
     } else if error_5m > 0 {
-        alerts.push(Alert::firing(
+        alerts.push(Alert::ok(
             "HighErrorRate",
-            "ok",
             "Error rate normal",
             &format!("{} ERROR/PANIC events in the last 5 minutes", error_5m),
-            &error_5m.to_string(),
         ));
     } else {
         alerts.push(Alert::ok("HighErrorRate", "Error rate normal", "No errors in the last 5 minutes"));
@@ -134,8 +132,8 @@ pub fn compute_alerts(pool: &web::Data<MainDbPool>, sys: &SharedSystem) -> Vec<A
     }
 
     // --- Backup silently failing (counters) ---
-    let failures = metric("backup_failures_total").unwrap_or(0.0);
-    let successes = metric("backup_success_total").unwrap_or(0.0);
+    let failures = counter_delta("backup_failures_total", metric("backup_failures_total").unwrap_or(0.0));
+    let successes = counter_delta("backup_success_total", metric("backup_success_total").unwrap_or(0.0));
     if failures > 5.0 && failures > successes {
         alerts.push(Alert::firing(
             "BackupFailingSilently",
@@ -157,24 +155,28 @@ pub fn compute_alerts(pool: &web::Data<MainDbPool>, sys: &SharedSystem) -> Vec<A
     }
 
     // --- Database backups (counters) ---
-    let db_ok = metric("db_backup_success_total").unwrap_or(0.0);
-    let db_fail = metric("db_backup_failures_total").unwrap_or(0.0);
-    if db_ok == 0.0 && db_fail == 0.0 {
-        alerts.push(Alert::ok("DatabaseBackupsStalled", "DB backups — n/a", "No DB backup yet recorded"));
-    } else if db_fail > 0.0 && db_fail >= db_ok {
-        alerts.push(Alert::firing(
-            "DatabaseBackupFailing",
-            "warning",
-            "Database backups failing",
-            &format!("{} failures vs {} successes", db_fail, db_ok),
-            &format!("{:.0}/{:.0}", db_fail, db_ok),
-        ));
+    let db_ok_now = metric("db_backup_success_total");
+    let db_fail_now = metric("db_backup_failures_total");
+    if db_ok_now.is_none() && db_fail_now.is_none() {
+        alerts.push(Alert::ok("DatabaseBackupStatus", "DB backups — n/a", "No DB backup yet recorded"));
     } else {
-        alerts.push(Alert::ok(
-            "DatabaseBackupStalled",
-            "Database backups OK",
-            &format!("{} successful DB backups", db_ok),
-        ));
+        let db_ok_d = counter_delta("db_backup_success_total", db_ok_now.unwrap_or(0.0));
+        let db_fail_d = counter_delta("db_backup_failures_total", db_fail_now.unwrap_or(0.0));
+        if db_fail_d > 0.0 && db_fail_d >= db_ok_d {
+            alerts.push(Alert::firing(
+                "DatabaseBackupStatus",
+                "warning",
+                "Database backups failing",
+                &format!("{} failures vs {} successes in the last window", db_fail_d, db_ok_d),
+                &format!("{:.0}/{:.0}", db_fail_d, db_ok_d),
+            ));
+        } else {
+            alerts.push(Alert::ok(
+                "DatabaseBackupStatus",
+                "Database backups OK",
+                &format!("{} successful DB backups in the last window", db_ok_d),
+            ));
+        }
     }
 
     // --- System: CPU / memory / disk (sysinfo, refreshed every 15s) ---
@@ -245,7 +247,8 @@ pub fn compute_alerts(pool: &web::Data<MainDbPool>, sys: &SharedSystem) -> Vec<A
 
     // --- Authentication (counters) ---
     let logins = metric("user_logins_total").unwrap_or(0.0);
-    let login_failures = metric("user_login_failures_total").unwrap_or(0.0);
+    let login_failures = counter_delta("user_login_failures_total", metric("user_login_failures_total").unwrap_or(0.0));
+    let logins = logins.max(login_failures); // keep comparison meaningful on first sample
     if login_failures > 20.0 && login_failures > logins {
         alerts.push(Alert::firing(
             "HighLoginFailureRate",
@@ -259,6 +262,21 @@ pub fn compute_alerts(pool: &web::Data<MainDbPool>, sys: &SharedSystem) -> Vec<A
     }
 
     alerts
+}
+
+
+/// Delta of a cumulative counter since the previous evaluation window.
+/// Alerts must react to what happened RECENTLY, not to lifetime totals: a
+/// counter that once crossed a threshold would otherwise fire forever.
+fn counter_delta(name: &'static str, current: f64) -> f64 {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    static PREV: std::sync::OnceLock<Mutex<HashMap<&'static str, f64>>> = std::sync::OnceLock::new();
+    let map = PREV.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut g = map.lock().unwrap_or_else(|e| e.into_inner());
+    // Leak-free: names are a small closed set (static strings).
+    let prev = g.insert(name, current).unwrap_or(current);
+    (current - prev).max(0.0)
 }
 
 /// Returns the first sample value for a registered Prometheus metric by name.

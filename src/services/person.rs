@@ -103,8 +103,21 @@ pub async fn get_persons(
     let client = utils::get_db_client(&pool.0).await?;
 
     let page = query.page.max(1);
-    let limit = query.limit;
-    let offset = (page - 1) * limit;
+    let limit = query.limit.clamp(1, 200);
+
+    // Checked arithmetic: a huge `page` must not wrap the offset around.
+    let offset: i64 = match (page as u64)
+        .checked_sub(1)
+        .and_then(|p| p.checked_mul(limit as u64))
+        .and_then(|off| i64::try_from(off).ok())
+    {
+        Some(off) => off,
+        None => {
+            return Ok(HttpResponse::BadRequest().json(serde_json::json!({
+                "error": "Invalid pagination parameters"
+            })));
+        }
+    };
 
     // Get total count
     let total_rows = client.query_one("SELECT COUNT(*) FROM persons WHERE user_id = $1", &[&user_uuid]).await
@@ -122,7 +135,7 @@ pub async fn get_persons(
 
     let rows = client.query(
         &format!("{} WHERE p.user_id = $1 ORDER BY p.face_count DESC, p.updated_at DESC LIMIT $2 OFFSET $3", base_query),
-        &[&user_uuid, &(limit as i64), &(offset as i64)],
+        &[&user_uuid, &(limit as i64), &offset],
     ).await
     .map_err(|e| {
         error!("Failed to query persons: {}", e);
@@ -288,6 +301,14 @@ pub async fn get_person_images(
     let person_id = path.into_inner();
     let client = utils::get_db_client(&pool.0).await?;
 
+    // Validate pagination: negative values are rejected, limit is clamped to 200.
+    if query.limit < 0 || query.offset < 0 {
+        return Ok(HttpResponse::BadRequest().json(serde_json::json!({
+            "error": "limit and offset must be non-negative"
+        })));
+    }
+    let limit = query.limit.min(200);
+
     // Verify person belongs to user
     let person_exists = client.query_opt("SELECT 1 FROM persons WHERE id = $1 AND user_id = $2", &[&person_id, &user_uuid]).await
         .map_err(|e| {
@@ -313,7 +334,7 @@ pub async fn get_person_images(
              WHERE f.person_id = $1 AND i.deleted_at IS NULL
              ORDER BY i.created_at DESC
              LIMIT $3 OFFSET $4",
-            &[&person_id, &user_uuid, &query.limit, &query.offset],
+            &[&person_id, &user_uuid, &limit, &query.offset],
         )
         .await
         .map_err(|e| {

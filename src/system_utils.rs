@@ -1,11 +1,21 @@
 use log::{error, info};
 use std::future::Future;
+use std::sync::{OnceLock, RwLock};
 use std::time::Duration;
 use sysinfo::{System, SystemExt};
 use tokio::time::sleep;
 
+/// Process-wide system snapshot. `System::new_all()` is expensive (processes,
+/// disks, networks, CPUs) and only needs to happen once; readers take a short
+/// lock and refresh the specific values they read.
+fn shared_system() -> &'static RwLock<System> {
+    static SYSTEM: OnceLock<RwLock<System>> = OnceLock::new();
+    SYSTEM.get_or_init(|| RwLock::new(System::new_all()))
+}
+
 pub async fn get_load_average() -> f64 {
-    let sys = System::new_all();
+    let mut sys = shared_system().write().unwrap_or_else(|e| e.into_inner());
+    sys.refresh_cpu();
     sys.load_average().one
 }
 
@@ -17,7 +27,7 @@ pub async fn get_gpu_load() -> u32 {
 }
 
 pub fn get_cpu_count() -> usize {
-    let sys = System::new_all();
+    let sys = shared_system().read().unwrap_or_else(|e| e.into_inner());
     sys.cpus().len()
 }
 

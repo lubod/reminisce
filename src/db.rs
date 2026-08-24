@@ -3,13 +3,12 @@ use tokio_postgres::Config as PgConfig;
 use std::str::FromStr;
 use deadpool_postgres::Manager as PgManager;
 use std::time::Duration;
-use log::{info, warn};
+use log::{error, info};
 
 /// Configuration options for database connection pool
 #[derive(Clone)]
 pub struct DbPoolOptions {
     pub max_size: usize,
-    pub min_size: usize,
     pub timeout_secs: u64,
 }
 
@@ -17,7 +16,6 @@ impl Default for DbPoolOptions {
     fn default() -> Self {
         Self {
             max_size: 16,
-            min_size: 4,
             timeout_secs: 30,
         }
     }
@@ -36,9 +34,6 @@ pub fn create_pool_with_options(
 
     // Configure pool with explicit settings
     let mut pool_config = PoolConfig::new(options.max_size);
-    // NOTE: deadpool 0.9 has no warm/min-idle pool size — pools grow lazily to
-    // max_size on demand, so DbPoolOptions.min_size is intentionally unused.
-    let _ = options.min_size;
     pool_config.timeouts = Timeouts {
         wait: Some(Duration::from_secs(options.timeout_secs)),
         create: Some(Duration::from_secs(options.timeout_secs)),
@@ -69,26 +64,50 @@ pub fn create_pool_with_options(
     Ok(pool)
 }
 
-/// Execute a SQL script, splitting on semicolons while respecting `$$`-quoted
-/// blocks, single-quoted string literals (including `''` escapes), and `--`
-/// line comments. The first failing statement aborts the script with a readable
-/// error so a partially-applied migration is never silently recorded as done.
-async fn exec_sql_script(client: &deadpool_postgres::Object, sql: &str, label: &str) -> Result<usize, String> {
-    let mut ok = 0usize;
+/// Split a SQL script into individual statements, splitting on semicolons while
+/// respecting `$$`-quoted blocks, single-quoted string literals (including `''`
+/// escapes), `--` line comments, and `/* ... */` block comments (nestable, as in
+/// PostgreSQL). Comments are stripped from the output.
+fn split_sql_statements(sql: &str) -> Vec<String> {
+    let mut statements: Vec<String> = Vec::new();
     let mut current = String::new();
     let mut in_dollar = false;
     let mut in_single_quote = false;
+    let mut block_comment_depth = 0usize;
     let chars: Vec<char> = sql.chars().collect();
     let mut i = 0usize;
 
     while i < chars.len() {
         let c = chars[i];
 
+        // Inside a /* ... */ comment: track nesting, emit nothing.
+        if block_comment_depth > 0 {
+            if c == '/' && i + 1 < chars.len() && chars[i + 1] == '*' {
+                block_comment_depth += 1;
+                i += 2;
+                continue;
+            }
+            if c == '*' && i + 1 < chars.len() && chars[i + 1] == '/' {
+                block_comment_depth -= 1;
+                i += 2;
+                continue;
+            }
+            i += 1;
+            continue;
+        }
+
         // Line comment (outside quotes): drop through to end of line.
         if c == '-' && i + 1 < chars.len() && chars[i + 1] == '-' && !in_dollar && !in_single_quote {
             while i < chars.len() && chars[i] != '\n' {
                 i += 1;
             }
+            continue;
+        }
+
+        // Block comment open (outside quotes).
+        if c == '/' && i + 1 < chars.len() && chars[i + 1] == '*' && !in_dollar && !in_single_quote {
+            block_comment_depth = 1;
+            i += 2;
             continue;
         }
 
@@ -119,19 +138,11 @@ async fn exec_sql_script(client: &deadpool_postgres::Object, sql: &str, label: &
             continue;
         }
 
-        // Statement terminator (only outside quotes).
+        // Statement terminator (only outside quotes/comments).
         if c == ';' && !in_dollar && !in_single_quote {
             let statement = current.trim();
             if !statement.is_empty() {
-                match client.execute(statement, &[]).await {
-                    Ok(_) => ok += 1,
-                    Err(e) => {
-                        return Err(format!(
-                            "[{}] statement failed: {}\nStatement: {}",
-                            label, e, statement
-                        ));
-                    }
-                }
+                statements.push(statement.to_string());
             }
             current.clear();
             i += 1;
@@ -142,21 +153,69 @@ async fn exec_sql_script(client: &deadpool_postgres::Object, sql: &str, label: &
         i += 1;
     }
 
-    // Execute any trailing statement without a final semicolon.
+    // Keep any trailing statement without a final semicolon.
     let statement = current.trim();
     if !statement.is_empty() {
+        statements.push(statement.to_string());
+    }
+
+    statements
+}
+
+/// Execute each statement of a script sequentially. The first failing statement
+/// aborts the script with a readable error (including the statement index) so a
+/// partially-applied migration is never silently recorded as done.
+async fn exec_sql_script(client: &deadpool_postgres::Object, sql: &str, label: &str) -> Result<usize, String> {
+    let statements = split_sql_statements(sql);
+    for (idx, statement) in statements.iter().enumerate() {
+        client.execute(statement, &[]).await.map_err(|e| {
+            format!(
+                "[{}] statement {} failed: {}\nStatement: {}",
+                label,
+                idx + 1,
+                e,
+                statement
+            )
+        })?;
+    }
+    Ok(statements.len())
+}
+
+/// Execute a versioned migration inside a single transaction: the whole file is
+/// applied atomically (`BEGIN; ...; COMMIT`) or rolled back entirely on the first
+/// failing statement. The error message includes the failed statement index.
+async fn exec_migration_script(client: &deadpool_postgres::Object, sql: &str, version: &str) -> Result<usize, String> {
+    let statements = split_sql_statements(sql);
+
+    client.execute("BEGIN", &[]).await.map_err(|e| {
+        format!("[{}] BEGIN failed: {}", version, e)
+    })?;
+
+    for (idx, statement) in statements.iter().enumerate() {
         match client.execute(statement, &[]).await {
-            Ok(_) => ok += 1,
+            Ok(_) => {}
             Err(e) => {
+                let rollback_result = client.execute("ROLLBACK", &[]).await;
                 return Err(format!(
-                    "[{}] trailing statement failed: {}\nStatement: {}",
-                    label, e, statement
+                    "[{}] statement {} failed (transaction rolled back{}): {}\nStatement: {}",
+                    version,
+                    idx + 1,
+                    match rollback_result {
+                        Ok(_) => "".to_string(),
+                        Err(re) => format!(", ROLLBACK also failed: {}", re),
+                    },
+                    e,
+                    statement
                 ));
             }
         }
     }
 
-    Ok(ok)
+    client.execute("COMMIT", &[]).await.map_err(|e| {
+        format!("[{}] COMMIT failed: {}", version, e)
+    })?;
+
+    Ok(statements.len())
 }
 
 /// Run init.sql against the pool at startup.
@@ -176,7 +235,21 @@ pub async fn run_migrations_with_schema(pool: &Pool, init_sql: &str) -> Result<(
     // and re-runs on every boot, so a failure here is logged, not aborting.
     match exec_sql_script(&client, init_sql, "init.sql").await {
         Ok(n) => info!("DB init.sql: {} statements applied", n),
-        Err(msg) => warn!("DB init.sql error (continuing, idempotent): {}", msg),
+        Err(msg) => {
+            // A failed statement aborts the remaining script; surface how far it
+            // got (the failing index is in `msg`) at ERROR level.
+            let applied = msg
+                .split("statement ")
+                .nth(1)
+                .and_then(|rest| rest.split(' ').next())
+                .and_then(|idx| idx.parse::<usize>().ok())
+                .map(|idx| idx.saturating_sub(1))
+                .unwrap_or(0);
+            error!(
+                "DB init.sql error after {} statements applied (continuing, idempotent): {}",
+                applied, msg
+            );
+        }
     }
 
     // Ensure dynamic sharding columns exist for backward compatibility
@@ -221,8 +294,10 @@ pub async fn run_migrations_with_schema(pool: &Pool, init_sql: &str) -> Result<(
         info!("Applying migration {}...", version);
         // A failed migration is FATAL: do not record the version and fail
         // startup — otherwise a broken upgrade is recorded as applied and the
-        // schema is left inconsistent while the server keeps running.
-        let n = exec_sql_script(&client, sql, version).await.map_err(|msg| {
+        // schema is left inconsistent while the server keeps running. The whole
+        // migration file runs in one transaction (BEGIN/COMMIT) and is rolled
+        // back on the first failing statement.
+        let n = exec_migration_script(&client, sql, version).await.map_err(|msg| {
             std::io::Error::other(format!("Database migration {} failed: {}", version, msg))
         })?;
         info!("Migration {}: {} statements applied", version, n);
