@@ -60,6 +60,7 @@ pub mod p2p_restore;
     pub mod proxy_manager;
     pub mod duplicates;
     pub mod quality;
+    pub mod maintenance;
     pub mod user_management;
     pub mod observability;
 }
@@ -604,6 +605,7 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
             .app_data(duplicate_status.clone())
             .configure(configure_swagger)
             .route("/metrics", web::get().to(metrics_handler))
+            .service(services::maintenance::trigger_dimension_backfill)
             .service(ping)
             .service(health_check)
             .service(

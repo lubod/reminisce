@@ -800,6 +800,14 @@ info!("Starting face detection for image: {}", hash);
                         .unwrap_or(0);
                     match tokio::fs::read(&file_path).await {
                         Ok(image_data) => {
+                            // The quality scorer works on a 384px thumbnail — its
+                            // dimensions must NEVER reach the DB. Record the
+                            // ORIGINAL image dimensions instead.
+                            let orig_dims = image::io::Reader::new(std::io::Cursor::new(&image_data))
+                                .with_guessed_format()
+                                .ok()
+                                .and_then(|r| r.into_dimensions().ok())
+                                .map(|(w, h)| (w as i32, h as i32));
                             match resize_image_for_ai(image_data, 384).await {
                                 Ok(resized) => {
                                     match crate::services::quality::get_quality_score(&resized, &config_clone).await {
@@ -808,7 +816,8 @@ info!("Starting face detection for image: {}", hash);
                                                 "UPDATE images SET aesthetic_score=$1, sharpness_score=$2, width=$3, height=$4, \
                                                  file_size_bytes=$5, quality_score_generated_at=NOW() \
                                                  WHERE hash=$6 AND user_id=$7",
-                                                &[&q.aesthetic_score, &q.sharpness_score, &q.width, &q.height,
+                                                &[&q.aesthetic_score, &q.sharpness_score,
+                                                  &orig_dims.map(|d| d.0), &orig_dims.map(|d| d.1),
                                                   &file_size, &hash, &user_id],
                                             ).await;
                                             info!("Quality scored image {} (aesthetic={:.1}, sharpness={:.0})", hash, q.aesthetic_score, q.sharpness_score);
