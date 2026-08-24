@@ -250,17 +250,37 @@ pub async fn get_video(
 /// Derive a display orientation label from stored dimensions + EXIF-style
 /// orientation. Orientations 5-8 swap the sensor width/height, so the
 /// *effective* dimensions decide Landscape vs Portrait vs Square.
-pub fn orientation_label(
+/// Effective display dimensions after applying the EXIF-style rotation.
+/// Orientations 5-8 swap the sensor's width/height.
+fn effective_dimensions(
     width: Option<i32>,
     height: Option<i32>,
     orientation: Option<i16>,
-) -> Option<String> {
+) -> Option<(i64, i64)> {
     let (w, h) = match (width, height) {
         (Some(w), Some(h)) if w > 0 && h > 0 => (w as i64, h as i64),
         _ => return None,
     };
     let swaps = matches!(orientation, Some(5..=8));
-    let (ew, eh) = if swaps { (h, w) } else { (w, h) };
+    Some(if swaps { (h, w) } else { (w, h) })
+}
+
+/// "W × H" of the DISPLAYED image (post-rotation), e.g. `"3000 × 4000"`.
+pub fn resolution_label(
+    width: Option<i32>,
+    height: Option<i32>,
+    orientation: Option<i16>,
+) -> Option<String> {
+    effective_dimensions(width, height, orientation)
+        .map(|(ew, eh)| format!("{ew} × {eh}"))
+}
+
+pub fn orientation_label(
+    width: Option<i32>,
+    height: Option<i32>,
+    orientation: Option<i16>,
+) -> Option<String> {
+    let (ew, eh) = effective_dimensions(width, height, orientation)?;
     const TOL: i64 = 5; // percent tolerance around square
     if (ew - eh).abs() * 100 <= eh * TOL {
         Some("Square".to_string())
@@ -284,6 +304,9 @@ pub fn orientation_label(
     "file_size_bytes": 4567890,
     "width": 4032,
     "height": 3024,
+    "orientation": 6,
+    "orientation_label": "Portrait",
+    "resolution_label": "3024 × 4032",
     "media_type": "image"
 }))]
 pub struct ImageMetadata {
@@ -304,6 +327,9 @@ pub struct ImageMetadata {
     /// stored orientation is applied ("Landscape" / "Portrait" / "Square").
     #[serde(skip_serializing_if = "Option::is_none")]
     pub orientation_label: Option<String>,
+    /// Displayed resolution "W × H" after rotation is applied.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolution_label: Option<String>,
     pub media_type: Option<String>,
 }
 
@@ -364,6 +390,7 @@ pub async fn get_image_metadata(
             height: row.get(10),
             orientation: row.get(11),
             orientation_label: orientation_label(row.get(9), row.get(10), row.get(11)),
+            resolution_label: resolution_label(row.get(9), row.get(10), row.get(11)),
             media_type: Some("image".to_string()),
         };
 
@@ -402,6 +429,7 @@ pub async fn get_image_metadata(
             height: row.get(10),
             orientation: None,
             orientation_label: None,
+            resolution_label: None,
             media_type: Some("video".to_string()),
         };
 
@@ -1192,5 +1220,24 @@ mod orientation_label_tests {
         assert_eq!(orientation_label(None, Some(100), Some(1)), None);
         assert_eq!(orientation_label(Some(0), Some(0), Some(1)), None);
         assert_eq!(orientation_label(Some(-5), Some(10), Some(1)), None);
+    }
+}
+
+#[cfg(test)]
+mod resolution_label_tests {
+    use super::{orientation_label, resolution_label};
+
+    #[test]
+    fn resolution_reflects_displayed_dimensions() {
+        // 384x256 sensor rotated 90° CW (6) displays as 256x384 portrait.
+        assert_eq!(resolution_label(Some(384), Some(256), Some(6)), Some("256 × 384".to_string()));
+        assert_eq!(orientation_label(Some(384), Some(256), Some(6)), Some("Portrait".to_string()));
+        // Unrotated stays as stored.
+        assert_eq!(resolution_label(Some(4000), Some(3000), Some(1)), Some("4000 × 3000".to_string()));
+    }
+
+    #[test]
+    fn resolution_none_without_dimensions() {
+        assert_eq!(resolution_label(None, None, None), None);
     }
 }

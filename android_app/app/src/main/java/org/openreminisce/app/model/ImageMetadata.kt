@@ -16,5 +16,7 @@ data class ImageMetadata(
     val orientation: Int? = null,
     /** "Landscape" / "Portrait" / "Square" as computed by the server. */
     val orientation_label: String? = null,
+    /** Displayed resolution "W × H" after rotation, e.g. "3000 × 4000". */
+    val resolution_label: String? = null,
     val media_type: String? = null
 )

@@ -117,17 +117,21 @@ class MediaInfoBottomSheetFragment : BottomSheetDialogFragment() {
                         // Landscape/Portrait/Square from the server (effective
                         // dimensions after EXIF rotation applied).
                         val orientLabel = meta.orientation_label
-                        if (w != null && w > 0 && h != null && h > 0) {
-                            dimensionsText.text = buildString {
-                                append("Dimensions: ${w} × ${h}")
-                                if (!orientLabel.isNullOrEmpty()) append("  ·  $orientLabel")
+                        // Prefer the server-computed DISPLAYED resolution
+                        // (post-rotation) over raw sensor dimensions.
+                        when {
+                            !meta.resolution_label.isNullOrEmpty() -> {
+                                dimensionsText.text = buildString {
+                                    append("Resolution: ${meta.resolution_label}")
+                                    if (!orientLabel.isNullOrEmpty()) append("  ·  $orientLabel")
+                                }
+                                dimensionsText.visibility = View.VISIBLE
                             }
-                            dimensionsText.visibility = View.VISIBLE
-                        } else if (!orientLabel.isNullOrEmpty()) {
-                            dimensionsText.text = "Orientation: $orientLabel"
-                            dimensionsText.visibility = View.VISIBLE
-                        } else {
-                            dimensionsText.visibility = View.GONE
+                            w != null && w > 0 && h != null && h > 0 -> {
+                                dimensionsText.text = "Dimensions: ${w} × ${h}"
+                                dimensionsText.visibility = View.VISIBLE
+                            }
+                            else -> dimensionsText.visibility = View.GONE
                         }
 
                         val sizeBytes = meta.file_size_bytes

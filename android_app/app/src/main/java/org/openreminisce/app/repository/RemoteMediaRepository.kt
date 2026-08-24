@@ -195,6 +195,7 @@ class RemoteMediaRepository(private val context: Context) {
                     height = if (json.has("height") && !json.isNull("height")) json.optInt("height") else null,
                     orientation = if (json.has("orientation") && !json.isNull("orientation")) json.optInt("orientation") else null,
                     orientation_label = json.optString("orientation_label").takeIf { it.isNotEmpty() && it != "null" },
+                    resolution_label = json.optString("resolution_label").takeIf { it.isNotEmpty() && it != "null" },
                     media_type = json.optString("media_type").takeIf { it.isNotEmpty() && it != "null" }
                 )
                 Result.success(metadata)

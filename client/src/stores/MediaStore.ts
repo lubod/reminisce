@@ -62,6 +62,8 @@ export interface ImageMetadata {
     orientation?: number | null;
     /** "Landscape" / "Portrait" / "Square" derived from effective dimensions. */
     orientation_label?: string | null;
+    /** Displayed resolution "W × H" after rotation, e.g. "3000 × 4000". */
+    resolution_label?: string | null;
     device_id?: string | null;
     file_size_bytes?: number | null;
 }

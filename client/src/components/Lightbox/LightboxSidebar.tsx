@@ -215,6 +215,12 @@ export const LightboxSidebar: React.FC<LightboxSidebarProps> = ({
                                 <div>{metadata.orientation_label}</div>
                             </div>
                         )}
+                        {(metadata?.resolution_label || (metadata?.width != null && metadata?.height != null)) && (
+                            <div>
+                                <div className="text-gray-400 text-xs mb-1">Resolution</div>
+                                <div>{metadata.resolution_label ?? `${metadata.width} × ${metadata.height}`}</div>
+                            </div>
+                        )}
                     </div>
                 )}
 
