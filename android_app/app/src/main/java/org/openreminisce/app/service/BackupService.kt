@@ -17,6 +17,8 @@ class BackupService : Service() {
         private const val PREFS_NAME = "BackupState"
         private const val KEY_BACKUP_TYPE = "backup_type"
         private const val KEY_IS_QUICK_BACKUP = "is_quick_backup"
+        private const val KEY_BACKUP_RUNNING_UNTIL = "backup_running_until"
+        private const val BACKUP_RUNNING_WINDOW_MS = 6L * 60 * 60 * 1000
     }
 
     override fun onBind(intent: Intent?): IBinder? {
@@ -33,6 +35,7 @@ class BackupService : Service() {
                 // Remove backup type and quick backup flags when backup stops
                 remove(KEY_BACKUP_TYPE)
                 remove(KEY_IS_QUICK_BACKUP)
+                remove(KEY_BACKUP_RUNNING_UNTIL)
             }
             apply()
         }
@@ -177,8 +180,17 @@ class BackupService : Service() {
         // Store the work ID so we can cancel it later
         currentWorkId = backupWorkRequest.id
 
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            .edit()
+            .putLong(KEY_BACKUP_RUNNING_UNTIL, System.currentTimeMillis() + BACKUP_RUNNING_WINDOW_MS)
+            .apply()
+
         Log.d(TAG, "Enqueuing backup work request with ID: ${backupWorkRequest.id}")
-        WorkManager.getInstance(this).enqueue(backupWorkRequest)
+        WorkManager.getInstance(this).enqueueUniqueWork(
+            "reminisce_backup_work",
+            androidx.work.ExistingWorkPolicy.KEEP,
+            backupWorkRequest
+        )
 
         // Remove any existing observer to prevent memory leaks
         workInfoObserver?.let { observer ->

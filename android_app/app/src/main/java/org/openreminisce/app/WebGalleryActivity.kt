@@ -37,6 +37,13 @@ class WebGalleryActivity : AppCompatActivity() {
     private var authToken: String? = null
     private var isBackingUp = false
 
+    private fun isBackupRunning(): Boolean {
+        if (isBackingUp) return true
+        val prefs = getSharedPreferences("BackupState", MODE_PRIVATE)
+        val runningUntil = prefs.getLong("backup_running_until", 0L)
+        return runningUntil > System.currentTimeMillis()
+    }
+
     private val backupStatusReceiver = object : android.content.BroadcastReceiver() {
         override fun onReceive(context: android.content.Context?, intent: android.content.Intent?) {
             Log.d(TAG, "Received broadcast: ${intent?.action}")
@@ -96,6 +103,11 @@ class WebGalleryActivity : AppCompatActivity() {
     }
 
     private fun startQuickBackup() {
+        if (isBackupRunning()) {
+            Log.d(TAG, "Quick backup ignored — backup already running")
+            return
+        }
+
         maybePromptBatteryOptimization()
 
         isBackingUp = true
@@ -132,6 +144,11 @@ class WebGalleryActivity : AppCompatActivity() {
     }
 
     private fun startFullBackup() {
+        if (isBackupRunning()) {
+            Log.d(TAG, "Full backup ignored — backup already running")
+            return
+        }
+
         maybePromptBatteryOptimization()
 
         isBackingUp = true
@@ -164,6 +181,7 @@ class WebGalleryActivity : AppCompatActivity() {
             putBoolean("cancel_backup", true)
             remove("backup_type")
             remove("is_quick_backup")
+            remove("backup_running_until")
             apply()
         }
 

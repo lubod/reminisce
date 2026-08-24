@@ -8,7 +8,6 @@ import android.os.Build
 import android.provider.MediaStore
 import android.util.Log
 import org.openreminisce.app.model.ImageInfo
-import org.openreminisce.app.util.ThumbnailHelper
 import java.io.File
 
 class MediaHelper {
@@ -313,20 +312,35 @@ class MediaHelper {
         /**
          * Loads location data from EXIF for images on Android 10+.
          * Requires ACCESS_MEDIA_LOCATION permission.
+         * Honors the "Include GPS location" preference: when it is OFF, or when
+         * ACCESS_MEDIA_LOCATION is not granted, the plain (non-original) URI is returned so
+         * callers read the redacted stream instead of calling setRequireOriginal().
          */
-        fun loadLocationDataIfNeeded(@Suppress("UNUSED_PARAMETER") context: Context, uri: Uri): Uri {
-            return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                try {
-                    // setRequireOriginal() ensures we get the original file with EXIF data intact
-                    MediaStore.setRequireOriginal(uri)
-                } catch (e: SecurityException) {
-                    Log.w(TAG, "ACCESS_MEDIA_LOCATION permission not granted, EXIF location may be redacted", e)
-                    uri
-                } catch (e: Exception) {
-                    Log.e(TAG, "Error loading location data for URI: $uri", e)
-                    uri
-                }
-            } else {
+        fun loadLocationDataIfNeeded(context: Context, uri: Uri): Uri {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+                return uri
+            }
+            val includeGps = PreferenceHelper.getIncludeGps(context)
+            if (!includeGps) {
+                Log.d(TAG, "\"Include GPS location\" is OFF — using non-original stream (EXIF location redacted)")
+                return uri
+            }
+            val permissionGranted = androidx.core.content.ContextCompat.checkSelfPermission(
+                context,
+                android.Manifest.permission.ACCESS_MEDIA_LOCATION
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+            if (!permissionGranted) {
+                Log.w(TAG, "ACCESS_MEDIA_LOCATION not granted — using non-original stream (EXIF location redacted)")
+                return uri
+            }
+            return try {
+                // setRequireOriginal() ensures we get the original file with EXIF data intact
+                MediaStore.setRequireOriginal(uri)
+            } catch (e: SecurityException) {
+                Log.w(TAG, "ACCESS_MEDIA_LOCATION permission not granted, EXIF location may be redacted", e)
+                uri
+            } catch (e: Exception) {
+                Log.e(TAG, "Error loading location data for URI: $uri", e)
                 uri
             }
         }

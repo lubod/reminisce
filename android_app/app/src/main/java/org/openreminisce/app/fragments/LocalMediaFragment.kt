@@ -49,8 +49,16 @@ class LocalMediaFragment : Fragment() {
     private val mediaPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
-        val allGranted = permissions.values.all { it }
-        if (allGranted) {
+        // ACCESS_MEDIA_LOCATION is optional: gallery loading must not be blocked when only
+        // the location grant is denied (EXIF GPS is simply redacted on Android 10+).
+        val requiredGranted = permissions.filterKeys { it != Manifest.permission.ACCESS_MEDIA_LOCATION }
+            .values
+            .all { it }
+        val locationGranted = permissions[Manifest.permission.ACCESS_MEDIA_LOCATION]
+        if (locationGranted == false) {
+            Log.w(TAG, "ACCESS_MEDIA_LOCATION denied — EXIF GPS data will be redacted on Android 10+")
+        }
+        if (requiredGranted) {
             Log.d(TAG, "Media permissions granted, loading local gallery")
             loadLocalMediaGallery()
         } else {
@@ -194,17 +202,23 @@ class LocalMediaFragment : Fragment() {
     }
 
     private fun requestMediaPermissions() {
-        val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        val permissions = (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             arrayOf(
                 Manifest.permission.READ_MEDIA_IMAGES,
                 Manifest.permission.READ_MEDIA_VIDEO
             )
         } else {
             arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+        }).toMutableList()
+
+        // Android 10+ (API 29+): needed so uploads/hash reads can access original EXIF (GPS) data
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            permissions.add(Manifest.permission.ACCESS_MEDIA_LOCATION)
         }
 
-        Log.d(TAG, "Requesting media permissions: ${permissions.joinToString()}")
-        mediaPermissionLauncher.launch(permissions)
+        val permissionArray = permissions.toTypedArray()
+        Log.d(TAG, "Requesting media permissions: ${permissionArray.joinToString()}")
+        mediaPermissionLauncher.launch(permissionArray)
     }
 
     override fun onDestroyView() {

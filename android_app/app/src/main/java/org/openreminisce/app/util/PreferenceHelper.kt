@@ -11,6 +11,7 @@ class PreferenceHelper {
         private const val KNOWN_SERVER_URLS_KEY = "known_server_urls"
         private const val BACKUP_TYPE_KEY = "backup_type"
         private const val MEDIA_TYPE_KEY = "media_type"
+        private const val INCLUDE_GPS_KEY = "include_gps"
 
         private fun getSharedPreferences(context: Context) =
             context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -69,6 +70,14 @@ class PreferenceHelper {
 
         fun getMediaType(context: Context): String {
             return getSharedPreferences(context).getString(MEDIA_TYPE_KEY, "all") ?: "all"
+        }
+
+        fun setIncludeGps(context: Context, include: Boolean) {
+            getSharedPreferences(context).edit().putBoolean(INCLUDE_GPS_KEY, include).apply()
+        }
+
+        fun getIncludeGps(context: Context): Boolean {
+            return getSharedPreferences(context).getBoolean(INCLUDE_GPS_KEY, true)
         }
     }
 }

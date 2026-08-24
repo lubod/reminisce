@@ -298,7 +298,12 @@ class BackupWorker(context: Context, val params: WorkerParameters) : Worker(cont
 
     private fun performMediaBackup(baseUrl: String, token: String, quickBackup: Boolean, isVideo: Boolean): Boolean {
         Log.d(TAG, "Performing ${if(isVideo) "video" else "image"} backup - quickBackup: $quickBackup")
-        
+
+        // Captured up front as the candidate timestamp, but only persisted once this pass completes successfully
+        val startTime = System.currentTimeMillis() / 1000 // Unix timestamp in seconds
+
+        val databaseHelper = DatabaseHelper(applicationContext)
+
         // Get all media files of the requested type
         val allMedia = if (isVideo) {
             MediaHelper.getAllVideos(applicationContext)
@@ -320,11 +325,10 @@ class BackupWorker(context: Context, val params: WorkerParameters) : Worker(cont
                 .putInt("fileIndex", 0)
                 .putInt("totalFiles", 0)
                 .build())
+            persistLastBackupTimestamp(databaseHelper, isVideo, startTime)
             return true
         }
         
-        val databaseHelper = DatabaseHelper(applicationContext)
-
         // Log the device ID being used - critical for debugging skip issues
         val currentDeviceId = AuthHelper.getDeviceId(applicationContext)
         LogCollector.i(TAG, "=== DEVICE ID CHECK ===")
@@ -367,16 +371,7 @@ class BackupWorker(context: Context, val params: WorkerParameters) : Worker(cont
             allMedia
         }
         
-        // Save the backup start timestamp at the beginning of the backup (for both full and quick backups)
-        // This ensures subsequent quick backups only process files newer than this backup's start time
-        val startTime = System.currentTimeMillis() / 1000 // Unix timestamp in seconds
-        if (isVideo) {
-            Log.d(TAG, "${if(quickBackup) "Quick" else "Full"} video backup started, saving start timestamp: $startTime")
-            databaseHelper.saveLastVideoBackupTimestamp(startTime)
-        } else {
-            Log.d(TAG, "${if(quickBackup) "Quick" else "Full"} image backup started, saving start timestamp: $startTime")
-            databaseHelper.saveLastImageBackupTimestamp(startTime)
-        }
+        Log.d(TAG, "${if(quickBackup) "Quick" else "Full"} ${if(isVideo) "video" else "image"} backup started, candidate last-backup timestamp: $startTime (persisted only after this pass succeeds)")
 
         var successfullyBackedUp = 0
         var skippedExisting = 0
@@ -519,6 +514,11 @@ class BackupWorker(context: Context, val params: WorkerParameters) : Worker(cont
                 .build(), forceUpdate = true)
                 
             val chunkResult = batchCheckFiles(chunk, baseUrl, token, if(isVideo) "video" else "image", client)
+            if (chunkResult == null) {
+                Log.e(TAG, "Phase 1: batch check failed — aborting to avoid mass re-upload")
+                LogCollector.e(TAG, "batch check failed — aborting to avoid mass re-upload")
+                return false
+            }
             phase1Result += chunkResult
             phase1CheckedCount += chunk.size
             
@@ -694,6 +694,7 @@ class BackupWorker(context: Context, val params: WorkerParameters) : Worker(cont
 
             if (uploadSuccess) {
                 successfullyBackedUp++
+                databaseHelper.markFileBackedUp(file.mediaInfo.id, file.hash)
                 // Hash is already cached from Phase 1
             } else {
                 failedCount++
@@ -842,7 +843,13 @@ class BackupWorker(context: Context, val params: WorkerParameters) : Worker(cont
                 }
                 
                 Log.d(TAG, "Batch checking ${filesToCheck.size} hashes with metadata")
-                batchCheckFiles(filesToCheck, baseUrl, token, if(isVideo) "video" else "image", client)
+                val uncachedChunkResult = batchCheckFiles(filesToCheck, baseUrl, token, if(isVideo) "video" else "image", client)
+                if (uncachedChunkResult == null) {
+                    Log.e(TAG, "Uncached chunk ${chunkIndex + 1}: batch check failed — aborting to avoid mass re-upload")
+                    LogCollector.e(TAG, "batch check failed — aborting to avoid mass re-upload")
+                    return false
+                }
+                uncachedChunkResult
             } else {
                 BatchCheckResult.EMPTY
             }
@@ -909,6 +916,7 @@ class BackupWorker(context: Context, val params: WorkerParameters) : Worker(cont
 
                 if (uploadSuccess) {
                     successfullyBackedUp++
+                    databaseHelper.markFileBackedUp(chunkFile.mediaInfo.id, chunkFile.hash)
                     // Hash already cached during calculation
                 } else {
                     failedCount++
@@ -951,9 +959,21 @@ class BackupWorker(context: Context, val params: WorkerParameters) : Worker(cont
             failedFiles = failedFiles
         )
 
+        persistLastBackupTimestamp(databaseHelper, isVideo, startTime)
+
         // Always return true if we completed the loop (stats will show success/failure breakdown)
         // Only return false if we couldn't even start or had a fatal error
         return true
+    }
+
+    private fun persistLastBackupTimestamp(databaseHelper: DatabaseHelper, isVideo: Boolean, startTime: Long) {
+        if (isVideo) {
+            Log.d(TAG, "Backup pass succeeded, saving last VIDEO backup timestamp: $startTime")
+            databaseHelper.saveLastVideoBackupTimestamp(startTime)
+        } else {
+            Log.d(TAG, "Backup pass succeeded, saving last IMAGE backup timestamp: $startTime")
+            databaseHelper.saveLastImageBackupTimestamp(startTime)
+        }
     }
 
     /**
@@ -992,7 +1012,9 @@ class BackupWorker(context: Context, val params: WorkerParameters) : Worker(cont
      * @param token Authentication token
      * @param type "image" or "video"
      * @param client OkHttpClient to use
-     * @return BatchCheckResult with existing_hashes and needs_upload sets
+     * @return BatchCheckResult with existing_hashes and needs_upload sets, or null if the check FAILED
+     *         (network/HTTP error). Null is distinct from an empty result ("none exist") so callers can
+     *         abort instead of mass re-uploading everything.
      */
     private fun batchCheckFiles(
         files: List<FileMetadata>,
@@ -1000,16 +1022,19 @@ class BackupWorker(context: Context, val params: WorkerParameters) : Worker(cont
         token: String,
         type: String,
         client: OkHttpClient
-    ): BatchCheckResult {
+    ): BatchCheckResult? {
         if (files.isEmpty()) {
             return BatchCheckResult.EMPTY
         }
 
         if (files.size > 100) {
             Log.w(TAG, "Batch check limited to 100 files, got ${files.size}. Splitting...")
-            return files.chunked(100).fold(BatchCheckResult.EMPTY) { acc, chunk ->
-                acc + batchCheckFiles(chunk, baseUrl, token, type, client)
+            var combined = BatchCheckResult.EMPTY
+            for (chunk in files.chunked(100)) {
+                val chunkResult = batchCheckFiles(chunk, baseUrl, token, type, client) ?: return null
+                combined += chunkResult
             }
+            return combined
         }
 
         val checkUrl = "${baseUrl.trimEnd('/')}/api/upload/batch-check-${type}s"
@@ -1095,7 +1120,7 @@ class BackupWorker(context: Context, val params: WorkerParameters) : Worker(cont
             LogCollector.e(TAG, "Batch check EXCEPTION: ${e.javaClass.simpleName}: ${e.message}")
         }
 
-        return BatchCheckResult.EMPTY
+        return null
     }
 
     private fun uploadFileWithProgress(
@@ -1175,122 +1200,117 @@ class BackupWorker(context: Context, val params: WorkerParameters) : Worker(cont
             .build()
 
         try {
-            val call = client.newCall(request)
-            // Store the active call so it can be cancelled if needed
-            activeCall = call
+            val response = AuthHelper.executeWithTokenRefresh(applicationContext, client, request)
 
-            val response = call.execute()
-
-            // Clear the active call reference
-            activeCall = null
-
-            // Check if cancelled after upload completed but before processing response
-            if (isStopped) {
-                Log.d(TAG, "Upload cancelled after completion: $fileName")
-                return false
-            }
-
-            if (response.isSuccessful) {
-                Log.d(TAG, "File uploaded successfully: $fileName${if (isRetry) " (after retry)" else ""}")
-                LogCollector.i(TAG, "Uploaded: $fileName")
-                return true
-            } else if (response.code == 401) {
-                Log.e(TAG, "Authentication failed (401) during file upload")
-                LogCollector.e(TAG, "Upload FAILED (401 auth error): $fileName")
-                return false
-            } else if (response.code == 400) {
-                val responseBody = response.body?.string()
-                Log.e(TAG, "Upload failed with 400 Bad Request: $responseBody for $fileName")
-
-                // Try to parse the error response to check if it's a hash verification failure
-                try {
-                    val json = org.json.JSONObject(responseBody ?: "{}")
-                    val status = json.optString("status", "")
-                    val message = json.optString("message", "")
-
-                    if (status == "error" && message.contains("Hash verification failed", ignoreCase = true)) {
-                        val expectedHash = json.optString("expected_hash", "unknown")
-                        val calculatedHash = json.optString("calculated_hash", "unknown")
-
-                        Log.e(TAG, "HASH VERIFICATION FAILED for $fileName:")
-                        Log.e(TAG, "  - Client calculated hash: $fileHash")
-                        Log.e(TAG, "  - Server expected hash: $expectedHash")
-                        Log.e(TAG, "  - Server calculated hash: $calculatedHash")
-
-                        // Invalidate the cached hash for this file since it appears to be incorrect
-                        val mediaId = uri.lastPathSegment ?: uri.toString()
-                        val databaseHelper = DatabaseHelper(applicationContext)
-                        databaseHelper.deleteHash(mediaId)
-                        Log.w(TAG, "Invalidated cached hash for $fileName")
-
-                        // Only retry once to avoid infinite loops
-                        if (!isRetry && fileSize != null) {
-                            Log.w(TAG, "Recalculating hash and retrying upload for $fileName")
-
-                            // Recalculate the hash
-                            val recalculatedHash = try {
-                                HashCalculator.calculateHashFromUri(
-                                    applicationContext,
-                                    uri,
-                                    fileSize,
-                                    onProgress = { progress ->
-                                        if (!isStopped) {
-                                            setProgressThrottled(androidx.work.Data.Builder()
-                                                .putFloat("overallProgress", overallProgress)
-                                                .putFloat("fileProgress", progress)
-                                                .putString("currentAction", "recalculating_hash")
-                                                .putString("currentFile", fileName)
-                                                .putInt("fileIndex", fileIndex)
-                                                .putInt("totalFiles", totalFiles)
-                                                .putInt("backedUpCount", backedUpCount)
-                                                .putInt("skippedCount", skippedCount)
-                                                .putInt("failedCount", failedCount)
-                                                .build())
-                                        }
-                                    },
-                                    shouldCancel = {
-                                        val cancelPrefs = applicationContext.getSharedPreferences("BackupState", android.content.Context.MODE_PRIVATE)
-                                        val isCancelRequested = cancelPrefs.getBoolean("cancel_backup", false)
-                                        isStopped || isCancelRequested
-                                    }
-                                )
-                            } catch (e: Exception) {
-                                Log.e(TAG, "Failed to recalculate hash for $fileName", e)
-                                return false
-                            }
-
-                            Log.d(TAG, "Recalculated hash for $fileName: $recalculatedHash")
-
-                            // Retry the upload with the recalculated hash
-                            return uploadFileWithProgress(
-                                uri = uri,
-                                fileName = fileName,
-                                fullPath = fullPath,
-                                type = type,
-                                fileHash = recalculatedHash,
-                                baseUrl = baseUrl,
-                                token = token,
-                                client = client,
-                                overallProgress = overallProgress,
-                                totalFiles = totalFiles,
-                                fileIndex = fileIndex,
-                                backedUpCount = backedUpCount,
-                                skippedCount = skippedCount,
-                                failedCount = failedCount,
-                                fileSize = fileSize,
-                                isRetry = true
-                            )
-                        } else {
-                            Log.e(TAG, "Hash verification failed but cannot retry (isRetry=$isRetry, fileSize=$fileSize)")
-                        }
-                    }
-                } catch (e: Exception) {
-                    Log.e(TAG, "Failed to parse 400 error response for $fileName", e)
+            response.use { resp ->
+                // Check if cancelled after upload completed but before processing response
+                if (isStopped) {
+                    Log.d(TAG, "Upload cancelled after completion: $fileName")
+                    return false
                 }
-            } else {
-                val responseBody = response.body?.string()
-                Log.e(TAG, "Upload failed: ${response.code} - $responseBody for $fileName")
-                LogCollector.e(TAG, "Upload FAILED (${response.code}): $fileName - $responseBody")
+
+                if (resp.isSuccessful) {
+                    Log.d(TAG, "File uploaded successfully: $fileName${if (isRetry) " (after retry)" else ""}")
+                    LogCollector.i(TAG, "Uploaded: $fileName")
+                    return true
+                } else if (resp.code == 401) {
+                    Log.e(TAG, "Authentication failed (401) during file upload")
+                    LogCollector.e(TAG, "Upload FAILED (401 auth error): $fileName")
+                    return false
+                } else if (resp.code == 400) {
+                    val responseBody = resp.body?.string()
+                    Log.e(TAG, "Upload failed with 400 Bad Request: $responseBody for $fileName")
+
+                    // Try to parse the error response to check if it's a hash verification failure
+                    try {
+                        val json = org.json.JSONObject(responseBody ?: "{}")
+                        val status = json.optString("status", "")
+                        val message = json.optString("message", "")
+
+                        if (status == "error" && message.contains("Hash verification failed", ignoreCase = true)) {
+                            val expectedHash = json.optString("expected_hash", "unknown")
+                            val calculatedHash = json.optString("calculated_hash", "unknown")
+
+                            Log.e(TAG, "HASH VERIFICATION FAILED for $fileName:")
+                            Log.e(TAG, "  - Client calculated hash: $fileHash")
+                            Log.e(TAG, "  - Server expected hash: $expectedHash")
+                            Log.e(TAG, "  - Server calculated hash: $calculatedHash")
+
+                            // Invalidate the cached hash for this file since it appears to be incorrect
+                            val mediaId = uri.lastPathSegment ?: uri.toString()
+                            val databaseHelper = DatabaseHelper(applicationContext)
+                            databaseHelper.deleteHash(mediaId)
+                            Log.w(TAG, "Invalidated cached hash for $fileName")
+
+                            // Only retry once to avoid infinite loops
+                            if (!isRetry && fileSize != null) {
+                                Log.w(TAG, "Recalculating hash and retrying upload for $fileName")
+
+                                // Recalculate the hash
+                                val recalculatedHash = try {
+                                    HashCalculator.calculateHashFromUri(
+                                        applicationContext,
+                                        uri,
+                                        fileSize,
+                                        onProgress = { progress ->
+                                            if (!isStopped) {
+                                                setProgressThrottled(androidx.work.Data.Builder()
+                                                    .putFloat("overallProgress", overallProgress)
+                                                    .putFloat("fileProgress", progress)
+                                                    .putString("currentAction", "recalculating_hash")
+                                                    .putString("currentFile", fileName)
+                                                    .putInt("fileIndex", fileIndex)
+                                                    .putInt("totalFiles", totalFiles)
+                                                    .putInt("backedUpCount", backedUpCount)
+                                                    .putInt("skippedCount", skippedCount)
+                                                    .putInt("failedCount", failedCount)
+                                                    .build())
+                                            }
+                                        },
+                                        shouldCancel = {
+                                            val cancelPrefs = applicationContext.getSharedPreferences("BackupState", android.content.Context.MODE_PRIVATE)
+                                            val isCancelRequested = cancelPrefs.getBoolean("cancel_backup", false)
+                                            isStopped || isCancelRequested
+                                        }
+                                    )
+                                } catch (e: Exception) {
+                                    Log.e(TAG, "Failed to recalculate hash for $fileName", e)
+                                    return false
+                                }
+
+                                Log.d(TAG, "Recalculated hash for $fileName: $recalculatedHash")
+
+                                // Retry the upload with the recalculated hash
+                                return uploadFileWithProgress(
+                                    uri = uri,
+                                    fileName = fileName,
+                                    fullPath = fullPath,
+                                    type = type,
+                                    fileHash = recalculatedHash,
+                                    baseUrl = baseUrl,
+                                    token = token,
+                                    client = client,
+                                    overallProgress = overallProgress,
+                                    totalFiles = totalFiles,
+                                    fileIndex = fileIndex,
+                                    backedUpCount = backedUpCount,
+                                    skippedCount = skippedCount,
+                                    failedCount = failedCount,
+                                    fileSize = fileSize,
+                                    isRetry = true
+                                )
+                            } else {
+                                Log.e(TAG, "Hash verification failed but cannot retry (isRetry=$isRetry, fileSize=$fileSize)")
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to parse 400 error response for $fileName", e)
+                    }
+                } else {
+                    val responseBody = resp.body?.string()
+                    Log.e(TAG, "Upload failed: ${resp.code} - $responseBody for $fileName")
+                    LogCollector.e(TAG, "Upload FAILED (${resp.code}): $fileName - $responseBody")
+                }
             }
         } catch (e: java.io.IOException) {
             // This exception is thrown when the call is cancelled

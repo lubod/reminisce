@@ -42,6 +42,13 @@ class MainActivity : AppCompatActivity() {
     private lateinit var progressDialogHelper: BackupProgressDialogHelper
     private var isBackingUp = false
 
+    private fun isBackupRunning(): Boolean {
+        if (isBackingUp) return true
+        val prefs = getSharedPreferences("BackupState", MODE_PRIVATE)
+        val runningUntil = prefs.getLong("backup_running_until", 0L)
+        return runningUntil > System.currentTimeMillis()
+    }
+
     private val backupStatusReceiver = object : android.content.BroadcastReceiver() {
         override fun onReceive(context: android.content.Context?, intent: android.content.Intent?) {
             Log.d(TAG, "Received broadcast: ${intent?.action}")
@@ -148,7 +155,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startQuickBackup() {
-        if (isBackingUp) {
+        if (isBackupRunning()) {
+            Log.d(TAG, "Quick backup ignored — backup already running")
             return
         }
 
@@ -192,7 +200,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startFullBackup() {
-        if (isBackingUp) {
+        if (isBackupRunning()) {
+            Log.d(TAG, "Full backup ignored — backup already running")
             return
         }
 
@@ -230,6 +239,7 @@ class MainActivity : AppCompatActivity() {
             putBoolean("cancel_backup", true)
             remove("backup_type")
             remove("is_quick_backup")
+            remove("backup_running_until")
             apply()
         }
 
@@ -398,6 +408,22 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun logout() {
+        // Cancel any running backup work and stop the backup service
+        try {
+            WorkManager.getInstance(this).cancelAllWork()
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to cancel work during logout", e)
+        }
+        stopService(Intent(this, BackupService::class.java))
+
+        // Clear the persisted running flag so a stale window doesn't block future backups
+        getSharedPreferences("BackupState", MODE_PRIVATE)
+            .edit()
+            .remove("backup_running_until")
+            .apply()
+
+        applyKeepScreenOn(false)
+
         // Clear all credentials and tokens
         SecureStorageHelper.clearCredentials(this)
 
