@@ -1227,7 +1227,9 @@ class BackupWorker(context: Context, val params: WorkerParameters) : Worker(cont
                         val status = json.optString("status", "")
                         val message = json.optString("message", "")
 
-                        if (status == "error" && message.contains("Hash verification failed", ignoreCase = true)) {
+                        val hashMismatch = status == "error" &&
+                            message.contains("Hash verification failed", ignoreCase = true)
+                        if (hashMismatch) {
                             val expectedHash = json.optString("expected_hash", "unknown")
                             val calculatedHash = json.optString("calculated_hash", "unknown")
 
