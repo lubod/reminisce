@@ -292,8 +292,9 @@ export const DirectoryImportModal = observer(({ onClose }: { onClose: () => void
                 return;
             }
 
-            // Only upload files not already on the server
-            const toUpload = fileHashes.filter(f => checkResult.needs_upload.includes(f.hash));
+            // Only upload files not already on the server (Set for O(1) lookups)
+            const needsUploadSet = new Set(checkResult.needs_upload);
+            const toUpload = fileHashes.filter(f => needsUploadSet.has(f.hash));
             const alreadyHandled = fileHashes.length - toUpload.length;
 
             logger.info(`${alreadyHandled} files already exist or were deduplicated, uploading ${toUpload.length} new files`);
@@ -453,12 +454,12 @@ export const DirectoryImportModal = observer(({ onClose }: { onClose: () => void
                                 <div>
                                     <div className="flex justify-between text-sm text-gray-400 mb-1">
                                         <span>Progress: {progress.completed} / {progress.total}</span>
-                                        <span>{Math.round((progress.completed / progress.total) * 100)}%</span>
+                                        <span>{progress.total > 0 ? Math.round((progress.completed / progress.total) * 100) : 0}%</span>
                                     </div>
                                     <div className="w-full bg-gray-600 rounded-full h-2">
                                         <div
                                             className="bg-blue-600 h-2 rounded-full transition-all duration-300"
-                                            style={{ width: `${(progress.completed / progress.total) * 100}%` }}
+                                            style={{ width: `${progress.total > 0 ? Math.round((progress.completed / progress.total) * 100) : 0}%` }}
                                         />
                                     </div>
                                     {progress.failed > 0 && (
@@ -500,7 +501,7 @@ export const DirectoryImportModal = observer(({ onClose }: { onClose: () => void
                         className="px-4 py-2 text-gray-300 bg-gray-700 hover:bg-gray-600
                             rounded-md transition-colors"
                     >
-                        {progress.status === 'complete' ? 'Close' : (isUploading ? 'Cancel' : 'Cancel')}
+                        {progress.status === 'complete' ? 'Close' : 'Cancel'}
                     </button>
                     <button
                         onClick={handleImport}

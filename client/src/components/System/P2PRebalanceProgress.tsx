@@ -88,7 +88,7 @@ export const P2PRebalanceProgress: React.FC = observer(() => {
                     <div className="text-xl font-black text-emerald-400 mt-1">
                         {balancedFiles.toLocaleString()}
                     </div>
-                    <div className="text-[10px] text-gray-500 mt-0.5">Spread on $\ge$ {targetNodes} nodes</div>
+                    <div className="text-[10px] text-gray-500 mt-0.5">Spread on ≥ {targetNodes} nodes</div>
                 </div>
 
                 <div className="bg-gray-800/60 rounded-xl p-3.5 border border-gray-700/60">

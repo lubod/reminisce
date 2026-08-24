@@ -10,13 +10,13 @@ export const LoginForm = observer(() => {
     const [confirmPassword, setConfirmPassword] = useState("");
     const [showPassword, setShowPassword] = useState(false);
     const [error, setError] = useState("");
-    const [isLoading, setIsLoading] = useState(true);
+    const [isLoading, setIsLoading] = useState(false);
     const serverError = new URLSearchParams(window.location.search).get("error")
         ? "Invalid username or password"
         : "";
 
     useEffect(() => {
-        authStore.checkSetupStatus().finally(() => setIsLoading(false));
+        authStore.checkSetupStatus();
     }, [authStore]);
 
     const handleSetup = async (e: React.FormEvent) => {

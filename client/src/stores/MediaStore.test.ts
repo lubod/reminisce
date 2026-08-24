@@ -35,15 +35,11 @@ const api = vi.hoisted(() => {
         mapParams: string;
         mapPool: PoolPoint[];
         mapPoint: (hash: string, i: number) => PoolPoint;
-        imagesPool: Array<Record<string, unknown>>;
-        imagesTotal: number;
         rejectPost: boolean;
     } = {
         mapParams: "",
         mapPool: [mapPoint("m1", 0)],
         mapPoint,
-        imagesPool: [],
-        imagesTotal: 0,
         rejectPost: false,
     };
     return {
@@ -89,20 +85,6 @@ const api = vi.hoisted(() => {
                 const limit = Number(u.searchParams.get("limit") || 50);
                 return { data: { results: pool.slice(offset, offset + limit), total: pool.length }, status: 200 };
             }
-            if (url.includes("/image_thumbnails")) {
-                const page = Number(u.searchParams.get("page") || 1);
-                const limit = Number(u.searchParams.get("limit") || 50);
-                const start = (page - 1) * limit;
-                return {
-                    data: {
-                        thumbnails: state.imagesPool.slice(start, start + limit),
-                        total: state.imagesTotal,
-                        page,
-                        limit,
-                    },
-                    status: 200,
-                };
-            }
             return { data: { bytes: 1 }, status: 200 };
         },
     };
@@ -134,24 +116,20 @@ function item(over: Partial<MediaItem>): MediaItem {
     };
 }
 
-describe("filtered* (device filter)", () => {
+describe("filteredAllMedia (device filter)", () => {
     it("returns all items when device filter is 'all'", () => {
         const s = makeStore();
-        s.images = [item({ device_id: "a" }), item({ device_id: "b" }), item({ device_id: "a" })];
+        s.allMedia = [item({ device_id: "a" }), item({ device_id: "b" }), item({ device_id: "a" })];
         s.filters.selectedDeviceId = "all";
-        expect(s.filteredImages).toHaveLength(3);
+        expect(s.filteredAllMedia).toHaveLength(3);
     });
 
     it("filters items by selected device id", () => {
         const s = makeStore();
-        s.images = [item({ device_id: "a" }), item({ device_id: "b" }), item({ device_id: "a" })];
-        s.videos = [item({ device_id: "a" }), item({ device_id: "c" })];
-        s.allMedia = [...s.images, ...s.videos];
+        s.allMedia = [item({ device_id: "a" }), item({ device_id: "b" }), item({ device_id: "a" })];
         s.filters.selectedDeviceId = "a";
 
-        expect(s.filteredImages.map(i => i.device_id)).toEqual(["a", "a"]);
-        expect(s.filteredVideos.map(i => i.device_id)).toEqual(["a"]);
-        expect(s.filteredAllMedia).toHaveLength(3);
+        expect(s.filteredAllMedia.map(i => i.device_id)).toEqual(["a", "a"]);
     });
 });
 
@@ -217,13 +195,10 @@ describe("lightbox getters", () => {
     it("activeLightboxItems follows lightboxSource", () => {
         const s = makeStore();
         s.allMedia = [item({}), item({})];
-        s.images = [item({})];
         s.customLightboxItems = [item({}), item({}), item({})];
 
         s.lightboxSource = "all";
         expect(s.activeLightboxItems).toBe(s.allMedia);
-        s.lightboxSource = "images";
-        expect(s.activeLightboxItems).toBe(s.images);
         s.lightboxSource = "custom";
         expect(s.activeLightboxItems).toBe(s.customLightboxItems);
     });
@@ -326,7 +301,7 @@ describe("map points (fetchMapPoints)", () => {
 });
 
 
-describe("map auto-fetch + star/delete + fetchImages", () => {
+describe("map auto-fetch + star/delete", () => {
     it("setMapActive(true) auto-fetches map points", async () => {
         api.state.mapParams = "";
         api.state.mapPool = [api.state.mapPoint("m1", 0)];
@@ -349,12 +324,10 @@ describe("map auto-fetch + star/delete + fetchImages", () => {
     it("toggleStarMedia flips starred across arrays and applies the server value", async () => {
         const s = makeStore();
         const target = item({ device_id: "a", starred: false, media_type: "image" });
-        s.images = [target];
         s.allMedia = [target];
 
         await s.toggleStarMedia(target.hash, target.device_id);
 
-        expect(s.images[0].starred).toBe(true);
         expect(s.allMedia[0].starred).toBe(true);
     });
 
@@ -362,21 +335,20 @@ describe("map auto-fetch + star/delete + fetchImages", () => {
         const s = makeStore();
         const mine = item({ hash: "dup", device_id: "devA", starred: false, media_type: "image" });
         const other = item({ hash: "dup", device_id: "devB", starred: false, media_type: "image" });
-        s.images = [mine];
-        s.allMedia = [other];
+        s.allMedia = [mine, other];
 
         await s.toggleStarMedia(mine.hash, mine.device_id);
 
-        expect(s.images[0].starred).toBe(true);
+        expect(s.allMedia[0].starred).toBe(true);
         // Same hash but different device must stay untouched.
-        expect(s.allMedia[0].starred).toBe(false);
+        expect(s.allMedia[1].starred).toBe(false);
     });
 
     it("toggleStarMedia rolls back to the previous value on server failure", async () => {
         const setError = vi.fn();
         const s = new MediaStore({ uiStore: { setError, setLoading: () => {} } } as unknown as RootStore);
         const target = item({ device_id: "a", starred: false, media_type: "image" });
-        s.images = [target];
+        s.allMedia = [target];
 
         api.state.rejectPost = true;
         try {
@@ -385,7 +357,7 @@ describe("map auto-fetch + star/delete + fetchImages", () => {
             api.state.rejectPost = false;
         }
 
-        expect(s.images[0].starred).toBe(false);
+        expect(s.allMedia[0].starred).toBe(false);
         expect(setError).toHaveBeenCalled();
     });
 
@@ -394,14 +366,10 @@ describe("map auto-fetch + star/delete + fetchImages", () => {
         const a = item({ media_type: "image" });
         const b = item({ media_type: "image" });
         const c = item({ media_type: "video" });
-        s.images = [a, b];
-        s.videos = [c];
         s.allMedia = [a, b, c];
 
         await s.deleteMedia(b.hash);
 
-        expect(s.images.map(i => i.hash)).toEqual([a.hash]);
-        expect(s.videos.map(i => i.hash)).toEqual([c.hash]);
         expect(s.allMedia.map(i => i.hash)).toEqual([a.hash, c.hash]);
     });
 
@@ -415,20 +383,6 @@ describe("map auto-fetch + star/delete + fetchImages", () => {
         await s.deleteMedia(b.hash);
         expect(s.allMedia.map(i => i.hash)).toEqual([a.hash]);
         expect(s.selectedMediaIndex).toBe(0);
-    });
-
-    it("fetchImages sets hasMore from the server total and pages", async () => {
-        api.state.imagesTotal = 3;
-        api.state.imagesPool = ["x1", "x2", "x3"].map(h => ({ hash: h, name: h }));
-        const s = new MediaStore({ uiStore: { setLoading: () => {}, setError: () => {} } } as unknown as RootStore);
-
-        await s.fetchImages(1, 2);
-        expect(s.images).toHaveLength(2);
-        expect(s.hasMore).toBe(true);
-
-        await s.fetchImages(2, 2, true);
-        expect(s.images).toHaveLength(3);
-        expect(s.hasMore).toBe(false);
     });
 });
 

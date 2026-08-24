@@ -45,6 +45,7 @@ export interface LocationResult {
     admin_level: number;
     country_code: string | null;
     display_name: string;
+    place_id?: number | string;
 }
 
 export interface ImageMetadata {
@@ -81,21 +82,9 @@ export class MediaStore {
     private metadataRequestSeq = 0;
     
     // Data Collections
-    images: MediaItem[] = [];
-    videos: MediaItem[] = [];
     allMedia: MediaItem[] = [];
     
     // Pagination & Meta
-    currentPage: number = 1;
-    totalImages: number = 0;
-    hasMore: boolean = true;
-    isLoadingMore: boolean = false;
-    
-    videoCurrentPage: number = 1;
-    totalVideos: number = 0;
-    videoHasMore: boolean = true;
-    isLoadingMoreVideos: boolean = false;
-    
     allMediaCurrentPage: number = 1;
     totalAllMedia: number = 0;
     allMediaHasMore: boolean = true;
@@ -116,8 +105,6 @@ export class MediaStore {
     isLoadingNoExif: boolean = false;
 
     // View Preferences
-    groupBy: 'day' | 'place' = 'day';
-    videoGroupBy: 'day' | 'place' = 'day';
     allMediaGroupBy: 'day' | 'place' = 'day';
     sortBy: 'date' | 'size' | 'quality' = 'date';
     sortOrder: 'asc' | 'desc' = 'desc';
@@ -155,10 +142,11 @@ export class MediaStore {
     isLoadingLocationSuggestions: boolean = false;
 
     private similarityDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+    private locationDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 
     // Unified Lightbox State
     selectedMediaIndex: number | null = null;
-    lightboxSource: 'all' | 'images' | 'videos' | 'custom' = 'all';
+    lightboxSource: 'all' | 'custom' = 'all';
     customLightboxItems: MediaItem[] = [];
     fullMediaUrl: string | null = null;
     comparisonMediaUrl: string | null = null;
@@ -183,13 +171,22 @@ export class MediaStore {
             },
             { delay: 400 } // Debounce to prevent rapid API calls
         );
+
+        // Cross-store invalidation: trash restores/deletes mutate the library
+        // behind our back. Stores aren't wired to each other, so TrashStore
+        // broadcasts a lightweight event and we apply a silent refresh here.
+        window.addEventListener("reminisce:media-changed", this.handleMediaChanged);
     }
+
+    private handleMediaChanged = () => {
+        // Silent refresh: re-sync every view (grid/images/videos/map) with the
+        // mutated library without waiting for the next manual filter change.
+        this.applyFilters();
+    };
 
     // --- Computed Values ---
 
     get activeLightboxItems(): MediaItem[] {
-        if (this.lightboxSource === 'images') return this.images;
-        if (this.lightboxSource === 'videos') return this.videos;
         if (this.lightboxSource === 'custom') return this.customLightboxItems;
         return this.allMedia;
     }
@@ -252,8 +249,6 @@ export class MediaStore {
         }
     };
 
-    setGroupBy = (val: 'day' | 'place') => { this.groupBy = val; };
-    setVideoGroupBy = (val: 'day' | 'place') => { this.videoGroupBy = val; };
     setSortBy = (val: 'date' | 'size' | 'quality') => { this.sortBy = val; this.applyFilters(); };
     setSortOrder = (val: 'asc' | 'desc') => { this.sortOrder = val; this.applyFilters(); };
 
@@ -264,17 +259,10 @@ export class MediaStore {
         runInAction(() => {
             this.searchMode = false;
             this.cleanupThumbnails();
-            this.currentPage = 1;
-            this.videoCurrentPage = 1;
             this.allMediaCurrentPage = 1;
-            this.hasMore = true;
-            this.videoHasMore = true;
             this.allMediaHasMore = true;
         });
         
-        // Parallel fetch for all views
-        this.fetchImages(1, 50, false);
-        this.fetchVideos(1, 50, false);
         this.fetchAllMedia(1, 50, false);
         if (this.mapActive) this.fetchMapPoints();
     };
@@ -437,16 +425,12 @@ export class MediaStore {
             runInAction(() => {
                 if (append) {
                     this.allMedia = [...this.allMedia, ...itemsWithThumbnails];
-                    this.images = [...this.images, ...itemsWithThumbnails];
                 } else {
-                    this.images = itemsWithThumbnails;
                     this.allMedia = itemsWithThumbnails;
                 }
-                this.totalImages = response.data.total;
                 this.totalAllMedia = response.data.total;
                 this.searchOffset = offset + itemsWithThumbnails.length;
                 this.allMediaHasMore = hasMoreFromServer;
-                this.hasMore = false;
             });
         } catch (error) {
             logger.error("Search failed", error);
@@ -468,95 +452,6 @@ export class MediaStore {
                 ? item
                 : { ...item, thumbnailUrl: this.getAuthenticatedUrl(`/api/thumbnail/${item.hash}`) }
         ));
-
-    fetchImages = async (page: number = 1, limit: number = 50, append: boolean = false) => {
-        const seq = this.requestSeq;
-        if (!append) this.rootStore.uiStore.setLoading(true);
-        else this.isLoadingMore = true;
-
-        try {
-            const params = new URLSearchParams({
-                page: page.toString(),
-                limit: limit.toString(),
-                starred_only: this.filters.starredOnly.toString()
-            });
-            if (this.sortBy === 'size') params.append('sort_by', 'size');
-            if (this.sortBy === 'quality') params.append('sort_by', 'quality');
-            if (this.sortOrder === 'asc') params.append('sort_order', 'asc');
-
-            if (this.filters.startDate) params.append('start_date', this.filters.startDate);
-            if (this.filters.endDate) params.append('end_date', this.filters.endDate);
-            if (this.filters.selectedLabelId !== null) params.append('label_id', this.filters.selectedLabelId.toString());
-            if (this.filters.selectedDeviceId !== 'all') params.append('device_id', this.filters.selectedDeviceId);
-            if (this.filters.location) {
-                params.append('location_lat', this.filters.location.latitude.toString());
-                params.append('location_lon', this.filters.location.longitude.toString());
-                params.append('location_radius_km', this.filters.locationRadiusKm.toString());
-            }
-
-            const response = await axios.get<ThumbnailsResponse>(`/image_thumbnails?${params}`);
-            const withUrls = this.attachThumbnails(response.data.thumbnails.map(t => ({
-                ...t,
-                thumbnailUrl: t.thumbnail_url ? this.getAuthenticatedUrl(t.thumbnail_url) : undefined
-            })));
-            if (seq !== this.requestSeq) return; // stale response — discard
-
-            runInAction(() => {
-                this.images = append ? [...this.images, ...withUrls] : withUrls;
-                this.currentPage = response.data.page;
-                this.totalImages = response.data.total;
-                this.hasMore = this.images.length < response.data.total;
-            });
-        } catch  {
-            this.rootStore.uiStore.setError("Failed to fetch images");
-        } finally {
-            runInAction(() => { this.isLoadingMore = false; this.rootStore.uiStore.setLoading(false); });
-        }
-    };
-
-    fetchVideos = async (page: number = 1, limit: number = 50, append: boolean = false) => {
-        const seq = this.requestSeq;
-        if (append) this.isLoadingMoreVideos = true;
-
-        try {
-            const params = new URLSearchParams({
-                page: page.toString(),
-                limit: limit.toString(),
-                starred_only: this.filters.starredOnly.toString()
-            });
-            if (this.sortBy === 'size') params.append('sort_by', 'size');
-            if (this.sortBy === 'quality') params.append('sort_by', 'quality');
-            if (this.sortOrder === 'asc') params.append('sort_order', 'asc');
-
-            if (this.filters.startDate) params.append('start_date', this.filters.startDate);
-            if (this.filters.endDate) params.append('end_date', this.filters.endDate);
-            if (this.filters.selectedLabelId !== null) params.append('label_id', this.filters.selectedLabelId.toString());
-            if (this.filters.selectedDeviceId !== 'all') params.append('device_id', this.filters.selectedDeviceId);
-            if (this.filters.location) {
-                params.append('location_lat', this.filters.location.latitude.toString());
-                params.append('location_lon', this.filters.location.longitude.toString());
-                params.append('location_radius_km', this.filters.locationRadiusKm.toString());
-            }
-
-            const response = await axios.get<ThumbnailsResponse>(`/video_thumbnails?${params}`);
-            const withUrls = this.attachThumbnails(response.data.thumbnails.map(t => ({
-                ...t,
-                thumbnailUrl: t.thumbnail_url ? this.getAuthenticatedUrl(t.thumbnail_url) : undefined
-            })));
-            if (seq !== this.requestSeq) return; // stale response — discard
-
-            runInAction(() => {
-                this.videos = append ? [...this.videos, ...withUrls] : withUrls;
-                this.videoCurrentPage = response.data.page;
-                this.totalVideos = response.data.total;
-                this.videoHasMore = this.videos.length < response.data.total;
-            });
-        } catch (error) {
-            logger.error("Failed to fetch videos", error);
-        } finally {
-            runInAction(() => { this.isLoadingMoreVideos = false; });
-        }
-    };
 
     fetchAllMedia = async (page: number = 1, limit: number = 50, append: boolean = false) => {
         const seq = this.requestSeq;
@@ -606,8 +501,6 @@ export class MediaStore {
         }
     };
 
-    loadMoreImages = () => { if (this.hasMore && !this.isLoadingMore) this.fetchImages(this.currentPage + 1, 50, true); };
-    loadMoreVideos = () => { if (this.videoHasMore && !this.isLoadingMoreVideos) this.fetchVideos(this.videoCurrentPage + 1, 50, true); };
     loadMoreAllMedia = () => {
         if (!this.allMediaHasMore) return;
         if (this.searchMode) {
@@ -675,7 +568,7 @@ export class MediaStore {
     setZoomOffset = (x: number, y: number) => { this.zoomOffset = { x, y }; };
     resetZoom = () => { this.zoomScale = 1; this.zoomOffset = { x: 0, y: 0 }; };
 
-    openMediaLightbox = async (index: number, source: 'all' | 'images' | 'videos' | 'custom' = 'all') => {
+    openMediaLightbox = async (index: number, source: 'all' | 'custom' = 'all') => {
         this.lightboxSource = source;
         this.selectedMediaIndex = index;
         this.resetZoom();
@@ -771,7 +664,7 @@ export class MediaStore {
         const sameItem = (a: MediaItem) => a.hash === hash && (a.device_id ?? "") === (d ?? "");
 
         // Find the item in any array
-        const item = this.images.find(sameItem) || this.videos.find(sameItem) || this.allMedia.find(sameItem);
+        const item = this.allMedia.find(sameItem);
         if (!item) return;
 
         const previousStarred = !!item.starred;
@@ -779,14 +672,6 @@ export class MediaStore {
 
         // Update all occurrences of this item across all arrays
         runInAction(() => {
-            // Update in images array
-            const imageItem = this.images.find(sameItem);
-            if (imageItem) imageItem.starred = newStarred;
-
-            // Update in videos array
-            const videoItem = this.videos.find(sameItem);
-            if (videoItem) videoItem.starred = newStarred;
-
             // Update in allMedia array
             const allMediaItem = this.allMedia.find(sameItem);
             if (allMediaItem) allMediaItem.starred = newStarred;
@@ -802,12 +687,6 @@ export class MediaStore {
             // Update with server response
             runInAction(() => {
                 const starred = response.data.starred;
-                const imageItem = this.images.find(sameItem);
-                if (imageItem) imageItem.starred = starred;
-
-                const videoItem = this.videos.find(sameItem);
-                if (videoItem) videoItem.starred = starred;
-
                 const allMediaItem = this.allMedia.find(sameItem);
                 if (allMediaItem) allMediaItem.starred = starred;
 
@@ -816,12 +695,6 @@ export class MediaStore {
         } catch  {
             // Rollback on error
             runInAction(() => {
-                const imageItem = this.images.find(sameItem);
-                if (imageItem) imageItem.starred = previousStarred;
-
-                const videoItem = this.videos.find(sameItem);
-                if (videoItem) videoItem.starred = previousStarred;
-
                 const allMediaItem = this.allMedia.find(sameItem);
                 if (allMediaItem) allMediaItem.starred = previousStarred;
 
@@ -832,17 +705,13 @@ export class MediaStore {
     };
 
     deleteMedia = async (hash: string) => {
-        const item = this.images.find(i => i.hash === hash) || 
-                     this.videos.find(v => v.hash === hash) || 
-                     this.allMedia.find(i => i.hash === hash) ||
+        const item = this.allMedia.find(i => i.hash === hash) ||
                      this.customLightboxItems.find(i => i.hash === hash);
         if (!item) return;
 
         // Perform removal from all lists
         runInAction(() => {
             const filterOut = (list: MediaItem[]) => list.filter(i => i.hash !== hash);
-            this.images = filterOut(this.images);
-            this.videos = filterOut(this.videos);
             this.allMedia = filterOut(this.allMedia);
             this.customLightboxItems = filterOut(this.customLightboxItems);
             
@@ -873,7 +742,7 @@ export class MediaStore {
     getAuthenticatedUrl = (baseUrl: string) => baseUrl;
 
     cleanupThumbnails = () => {
-        runInAction(() => { this.images = []; this.videos = []; this.allMedia = []; });
+        runInAction(() => { this.allMedia = []; });
     };
 
     fetchDeviceIds = async () => {
@@ -890,26 +759,22 @@ export class MediaStore {
 
     // --- Getters for UI ---
 
-    get filteredImages(): MediaItem[] {
-        return this.filters.selectedDeviceId === 'all' ? this.images : this.images.filter(i => i.device_id === this.filters.selectedDeviceId);
-    }
-
-    get filteredVideos(): MediaItem[] {
-        return this.filters.selectedDeviceId === 'all' ? this.videos : this.videos.filter(i => i.device_id === this.filters.selectedDeviceId);
-    }
-
     get filteredAllMedia(): MediaItem[] {
         return this.filters.selectedDeviceId === 'all' ? this.allMedia : this.allMedia.filter(i => i.device_id === this.filters.selectedDeviceId);
     }
 
-    get groupedImages(): MediaGroup[] { return this.groupMedia(this.filteredImages, this.groupBy); }
-    get groupedVideos(): MediaGroup[] { return this.groupMedia(this.filteredVideos, this.videoGroupBy); }
     get groupedAllMedia(): MediaGroup[] { return this.groupMedia(this.filteredAllMedia, this.allMediaGroupBy); }
 
     private groupMedia(items: MediaItem[], mode: 'day' | 'place'): MediaGroup[] {
         const groups = new Map<string, MediaItem[]>();
         items.forEach(item => {
-            const key = mode === 'day' ? new Date(item.created_at).toISOString().split('T')[0] : (item.place || 'Unknown Location');
+            // Group by LOCAL calendar day (not UTC) so keys match what the
+            // lightbox sidebar / person detail render via toLocale*String.
+            let key = item.place || 'Unknown Location';
+            if (mode === 'day') {
+                const d = new Date(item.created_at);
+                key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+            }
             if (!groups.has(key)) groups.set(key, []);
             groups.get(key)!.push(item);
         });
@@ -950,7 +815,8 @@ export class MediaStore {
 
     private formatDisplayDate(dateKey: string): string {
         const date = new Date(dateKey);
-        const today = new Date().toISOString().split('T')[0];
+        const now = new Date();
+        const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
         if (dateKey === today) return 'Today';
         return date.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
     }
@@ -960,8 +826,19 @@ export class MediaStore {
     setLocationQuery = (query: string) => {
         this.locationQuery = query;
         this.locationRequestSeq += 1; // invalidate any in-flight suggestion responses
-        if (query.length >= 3) this.fetchLocationSuggestions(query, this.locationRequestSeq);
-        else this.locationSuggestions = [];
+        if (this.locationDebounceTimer) {
+            clearTimeout(this.locationDebounceTimer);
+            this.locationDebounceTimer = null;
+        }
+        if (query.length >= 3) {
+            // Debounce so typing doesn't fire a request per keystroke.
+            const seq = this.locationRequestSeq;
+            this.locationDebounceTimer = setTimeout(() => {
+                this.fetchLocationSuggestions(query, seq);
+            }, 250);
+        } else {
+            this.locationSuggestions = [];
+        }
     };
 
     fetchLocationSuggestions = async (query: string, seq: number) => {

@@ -149,49 +149,7 @@ beforeEach(() => {
     );
 });
 
-describe("MediaStore video/all-media fetches", () => {
-    it("fetchVideos pages and tracks hasMore", async () => {
-        api.state.videoPool = [item({}), item({}), item({})];
-        api.state.totalVideo = 3;
-        const s = makeStore();
-        await s.fetchVideos(1, 2);
-        expect(s.videos).toHaveLength(2);
-        expect(s.totalVideos).toBe(3);
-        expect(s.videoHasMore).toBe(true);
-
-        await s.fetchVideos(2, 2, true);
-        expect(s.videos).toHaveLength(3);
-        expect(s.videoHasMore).toBe(false);
-        expect(s.isLoadingMoreVideos).toBe(false);
-    });
-
-    it("fetchVideos passes filter params and tolerates failures", async () => {
-        const s = makeStore();
-        s.filters.selectedDeviceId = "devA";
-        s.filters.starredOnly = true;
-        s.filters.startDate = "2024-01-01";
-        s.filters.endDate = "2024-02-01";
-        s.filters.selectedLabelId = 5;
-        s.sortBy = "size";
-        s.sortOrder = "asc";
-
-        await s.fetchVideos(1, 50);
-
-        const called = api.get.mock.calls.find(c => String(c[0]).includes("/video_thumbnails"))!;
-        const params = new URL(String(called[0]), "http://localhost").searchParams;
-        expect(params.get("device_id")).toBe("devA");
-        expect(params.get("starred_only")).toBe("true");
-        expect(params.get("start_date")).toBe("2024-01-01");
-        expect(params.get("label_id")).toBe("5");
-        expect(params.get("sort_by")).toBe("size");
-        expect(params.get("sort_order")).toBe("asc");
-
-        api.handlers.length = 0;
-        api.handlers.push({ verb: "get", re: /^\/video_thumbnails$/, fn: () => { throw new Error("down"); } });
-        await expect(s.fetchVideos(1, 50)).resolves.toBeUndefined();
-        expect(s.isLoadingMoreVideos).toBe(false);
-    });
-
+describe("MediaStore all-media fetches", () => {
     it("fetchAllMedia picks the right endpoint per type filter", async () => {
         const s = makeStore();
         s.filters.allMediaTypeFilter = "all";
@@ -250,25 +208,30 @@ describe("MediaStore no-EXIF + loadMore", () => {
 
     it("loadMore* guards respect the hasMore/loading flags", async () => {
         const s = makeStore();
-        s.hasMore = false;
-        s.videoHasMore = false;
         s.allMediaHasMore = false;
         s.noExifHasMore = false;
-        s.loadMoreImages();
-        s.loadMoreVideos();
         s.loadMoreAllMedia();
         s.loadMoreNoExif();
         expect(api.get).not.toHaveBeenCalled();
 
-        s.hasMore = true;
-        s.isLoadingMore = true;
-        s.loadMoreImages();
+        s.noExifHasMore = true;
+        s.isLoadingNoExif = true;
+        s.loadMoreNoExif();
         expect(api.get).not.toHaveBeenCalled();
 
-        s.hasMore = true;
-        s.isLoadingMore = false;
-        s.loadMoreImages();
-        expect(api.get).toHaveBeenCalled();
+        s.noExifHasMore = true;
+        s.isLoadingNoExif = false;
+        s.loadMoreNoExif();
+        expect(api.get.mock.calls.some(c => String(c[0]).includes("/image_thumbnails"))).toBe(true);
+
+        api.get.mockClear();
+        s.allMediaHasMore = true;
+        s.searchMode = false;
+        s.isSearching = false;
+        s.isLoadingMoreSearch = false;
+        s.isLoadingMoreAllMedia = false;
+        s.loadMoreAllMedia();
+        expect(api.get.mock.calls.some(c => String(c[0]).includes("/media_thumbnails"))).toBe(true);
     });
 
     it("loadMoreAllMedia pages via search in search mode", async () => {
@@ -288,24 +251,19 @@ describe("MediaStore no-EXIF + loadMore", () => {
 });
 
 describe("MediaStore browsing + search actions", () => {
-    it("applyFilters resets pages and triggers all three fetches", async () => {
+    it("applyFilters resets paging and refetches the grid", async () => {
         const s = makeStore();
-        s.images = [item({})];
-        s.videos = [item({})];
         s.allMedia = [item({})];
-        s.currentPage = 9;
-        s.videoCurrentPage = 9;
         s.allMediaCurrentPage = 9;
 
         await s.applyFilters();
 
-        expect(s.currentPage).toBe(1);
-        expect(s.videoCurrentPage).toBe(1);
         expect(s.allMediaCurrentPage).toBe(1);
-        expect(s.images).toEqual([]);
-        expect(api.get.mock.calls.some(c => String(c[0]).includes("/image_thumbnails"))).toBe(true);
-        expect(api.get.mock.calls.some(c => String(c[0]).includes("/video_thumbnails"))).toBe(true);
+        expect(s.allMedia).toEqual([]);
         expect(api.get.mock.calls.some(c => String(c[0]).includes("/media_thumbnails"))).toBe(true);
+        // The removed images/videos pipelines must no longer be fetched.
+        expect(api.get.mock.calls.some(c => String(c[0]).includes("/image_thumbnails"))).toBe(false);
+        expect(api.get.mock.calls.some(c => String(c[0]).includes("/video_thumbnails"))).toBe(false);
     });
 
     it("applyFilters also refreshes map points when the map is active", async () => {
@@ -431,12 +389,11 @@ describe("MediaStore lightbox", () => {
     it("openMediaLightbox loads full media and image metadata", async () => {
         const s = makeStore();
         const target = item({ media_type: "image" });
-        s.images = [target];
-        s.lightboxSource = "images";
+        s.allMedia = [target];
 
-        await s.openMediaLightbox(0, "images");
+        await s.openMediaLightbox(0, "all");
 
-        expect(s.lightboxSource).toBe("images");
+        expect(s.lightboxSource).toBe("all");
         expect(s.selectedMediaIndex).toBe(0);
         expect(s.fullMediaUrl).toBe(`/api/image/${target.hash}`);
         expect(s.imageMetadata?.hash).toBe(target.hash);
@@ -446,10 +403,9 @@ describe("MediaStore lightbox", () => {
     it("openMediaLightbox clears metadata for videos", async () => {
         const s = makeStore();
         const target = item({ media_type: "video" });
-        s.videos = [target];
-        s.lightboxSource = "videos";
+        s.allMedia = [target];
 
-        await s.openMediaLightbox(0, "videos");
+        await s.openMediaLightbox(0, "all");
 
         expect(s.fullMediaUrl).toBe(`/api/video/${target.hash}`);
         expect(s.imageMetadata).toBeNull();
@@ -574,7 +530,8 @@ describe("MediaStore devices + location", () => {
         await new Promise<void>(resolve => {
             api.get.mockClear();
             s.setLocationQuery("pra");
-            setTimeout(resolve, 0);
+            // Suggestions are debounced by 250ms in the store.
+            setTimeout(resolve, 300);
         });
         expect(s.locationSuggestions).toEqual([{ name: "Prague" }]);
     });
@@ -586,7 +543,7 @@ describe("MediaStore devices + location", () => {
         const s = new MediaStore({ uiStore: { setError } } as unknown as RootStore);
 
         s.setLocationQuery("pra");
-        await new Promise(r => setTimeout(r, 0));
+        await new Promise(r => setTimeout(r, 300)); // outlasts the 250ms debounce
 
         expect(setError).toHaveBeenCalledWith("Failed to fetch location suggestions");
         expect(s.locationSuggestions).toEqual([]);

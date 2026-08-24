@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { observer } from "mobx-react-lite";
 import { useStore } from "../../stores/RootStore";
 import type { LogLine } from "../../stores/SystemStore";
@@ -60,6 +60,16 @@ export const LogViewer = observer(() => {
         [systemStore.logs, min]
     );
 
+    // Cap the DOM window: render only the most recent 200 matching lines.
+    const visible = useMemo(() => filtered.slice(-200), [filtered]);
+    const scrollRef = useRef<HTMLDivElement>(null);
+
+    // Autoscroll to the newest line when the window updates.
+    useEffect(() => {
+        const el = scrollRef.current;
+        if (el) el.scrollTop = el.scrollHeight;
+    }, [visible]);
+
     return (
         <div className="flex flex-col gap-2">
             <div className="flex items-center gap-2">
@@ -74,13 +84,16 @@ export const LogViewer = observer(() => {
                     <option value="warn">warn</option>
                     <option value="error">error</option>
                 </select>
-                <span className="text-xs text-gray-500 ml-auto">{filtered.length} lines</span>
+                <span className="text-xs text-gray-500 ml-auto">
+                    {filtered.length > visible.length && `last ${visible.length} of `}
+                    {filtered.length} lines
+                </span>
             </div>
-            <div className="bg-black/40 border border-gray-800 rounded-lg overflow-hidden h-80 overflow-y-auto font-mono text-xs">
-                {filtered.length === 0 ? (
+            <div ref={scrollRef} className="bg-black/40 border border-gray-800 rounded-lg overflow-hidden h-80 overflow-y-auto font-mono text-xs">
+                {visible.length === 0 ? (
                     <div className="p-3 text-gray-600">No log lines yet…</div>
                 ) : (
-                    filtered.map((line: LogLine, i: number) => (
+                    visible.map((line: LogLine, i: number) => (
                         <div key={`${line.timestamp}-${i}`} className="flex gap-2 px-3 py-0.5 border-b border-gray-900/60">
                             <span className="text-gray-600 shrink-0">{fmtTime(line.timestamp).slice(11, 23)}</span>
                             <span className={`shrink-0 w-12 ${levelColor[line.level] ?? "text-gray-300"}`}>{line.level}</span>

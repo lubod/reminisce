@@ -5,7 +5,7 @@ import type { ManagedUser } from "../stores/AuthStore";
 import { Users, UserPlus, Trash2, Shield, RefreshCw, Check, X, KeyRound, UserCheck, UserX } from "lucide-react";
 
 export const UserManagement = observer(() => {
-    const { authStore } = useStore();
+    const { authStore, uiStore } = useStore();
     const [users, setUsers] = useState<ManagedUser[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [showAddForm, setShowAddForm] = useState(false);
@@ -65,7 +65,12 @@ export const UserManagement = observer(() => {
             window.alert("You cannot disable the last active admin.");
             return;
         }
-        await authStore.updateUser(user.id, { is_active: !user.is_active });
+        try {
+            await authStore.updateUser(user.id, { is_active: !user.is_active });
+            uiStore.setSuccess(user.is_active ? `Disabled "${user.username}"` : `Enabled "${user.username}"`);
+        } catch {
+            uiStore.setError("Failed to update user");
+        }
         load();
     };
 
@@ -78,7 +83,12 @@ export const UserManagement = observer(() => {
             window.alert("You cannot demote the last active admin.");
             return;
         }
-        await authStore.updateUser(user.id, { role });
+        try {
+            await authStore.updateUser(user.id, { role });
+            uiStore.setSuccess(`Updated role for "${user.username}"`);
+        } catch {
+            uiStore.setError("Failed to update user");
+        }
         load();
     };
 
@@ -92,13 +102,23 @@ export const UserManagement = observer(() => {
             return;
         }
         if (!window.confirm(`Delete user "${user.username}"? This cannot be undone.`)) return;
-        await authStore.deleteUser(user.id);
+        try {
+            await authStore.deleteUser(user.id);
+            uiStore.setSuccess(`Deleted user "${user.username}"`);
+        } catch {
+            uiStore.setError("Failed to delete user");
+        }
         load();
     };
 
     const handlePasswordReset = async (userId: string) => {
         if (resetPassword.length < 8) return;
-        await authStore.updateUser(userId, { password: resetPassword });
+        try {
+            await authStore.updateUser(userId, { password: resetPassword });
+            uiStore.setSuccess("Password updated");
+        } catch {
+            uiStore.setError("Failed to update user");
+        }
         setResetUserId(null);
         setResetPassword("");
     };
@@ -182,7 +202,7 @@ export const UserManagement = observer(() => {
                                 <div key={user.id} className={`rounded-xl border p-4 flex items-center gap-4 transition-colors ${user.is_active ? "bg-gray-900/50 border-gray-700/60" : "bg-gray-900/20 border-gray-700/30 opacity-60"}`}>
                                     {/* Avatar */}
                                     <div className="w-10 h-10 rounded-full bg-gray-700 flex items-center justify-center text-gray-300 font-bold text-sm flex-shrink-0">
-                                        {user.username[0].toUpperCase()}
+                                        {user.username?.[0]?.toUpperCase() ?? "?"}
                                     </div>
 
                                     {/* Info */}

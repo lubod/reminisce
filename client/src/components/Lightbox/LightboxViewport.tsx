@@ -12,7 +12,7 @@ interface LightboxViewportProps {
     enhanceLoading: boolean;
     zoomStyle: React.CSSProperties;
     zoomScale: number;
-    onWheel: (e: React.WheelEvent) => void;
+    viewportRef?: React.RefObject<HTMLDivElement | null>;
     onMouseDown: (e: React.MouseEvent) => void;
     onMouseMove: (e: React.MouseEvent) => void;
     onMouseUp: () => void;
@@ -30,7 +30,7 @@ export const LightboxViewport: React.FC<LightboxViewportProps> = ({
     enhanceLoading,
     zoomStyle,
     zoomScale,
-    onWheel,
+    viewportRef,
     onMouseDown,
     onMouseMove,
     onMouseUp,
@@ -41,8 +41,8 @@ export const LightboxViewport: React.FC<LightboxViewportProps> = ({
 
     return (
         <div
+            ref={viewportRef}
             className="flex-1 flex items-center justify-center mb-4 overflow-hidden relative select-none"
-            onWheel={onWheel}
             onMouseDown={onMouseDown}
             onMouseMove={onMouseMove}
             onMouseUp={onMouseUp}

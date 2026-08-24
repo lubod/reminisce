@@ -3,7 +3,7 @@ import { observer } from "mobx-react-lite";
 import { useStore } from "../stores/RootStore";
 import type { SearchType, MediaTypeFilter } from "../stores/MediaStore";
 import { MediaLightbox } from "./MediaLightbox";
-import { Star, Search, X, ChevronDown, ChevronUp, SlidersHorizontal, Play, MapPin, Map, LayoutGrid } from "lucide-react";
+import { Star, Search, X, ChevronDown, ChevronUp, SlidersHorizontal, Play, MapPin, Map, LayoutGrid, Image } from "lucide-react";
 import { MapView } from "./MapView";
 
 export const MediaBrowser = observer(() => {
@@ -35,12 +35,15 @@ export const MediaBrowser = observer(() => {
     }, [mediaStore]);
 
     useEffect(() => {
+        // Re-run when mapActive flips so the sentinel is re-observed after the
+        // grid remounts on return from Map view.
+        void mediaStore.mapActive;
         const element = observerTarget.current;
         if (!element) return;
         const observer = new IntersectionObserver(handleObserver, { threshold: 0, rootMargin: "20px" });
         observer.observe(element);
         return () => observer.unobserve(element);
-    }, [handleObserver]);
+    }, [handleObserver, mediaStore.mapActive]);
 
     return (
         <div>
@@ -171,8 +174,8 @@ export const MediaBrowser = observer(() => {
                                     />
                                     {mediaStore.locationSuggestions.length > 0 && (
                                         <div className="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded-md shadow-2xl max-h-48 overflow-auto">
-                                            {mediaStore.locationSuggestions.map((loc, idx) => (
-                                                <button key={idx} onClick={() => mediaStore.selectLocation(loc)} className="w-full px-3 py-2 text-left text-sm hover:bg-gray-700 border-b border-gray-700 text-gray-200">
+                                            {mediaStore.locationSuggestions.map((loc) => (
+                                                <button key={loc.place_id ?? `${loc.name}-${loc.latitude}-${loc.longitude}`} onClick={() => mediaStore.selectLocation(loc)} className="w-full px-3 py-2 text-left text-sm hover:bg-gray-700 border-b border-gray-700 text-gray-200">
                                                     {loc.name} <span className="text-[10px] text-gray-500 block">{loc.display_name}</span>
                                                 </button>
                                             ))}
@@ -310,6 +313,16 @@ export const MediaBrowser = observer(() => {
 
             {mediaStore.mapActive ? (
                 <MapView />
+            ) : mediaStore.groupedAllMedia.length === 0 && !mediaStore.isSearching && !mediaStore.isLoadingMoreSearch ? (
+                <div className="flex flex-col items-center justify-center py-24 text-gray-500">
+                    <Image size={48} className="mb-4 opacity-30" />
+                    <p className="text-lg font-medium">
+                        {mediaStore.searchMode ? "No results for your search" : "No photos yet"}
+                    </p>
+                    {!mediaStore.searchMode && (
+                        <p className="text-sm mt-1">Upload or import photos to get started.</p>
+                    )}
+                </div>
             ) : (
             mediaStore.groupedAllMedia.map((group) => (
                 <div key={group.date} className="mb-8 animate-in fade-in slide-in-from-bottom-2 duration-500">
@@ -331,7 +344,7 @@ export const MediaBrowser = observer(() => {
                                         if (idx !== -1) mediaStore.openMediaLightbox(idx, 'all');
                                     }}
                                     onKeyDown={(e) => {
-                                        if (e.key === 'Enter' || e.key === ' ') {
+                                        if ((e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget) {
                                             e.preventDefault();
                                             const idx = mediaStore.allMedia.findIndex(m => m.hash === item.hash && m.device_id === item.device_id);
                                             if (idx !== -1) mediaStore.openMediaLightbox(idx, 'all');
@@ -350,20 +363,23 @@ export const MediaBrowser = observer(() => {
                                             <Play size={32} className="text-white fill-white/50" />
                                         </div>
                                     )}
-                                    {/* Similarity Score Badge */}
-                                    {item.similarity !== undefined && (
-                                        <div className="absolute top-2 left-2 px-2 py-0.5 rounded-md bg-blue-500/90 backdrop-blur-sm">
-                                            <span className="text-[10px] font-bold text-white">
-                                                {(item.similarity * 100).toFixed(0)}
-                                            </span>
-                                        </div>
-                                    )}
-                                    {/* Quality Score Badge */}
-                                    {mediaStore.sortBy === 'quality' && item.aesthetic_score != null && (
-                                        <div className="absolute top-2 left-2 px-1.5 py-0.5 rounded-md bg-black/60 backdrop-blur-sm">
-                                            <span className="text-[10px] font-bold text-yellow-400">
-                                                ★ {item.aesthetic_score.toFixed(1)}
-                                            </span>
+                                    {/* Score badges — stacked vertically so they can't overlap */}
+                                    {(item.similarity !== undefined || (mediaStore.sortBy === 'quality' && item.aesthetic_score != null)) && (
+                                        <div className="absolute top-2 left-2 flex flex-col items-start gap-1 pointer-events-none">
+                                            {item.similarity !== undefined && (
+                                                <div className="px-2 py-0.5 rounded-md bg-blue-500/90 backdrop-blur-sm">
+                                                    <span className="text-[10px] font-bold text-white">
+                                                        {(item.similarity * 100).toFixed(0)}
+                                                    </span>
+                                                </div>
+                                            )}
+                                            {mediaStore.sortBy === 'quality' && item.aesthetic_score != null && (
+                                                <div className="px-1.5 py-0.5 rounded-md bg-black/60 backdrop-blur-sm">
+                                                    <span className="text-[10px] font-bold text-yellow-400">
+                                                        ★ {item.aesthetic_score.toFixed(1)}
+                                                    </span>
+                                                </div>
+                                            )}
                                         </div>
                                     )}
                                     {/* Star Button */}

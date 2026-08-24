@@ -381,12 +381,17 @@ export class StatsStore {
     };
 
     forceRebalance = async (): Promise<void> => {
-        await axios.post('/p2p/backup/rebalance');
-        this.rootStore.uiStore.setSuccess('Rebalance triggered — shards will redistribute in the background.');
-        await Promise.all([
-            this.fetchP2PBackupStatus(),
-            this.fetchDiscoveredPeers(),
-        ]);
+        try {
+            await axios.post('/p2p/backup/rebalance');
+            this.rootStore.uiStore.setSuccess('Rebalance triggered — shards will redistribute in the background.');
+            await Promise.all([
+                this.fetchP2PBackupStatus(),
+                this.fetchDiscoveredPeers(),
+            ]);
+        } catch (error) {
+            logger.error("Failed to trigger rebalance", error);
+            this.rootStore.uiStore.setError("Failed to trigger rebalance");
+        }
     };
 
     fetchServiceHealth = async () => {
@@ -394,8 +399,19 @@ export class StatsStore {
             // /health is proxied directly by nginx (not under /api)
             const response = await axios.get<ServiceHealth>("/health", {
                 baseURL: "",
-                validateStatus: () => true,
+                // Only a 200 counts as healthy; anything else must fall through
+                // to the offline snapshot instead of being accepted blindly.
+                validateStatus: (status) => status === 200,
             });
+            // A 200 alone isn't enough — a proxy can answer with an HTML login/
+            // error page. Accept only a JSON content-type or a real object body.
+            const contentType = String(response.headers?.["content-type"] ?? "").toLowerCase();
+            const isJsonObject =
+                contentType.includes("json") ||
+                (response.data !== null && typeof response.data === "object");
+            if (!isJsonObject) {
+                throw new Error("Non-JSON /health response");
+            }
             runInAction(() => { this.serviceHealth = response.data; });
         } catch (error) {
             logger.error("Service health check failed", error);

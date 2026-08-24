@@ -66,6 +66,7 @@ export const TrashBrowser = observer(() => {
                             alt={item.name}
                             className="w-full h-full object-cover"
                             loading="lazy"
+                            onError={(e) => { e.currentTarget.style.visibility = "hidden"; }}
                         />
                         {/* Hover overlay */}
                         <div className="absolute inset-0 bg-black/70 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-between p-2">

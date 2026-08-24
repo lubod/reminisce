@@ -12,9 +12,19 @@ import { DuplicatesBrowser } from "./components/DuplicatesBrowser";
 import { TrashBrowser } from "./components/TrashBrowser";
 import { useStore } from "./stores/RootStore";
 import { observer } from "mobx-react-lite";
-import { Loader } from "lucide-react";
+import { Loader, FileQuestion } from "lucide-react";
 
 import { ErrorBoundary } from "./components/ErrorBoundary";
+
+const NotFound = () => (
+    <div className="flex flex-col items-center justify-center py-24 text-gray-400 animate-in fade-in duration-500">
+        <FileQuestion size={56} className="mb-4 text-gray-600" />
+        <h2 className="text-2xl font-bold text-gray-200">Page not found</h2>
+        <p className="text-sm text-gray-500 mt-2">
+            The page you're looking for doesn't exist or has been moved.
+        </p>
+    </div>
+);
 
 const ProtectedRoute = observer(({ children }: { children: ReactNode }) => {
   const { authStore } = useStore();
@@ -61,6 +71,7 @@ const App = observer(() => {
             <Route path="duplicates" element={<DuplicatesBrowser />} />
             <Route path="orientation" element={<OrientationCheck />} />
             <Route path="trash" element={<TrashBrowser />} />
+            <Route path="*" element={<NotFound />} />
           </Route>
         </Routes>
       </Router>

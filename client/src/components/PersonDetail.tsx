@@ -56,6 +56,7 @@ export const PersonDetail = observer(() => {
 
     const handleMerge = async () => {
         if (mergeSourceIds.size === 0) return;
+        if (!window.confirm(`Merge ${mergeSourceIds.size} persons into "${person.name || `Person ${person.id}`}"? This cannot be undone.`)) return;
         setIsMerging(true);
         // current person is the target (survives); selected persons are sources (get deleted)
         await personStore.mergePersons(Array.from(mergeSourceIds), person.id);

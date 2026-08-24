@@ -71,10 +71,20 @@ export const OrientationCheck = observer(() => {
         if (!window.confirm(`Delete "${item.name}"?`)) return;
         closeFull();
         await mediaStore.deleteMedia(item.hash);
-        const remains = images.length > 1 ? selected % (images.length - 1) : null;
-        setSelected(remains);
-        if (remains !== null) openFull(remains);
-        mediaStore.fetchNoExifImages(1, 50, false);
+        // Refetch first, then clamp the viewer index to the new list bounds so
+        // the next rendered item is a real neighbour (no arbitrary jump).
+        await mediaStore.fetchNoExifImages(1, 50, false);
+        const remaining = mediaStore.noExifImages;
+        if (remaining.length === 0) {
+            setSelected(null);
+            return;
+        }
+        const nextIndex = Math.min(selected, remaining.length - 1);
+        setSelected(nextIndex);
+        const nextItem = remaining[nextIndex];
+        setFullUrl(mediaStore.getAuthenticatedUrl(
+            nextItem.media_type === "video" ? `/api/video/${nextItem.hash}` : `/api/image/${nextItem.hash}`
+        ));
     };
 
     return (

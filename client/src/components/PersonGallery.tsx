@@ -21,7 +21,9 @@ export const PersonGallery = observer(() => {
     }, [personStore]);
 
     useEffect(() => {
-        personStore.fetchPersons(true);
+        // Reset to page 1 only when the store is empty; otherwise keep the
+        // loaded list so returning from a detail page preserves scroll position.
+        personStore.fetchPersons(personStore.persons.length === 0);
         window.addEventListener('scroll', handleScroll);
 
         return () => {

@@ -37,6 +37,9 @@ export const MediaLightbox = observer(() => {
     // Drag-to-pan state
     const isDragging = useRef(false);
     const lastMousePos = useRef({ x: 0, y: 0 });
+    const viewportRef = useRef<HTMLDivElement>(null);
+
+    const isOpen = mediaStore.selectedMediaIndex !== null;
 
     const selectedMedia = mediaStore.selectedMediaIndex !== null
         ? mediaStore.activeLightboxItems[mediaStore.selectedMediaIndex]
@@ -68,6 +71,10 @@ export const MediaLightbox = observer(() => {
             ) {
                 return;
             }
+            // Never hijack browser/OS shortcuts (Ctrl+R, Cmd+W, Alt+Tab, …)
+            if (e.ctrlKey || e.metaKey || e.altKey) {
+                return;
+            }
             if (e.key === "Escape") {
                 mediaStore.closeMediaLightbox();
             } else if (e.key === "ArrowRight") {
@@ -87,12 +94,19 @@ export const MediaLightbox = observer(() => {
         return () => window.removeEventListener("keydown", handleKeyDown);
     }, [mediaStore, isAdmin, handleDelete]);
 
-    // Mouse handlers for zoom and pan
-    const handleWheel = (e: React.WheelEvent) => {
-        e.preventDefault();
-        const delta = e.deltaY > 0 ? 0.9 : 1.1;
-        mediaStore.setZoomScale(mediaStore.zoomScale * delta);
-    };
+    // Non-passive wheel zoom (native listener via ref, mirrors DuplicatesLightbox)
+    useEffect(() => {
+        if (!isOpen) return;
+        const el = viewportRef.current;
+        if (!el) return;
+        const handleWheel = (e: WheelEvent) => {
+            e.preventDefault();
+            const delta = e.deltaY > 0 ? 0.9 : 1.1;
+            mediaStore.setZoomScale(mediaStore.zoomScale * delta);
+        };
+        el.addEventListener("wheel", handleWheel, { passive: false });
+        return () => el.removeEventListener("wheel", handleWheel);
+    }, [isOpen, mediaStore]);
 
     const handleMouseDown = (e: React.MouseEvent) => {
         if (mediaStore.zoomScale > 1) {
@@ -415,7 +429,7 @@ export const MediaLightbox = observer(() => {
                     enhanceLoading={enhanceLoading}
                     zoomStyle={zoomStyle}
                     zoomScale={mediaStore.zoomScale}
-                    onWheel={handleWheel}
+                    viewportRef={viewportRef}
                     onMouseDown={handleMouseDown}
                     onMouseMove={handleMouseMove}
                     onMouseUp={handleMouseUp}

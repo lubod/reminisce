@@ -119,6 +119,16 @@ export const Dashboard = observer(() => {
         }
     }, [isAdmin, activeTab, statsStore]);
 
+    // Verify modal: close on Escape (mirrors DirectoryImportModal scaffolding)
+    useEffect(() => {
+        if (!showVerifyModal) return;
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (e.key === "Escape") setShowVerifyModal(false);
+        };
+        document.addEventListener("keydown", handleKeyDown);
+        return () => document.removeEventListener("keydown", handleKeyDown);
+    }, [showVerifyModal]);
+
     // Update local state when settings are loaded
     useEffect(() => {
         if (statsStore.aiSettings) {
@@ -884,11 +894,15 @@ export const Dashboard = observer(() => {
             {showServerImportModal && <ServerImportModal onClose={() => setShowServerImportModal(false)} />}
 
             {showVerifyModal && (
-                <div className="fixed inset-0 bg-black/80 backdrop-blur-xl flex items-center justify-center z-50 p-4">
+                <div
+                    className="fixed inset-0 bg-black/80 backdrop-blur-xl flex items-center justify-center z-50 p-4"
+                    onClick={() => setShowVerifyModal(false)}
+                >
                     <div
                         role="dialog"
                         aria-modal="true"
                         aria-labelledby="verify-modal-title"
+                        onClick={(e) => e.stopPropagation()}
                         className="bg-gray-800 rounded-3xl border border-gray-700 shadow-2xl max-w-2xl w-full overflow-hidden"
                     >
                         <div className="px-8 py-6 border-b border-gray-700 flex justify-between items-center bg-gray-800/50">

@@ -245,7 +245,8 @@ export const DuplicatesBrowser = observer(() => {
                                             src={img.thumbnail_url}
                                             alt={img.name}
                                             className="w-full h-full object-cover"
-                                            loading="eager"
+                                            loading="lazy"
+                                            onError={(e) => { e.currentTarget.style.visibility = "hidden"; }}
                                         />
                                     </div>
 
@@ -268,7 +269,11 @@ export const DuplicatesBrowser = observer(() => {
 
                                         {isAdmin && (
                                             <button
-                                                onClick={() => duplicatesStore.deleteImage(img.hash)}
+                                                onClick={() => {
+                                                    if (window.confirm(`Delete "${img.name}"? This cannot be undone.`)) {
+                                                        duplicatesStore.deleteImage(img.hash);
+                                                    }
+                                                }}
                                                 className="mt-2 w-full flex items-center justify-center gap-1.5 px-2 py-1 bg-red-900/40 hover:bg-red-700 text-red-400 hover:text-white text-xs rounded transition-colors"
                                                 title="Delete this image"
                                             >

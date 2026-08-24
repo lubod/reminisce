@@ -216,6 +216,34 @@ export const Layout = observer(() => {
             <main className={`${uiStore.isFullscreen ? 'max-w-none p-0' : 'max-w-7xl mx-auto py-6 px-4 sm:px-6 lg:px-8'}`}>
                 <Outlet />
             </main>
+
+            {/* Global toast host — uiStore messages render nowhere else */}
+            {(uiStore.error || uiStore.success) && (
+                <div className="fixed top-4 right-4 z-[100] flex flex-col gap-2 w-80 max-w-[calc(100vw-2rem)]">
+                    {uiStore.success && (
+                        <div
+                            role="status"
+                            onClick={() => uiStore.dismissSuccess()}
+                            className="cursor-pointer flex items-start justify-between gap-3 bg-green-600 hover:bg-green-500 text-white px-4 py-3 rounded-lg shadow-xl transition-colors"
+                            title="Click to dismiss"
+                        >
+                            <span className="text-sm font-medium break-words">{uiStore.success}</span>
+                            <X size={16} className="flex-shrink-0 mt-0.5 opacity-80" />
+                        </div>
+                    )}
+                    {uiStore.error && (
+                        <div
+                            role="alert"
+                            onClick={() => uiStore.dismissError()}
+                            className="cursor-pointer flex items-start justify-between gap-3 bg-red-600 hover:bg-red-500 text-white px-4 py-3 rounded-lg shadow-xl transition-colors"
+                            title="Click to dismiss"
+                        >
+                            <span className="text-sm font-medium break-words">{uiStore.error}</span>
+                            <X size={16} className="flex-shrink-0 mt-0.5 opacity-80" />
+                        </div>
+                    )}
+                </div>
+            )}
         </div>
     );
 });

@@ -257,7 +257,11 @@ export function DuplicatesLightbox({ group, initialIdx, isAdmin, onClose, onDele
                         if (toDelete.length === 0) return null;
                         return (
                             <button
-                                onClick={() => toDelete.forEach((img) => onDelete(img.hash))}
+                                onClick={() => {
+                                    if (window.confirm(`Delete ${toDelete.length} duplicate image${toDelete.length !== 1 ? "s" : ""} and keep "${best.name}"? This cannot be undone.`)) {
+                                        toDelete.forEach((img) => onDelete(img.hash));
+                                    }
+                                }}
                                 className="flex items-center gap-1.5 px-2 py-1 bg-green-800/50 hover:bg-green-700 text-green-300 hover:text-white text-xs rounded transition-colors"
                                 title={`Keep best quality (${best.name}) and delete ${toDelete.length} other${toDelete.length !== 1 ? "s" : ""}`}
                             >

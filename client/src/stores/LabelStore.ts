@@ -65,6 +65,12 @@ export class LabelStore {
             await axios.delete(`/labels/${labelId}`);
             runInAction(() => {
                 this.labels = this.labels.filter(l => l.id !== labelId);
+                // If the deleted label was an active media filter, clear it so
+                // the grid doesn't keep filtering against a nonexistent label.
+                const mediaStore = this.rootStore.mediaStore;
+                if (mediaStore && mediaStore.filters.selectedLabelId === labelId) {
+                    mediaStore.filters.selectedLabelId = null;
+                }
             });
         } catch (error) {
             logger.error("Failed to delete label", error);

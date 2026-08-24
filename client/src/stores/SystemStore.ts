@@ -41,21 +41,6 @@ export interface AlertsResponse {
     alerts: SystemAlert[];
 }
 
-export interface SystemStats {
-    cpu_usage_percent: number;
-    memory_usage_percent: number;
-    memory_used_gb: number;
-    memory_total_gb: number;
-    disk_usage_percent: number;
-    disk_available_gb: number;
-    uptime_seconds: number;
-    gpu_usage_percent: number | null;
-    gpu_memory_used_mb: number | null;
-    gpu_memory_total_mb: number | null;
-    gpu_temp_celsius: number | null;
-    cpu_temp_celsius: number | null;
-}
-
 export interface GpuCard {
     gpu: string;
     utilization_percent: number | null;
@@ -68,28 +53,6 @@ export interface GpuCard {
 export interface GpuResponse {
     available: boolean;
     cards: GpuCard[];
-}
-
-export interface BackupStatus {
-    is_healthy: boolean;
-    health_status: string;
-    active_peers: number;
-    ok_files: number;
-    degraded_files: number;
-    missing_files: number;
-    pending_images: number;
-    pending_videos: number;
-    db_backups_count: number;
-    db_backups_latest_at: string | null;
-}
-
-export interface PoolStats {
-    main_pool: {
-        size: number;
-        available: number;
-        max_size: number;
-        utilization_percent: number;
-    };
 }
 
 export interface WorkerStats {
@@ -159,9 +122,6 @@ export class SystemStore {
     errors: LogLine[] = [];
     errorCounts: ErrorCounts = { error: 0, warn: 0, panic: 0 };
     alerts: SystemAlert[] = [];
-    system: SystemStats | null = null;
-    pool: PoolStats | null = null;
-    backup: BackupStatus | null = null;
     gpu: GpuResponse | null = null;
     aiModels: AiModelsResponse | null = null;
     pipeline: PipelineResponse | null = null;
@@ -170,9 +130,6 @@ export class SystemStore {
 
     isLoading = false;
     lastError: string | null = null;
-
-    private refreshPromise: Promise<void> | null = null;
-    private timer: ReturnType<typeof setInterval> | null = null;
 
     constructor(root: RootStore) {
         this.root = root;
@@ -210,36 +167,6 @@ export class SystemStore {
             this.lastError = null;
         } catch (e) {
             this.recordError("loadAlerts", e);
-        }
-    }
-
-    async loadSystem(): Promise<void> {
-        try {
-            const resp = await axios.get<SystemStats>("/system-stats");
-            this.system = resp.data;
-            this.lastError = null;
-        } catch (e) {
-            this.recordError("loadSystem", e);
-        }
-    }
-
-    async loadPool(): Promise<void> {
-        try {
-            const resp = await axios.get<PoolStats>("/pool-stats");
-            this.pool = resp.data;
-            this.lastError = null;
-        } catch (e) {
-            this.recordError("loadPool", e);
-        }
-    }
-
-    async loadBackup(): Promise<void> {
-        try {
-            const resp = await axios.get<BackupStatus>("/p2p/backup/status");
-            this.backup = resp.data;
-            this.lastError = null;
-        } catch (e) {
-            this.recordError("loadBackup", e);
         }
     }
 
@@ -290,47 +217,6 @@ export class SystemStore {
         if (range === this.seriesRange) return;
         this.seriesRange = range;
         void this.loadSeries();
-    }
-
-    /** Refreshes everything exactly once (single-flight). */
-    async refreshAll(): Promise<void> {
-        if (this.refreshPromise) {
-            return this.refreshPromise;
-        }
-        this.isLoading = true;
-        this.refreshPromise = Promise.allSettled([
-            this.loadLogs(),
-            this.loadErrors(),
-            this.loadAlerts(),
-            this.loadSystem(),
-            this.loadPool(),
-            this.loadBackup(),
-            this.loadGpu(),
-            this.loadAiModels(),
-            this.loadPipeline(),
-            this.loadSeries(),
-        ])
-            .then(() => {
-                this.isLoading = false;
-            })
-            .finally(() => {
-                this.refreshPromise = null;
-            });
-        return this.refreshPromise;
-    }
-
-    /** Begin auto-refresh. Returns a cleanup function. */
-    startAutoRefresh(intervalMs = 5000): () => void {
-        void this.refreshAll();
-        this.timer = setInterval(() => {
-            void this.refreshAll();
-        }, intervalMs);
-        return () => {
-            if (this.timer) {
-                clearInterval(this.timer);
-                this.timer = null;
-            }
-        };
     }
 
     private recordError(context: string, e: unknown): void {

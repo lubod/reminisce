@@ -22,19 +22,6 @@ const logEntry = (over: Partial<{ timestamp: number; level: string; target: stri
     ...over,
 });
 
-const backupStatus = {
-    is_healthy: true,
-    health_status: "healthy",
-    active_peers: 5,
-    ok_files: 100,
-    degraded_files: 0,
-    missing_files: 0,
-    pending_images: 0,
-    pending_videos: 0,
-    db_backups_count: 3,
-    db_backups_latest_at: "2026-08-09T00:00:00Z",
-};
-
 beforeEach(() => {
     mockedGet.mockReset();
 });
@@ -71,20 +58,14 @@ describe("SystemStore", () => {
         expect(s.errorCounts).toEqual({ error: 1, warn: 2, panic: 0 });
     });
 
-    it("loads alerts, system, pool, backup and gpu", async () => {
+    it("loads alerts and gpu", async () => {
         mockedGet.mockResolvedValueOnce({ data: { alerts: [{ id: "X", severity: "warning", status: "firing" }] } });
-        mockedGet.mockResolvedValueOnce({ data: { cpu_usage_percent: 12 } });
-        mockedGet.mockResolvedValueOnce({ data: { main_pool: { size: 8, available: 6, max_size: 8, utilization_percent: 25 } } });
-        mockedGet.mockResolvedValueOnce({ data: backupStatus });
         mockedGet.mockResolvedValueOnce({ data: { available: true, cards: [{ gpu: "0", utilization_percent: 50 }] } });
 
         const s = makeStore();
-        await Promise.all([s.loadAlerts(), s.loadSystem(), s.loadPool(), s.loadBackup(), s.loadGpu()]);
+        await Promise.all([s.loadAlerts(), s.loadGpu()]);
 
         expect(s.alerts[0].id).toBe("X");
-        expect(s.system?.cpu_usage_percent).toBe(12);
-        expect(s.pool?.main_pool.utilization_percent).toBe(25);
-        expect(s.backup?.health_status).toBe("healthy");
         expect(s.gpu?.cards[0].utilization_percent).toBe(50);
         expect(s.lastError).toBeNull();
     });
@@ -112,17 +93,6 @@ describe("SystemStore", () => {
         expect(s.alerts).toEqual([]);
     });
 
-    it("is single-flight and toggles isLoading", async () => {
-        mockedGet.mockResolvedValue({ data: { entries: [], source: "ring" } });
-        const s = makeStore();
-        const p1 = s.refreshAll();
-        const p2 = s.refreshAll();
-        await Promise.all([p1, p2]);
-        expect(s.isLoading).toBe(false);
-        // Deduped: the second refreshAll did not re-run the 9 loaders.
-        expect(mockedGet).toHaveBeenCalledTimes(10);
-    });
-
     it("loads series and changes range", async () => {
         mockedGet.mockResolvedValueOnce({
             data: { range: "1d", series: [{ name: "system_cpu_percent", unit: "%", points: [{ t: 1, v: 12.5 }] }] },
@@ -140,23 +110,6 @@ describe("SystemStore", () => {
         // same range is a no-op
         s.setRange("30d");
         expect(mockedGet).toHaveBeenCalledTimes(2);
-    });
-
-    it("startAutoRefresh polls on an interval and cleans up", async () => {
-        vi.useFakeTimers();
-        try {
-            mockedGet.mockResolvedValue({ data: { entries: [], source: "ring" } });
-            const s = makeStore();
-            const cleanup = s.startAutoRefresh(1000);
-            await vi.runOnlyPendingTimersAsync();
-            expect(mockedGet).toHaveBeenCalled();
-            cleanup();
-            const calls = mockedGet.mock.calls.length;
-            await vi.advanceTimersByTimeAsync(5000);
-            expect(mockedGet.mock.calls.length).toBe(calls);
-        } finally {
-            vi.useRealTimers();
-        }
     });
 
     it("loads AI models runtime status", async () => {
