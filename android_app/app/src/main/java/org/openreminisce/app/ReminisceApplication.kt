@@ -21,6 +21,33 @@ class ReminisceApplication : Application() {
     override fun onCreate() {
         super.onCreate()
 
+        // Persist fatal-crash stacks into the in-app log so "Share Logs"
+        // contains them — otherwise they only live in system logcat.
+        val previous = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            try {
+                org.openreminisce.app.util.LogCollector.e(
+                    "FATAL",
+                    "Uncaught exception on thread ${thread.name}: ${throwable.javaClass.name}: ${throwable.message}"
+                )
+                for (el in throwable.stackTrace) {
+                    org.openreminisce.app.util.LogCollector.e(
+                        "FATAL",
+                        "    at ${el.className}.${el.methodName}(${el.fileName}:${el.lineNumber})"
+                    )
+                }
+                throwable.cause?.let { cause ->
+                    org.openreminisce.app.util.LogCollector.e("FATAL", "Caused by: ${cause.javaClass.name}: ${cause.message}")
+                }
+            } catch (_: Throwable) {
+                // never let the handler itself crash
+            }
+            previous?.uncaughtException(thread, throwable)
+        }
+
+
+        super.onCreate()
+
         // Set dark theme as default
         AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES)
 
