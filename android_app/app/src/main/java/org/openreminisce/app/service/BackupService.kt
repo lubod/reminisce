@@ -42,6 +42,7 @@ class BackupService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        try {
         if (intent == null) {
             // START_STICKY restart after process death: there is no user request
             // behind this restart, so do not spin up backup work again.
@@ -90,6 +91,14 @@ class BackupService : Service() {
             Log.e(TAG, "startForeground rejected (app in background?) — continuing without FGS", e)
         }
         
+        } catch (t: Throwable) {
+            android.util.Log.e(TAG, "onStartCommand crashed", t)
+            org.openreminisce.app.util.LogCollector.e(TAG, "Service start CRASHED: ${t.javaClass.name}: ${t.message}")
+            for (el in t.stackTrace.take(15)) {
+                org.openreminisce.app.util.LogCollector.e(TAG, "    at ${el.className}.${el.methodName}(${el.fileName}:${el.lineNumber})")
+            }
+            stopSelf()
+        }
         // Start the actual backup work using WorkManager
         try {
             startBackupWork(intent)

@@ -105,6 +105,7 @@ class WebGalleryActivity : AppCompatActivity() {
     }
 
     private fun startQuickBackup() {
+        try {
         if (isBackupRunning()) {
             Log.d(TAG, "Quick backup ignored — backup already running")
             android.widget.Toast.makeText(this, "Upload already running", android.widget.Toast.LENGTH_SHORT).show()
@@ -144,9 +145,20 @@ class WebGalleryActivity : AppCompatActivity() {
             putExtra("quick_backup", true)
         }
         startService(intent)
+        } catch (t: Throwable) {
+            android.util.Log.e(TAG, "startQuickBackup crashed", t)
+            org.openreminisce.app.util.LogCollector.e(TAG, "startQuickBackup CRASHED: ${t.javaClass.name}: ${t.message}")
+            for (el in t.stackTrace.take(15)) {
+                org.openreminisce.app.util.LogCollector.e(TAG, "    at ${el.className}.${el.methodName}(${el.fileName}:${el.lineNumber})")
+            }
+            android.widget.Toast.makeText(this, "Backup failed to start: ${t.message}", android.widget.Toast.LENGTH_LONG).show()
+            isBackingUp = false
+            applyKeepScreenOn(false)
+        }
     }
 
     private fun startFullBackup() {
+        try {
         if (isBackupRunning()) {
             Log.d(TAG, "Full backup ignored — backup already running")
             android.widget.Toast.makeText(this, "Upload already running", android.widget.Toast.LENGTH_SHORT).show()
@@ -174,6 +186,16 @@ class WebGalleryActivity : AppCompatActivity() {
             putExtra("quick_backup", false)
         }
         startService(intent)
+        } catch (t: Throwable) {
+            android.util.Log.e(TAG, "startFullBackup crashed", t)
+            org.openreminisce.app.util.LogCollector.e(TAG, "startFullBackup CRASHED: ${t.javaClass.name}: ${t.message}")
+            for (el in t.stackTrace.take(15)) {
+                org.openreminisce.app.util.LogCollector.e(TAG, "    at ${el.className}.${el.methodName}(${el.fileName}:${el.lineNumber})")
+            }
+            android.widget.Toast.makeText(this, "Backup failed to start: ${t.message}", android.widget.Toast.LENGTH_LONG).show()
+            isBackingUp = false
+            applyKeepScreenOn(false)
+        }
     }
 
     private fun stopBackup() {
