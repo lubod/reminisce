@@ -18,7 +18,7 @@ class BackupService : Service() {
         private const val KEY_BACKUP_TYPE = "backup_type"
         private const val KEY_IS_QUICK_BACKUP = "is_quick_backup"
         private const val KEY_BACKUP_RUNNING_UNTIL = "backup_running_until"
-        private const val BACKUP_RUNNING_WINDOW_MS = 6L * 60 * 60 * 1000
+        private const val BACKUP_RUNNING_WINDOW_MS = 15L * 60 * 1000
     }
 
     override fun onBind(intent: Intent?): IBinder? {
@@ -188,7 +188,7 @@ class BackupService : Service() {
         Log.d(TAG, "Enqueuing backup work request with ID: ${backupWorkRequest.id}")
         WorkManager.getInstance(this).enqueueUniqueWork(
             "reminisce_backup_work",
-            androidx.work.ExistingWorkPolicy.KEEP,
+            androidx.work.ExistingWorkPolicy.REPLACE,
             backupWorkRequest
         )
 

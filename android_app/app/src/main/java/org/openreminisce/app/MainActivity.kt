@@ -157,6 +157,7 @@ class MainActivity : AppCompatActivity() {
     private fun startQuickBackup() {
         if (isBackupRunning()) {
             Log.d(TAG, "Quick backup ignored — backup already running")
+            android.widget.Toast.makeText(this, "Upload already running", android.widget.Toast.LENGTH_SHORT).show()
             return
         }
 
@@ -202,6 +203,7 @@ class MainActivity : AppCompatActivity() {
     private fun startFullBackup() {
         if (isBackupRunning()) {
             Log.d(TAG, "Full backup ignored — backup already running")
+            android.widget.Toast.makeText(this, "Upload already running", android.widget.Toast.LENGTH_SHORT).show()
             return
         }
 
