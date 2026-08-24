@@ -75,6 +75,26 @@ describe("LabelStore", () => {
         expect(mocks.api.delete).toHaveBeenCalledWith("/labels/1");
     });
 
+    it("deleteLabel nulls a dangling mediaStore selectedLabelId filter", async () => {
+        mocks.routes["/labels"] = () => ({ data: { labels: [{ id: 1, name: "A" }, { id: 2, name: "B" }] } });
+        const errors: string[] = [];
+        const successes: string[] = [];
+        const mockRoot = {
+            uiStore: { setError: (m: string) => errors.push(m), setSuccess: (m: string) => successes.push(m) },
+            mediaStore: { filters: { selectedLabelId: 2 } },
+        } as unknown as RootStore;
+        const store = new LabelStore(mockRoot);
+        mocks.routes["/labels"] = () => ({ data: { labels: [{ id: 1, name: "A" }, { id: 2, name: "B" }] } });
+        await store.fetchLabels();
+        await store.deleteLabel(2);
+        // eslint-disable-next-line no-console
+        // Assert through the store's own view of the root: whatever object
+        // graph the grid reads, the dangling filter must be cleared.
+        const msViaStore = (store as unknown as { rootStore: { mediaStore?: { filters: { selectedLabelId: number | null } } } }).rootStore.mediaStore;
+        expect(msViaStore?.filters.selectedLabelId).toBeNull();
+        expect(store.labels.map(l => l.id)).toEqual([1]); // only label 1 remains
+    });
+
     it("deleteLabel failure rethrows and surfaces an error", async () => {
         mocks.api.delete.mockImplementationOnce(async () => { throw new Error("x"); });
         const { store, errors } = makeStore();

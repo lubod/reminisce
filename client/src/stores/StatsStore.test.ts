@@ -242,6 +242,19 @@ describe("StatsStore", () => {
         expect(mocks.api.get).toHaveBeenCalledWith("/health", expect.objectContaining({ baseURL: "" }));
     });
 
+    it("fetchServiceHealth treats a 200 non-JSON payload as offline", async () => {
+        // A reverse proxy can answer 200 with an HTML error page.
+        mocks.routes["/health"] = () => ({
+            data: "<html>502 Bad Gateway</html>",
+            status: 200,
+            headers: { "content-type": "text/html" },
+        });
+        const { store } = makeStore();
+        await store.fetchServiceHealth();
+        expect(store.serviceHealth?.status).toBe("offline");
+        expect(store.serviceHealth?.database).toBe("disconnected");
+    });
+
     it("fetchServiceHealth falls back to an offline snapshot on failure", async () => {
         mocks.routes["/health"] = () => { throw new Error("x"); };
         const { store } = makeStore();
