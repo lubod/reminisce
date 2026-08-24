@@ -247,6 +247,30 @@ pub async fn get_video(
     }
 }
 
+/// Derive a display orientation label from stored dimensions + EXIF-style
+/// orientation. Orientations 5-8 swap the sensor width/height, so the
+/// *effective* dimensions decide Landscape vs Portrait vs Square.
+pub fn orientation_label(
+    width: Option<i32>,
+    height: Option<i32>,
+    orientation: Option<i16>,
+) -> Option<String> {
+    let (w, h) = match (width, height) {
+        (Some(w), Some(h)) if w > 0 && h > 0 => (w as i64, h as i64),
+        _ => return None,
+    };
+    let swaps = matches!(orientation, Some(5..=8));
+    let (ew, eh) = if swaps { (h, w) } else { (w, h) };
+    const TOL: i64 = 5; // percent tolerance around square
+    if (ew - eh).abs() * 100 <= eh * TOL {
+        Some("Square".to_string())
+    } else if ew > eh {
+        Some("Landscape".to_string())
+    } else {
+        Some("Portrait".to_string())
+    }
+}
+
 #[derive(Serialize, ToSchema)]
 #[schema(example = json!({
     "hash": "somehash",
@@ -274,6 +298,12 @@ pub struct ImageMetadata {
     pub file_size_bytes: Option<i64>,
     pub width: Option<i32>,
     pub height: Option<i32>,
+    /// Raw EXIF-style orientation value (1-8). NULL when unknown.
+    pub orientation: Option<i16>,
+    /// Display orientation derived from effective dimensions after the
+    /// stored orientation is applied ("Landscape" / "Portrait" / "Square").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub orientation_label: Option<String>,
     pub media_type: Option<String>,
 }
 
@@ -307,7 +337,7 @@ pub async fn get_image_metadata(
         .query_opt(
             "SELECT i.hash, i.name, i.description, i.place, i.created_at, i.exif, 
              CASE WHEN s.hash IS NOT NULL THEN true ELSE false END as starred, 
-             i.deviceid, i.file_size_bytes, i.width, i.height 
+             i.deviceid, i.file_size_bytes, i.width, i.height, i.orientation 
              FROM images i 
              LEFT JOIN starred_images s ON i.hash = s.hash AND s.user_id = $1 
              WHERE i.user_id = $1 AND i.hash = $2 AND i.deleted_at IS NULL LIMIT 1",
@@ -332,6 +362,8 @@ pub async fn get_image_metadata(
             file_size_bytes: file_size.map(|v| v as i64),
             width: row.get(9),
             height: row.get(10),
+            orientation: row.get(11),
+            orientation_label: orientation_label(row.get(9), row.get(10), row.get(11)),
             media_type: Some("image".to_string()),
         };
 
@@ -343,7 +375,7 @@ pub async fn get_image_metadata(
         .query_opt(
             "SELECT v.hash, v.name, v.description, NULL::text as place, v.created_at, NULL::text as exif, 
              CASE WHEN s.hash IS NOT NULL THEN true ELSE false END as starred, 
-             v.deviceid, v.file_size_bytes, NULL::integer as width, NULL::integer as height 
+             v.deviceid, v.file_size_bytes, NULL::integer as width, NULL::integer as height, NULL::smallint as orientation 
              FROM videos v 
              LEFT JOIN starred_videos s ON v.hash = s.hash AND s.user_id = $1 
              WHERE v.user_id = $1 AND v.hash = $2 AND v.deleted_at IS NULL LIMIT 1",
@@ -368,6 +400,8 @@ pub async fn get_image_metadata(
             file_size_bytes: file_size,
             width: row.get(9),
             height: row.get(10),
+            orientation: None,
+            orientation_label: None,
             media_type: Some("video".to_string()),
         };
 
@@ -1127,5 +1161,36 @@ pub async fn save_enhanced_image(
                 serde_json::json!({"error": format!("Failed to save: {}", e)})
             ))
         }
+    }
+}
+
+#[cfg(test)]
+mod orientation_label_tests {
+    use super::orientation_label;
+
+    #[test]
+    fn labels_basic_orientations() {
+        assert_eq!(orientation_label(Some(4000), Some(3000), Some(1)), Some("Landscape".to_string()));
+        assert_eq!(orientation_label(Some(3000), Some(4000), Some(1)), Some("Portrait".to_string()));
+        assert_eq!(orientation_label(Some(2000), Some(2000), None), Some("Square".to_string()));
+    }
+
+    #[test]
+    fn swapped_orientation_flips_effective_dimensions() {
+        // 4000x3000 sensor rotated 90° (orientation 6) displays as portrait.
+        assert_eq!(orientation_label(Some(4000), Some(3000), Some(6)), Some("Portrait".to_string()));
+        assert_eq!(orientation_label(Some(3000), Some(4000), Some(8)), Some("Landscape".to_string()));
+    }
+
+    #[test]
+    fn near_square_within_tolerance_is_square() {
+        assert_eq!(orientation_label(Some(1000), Some(970), Some(1)), Some("Square".to_string()));
+    }
+
+    #[test]
+    fn unknown_or_invalid_inputs_return_none() {
+        assert_eq!(orientation_label(None, Some(100), Some(1)), None);
+        assert_eq!(orientation_label(Some(0), Some(0), Some(1)), None);
+        assert_eq!(orientation_label(Some(-5), Some(10), Some(1)), None);
     }
 }

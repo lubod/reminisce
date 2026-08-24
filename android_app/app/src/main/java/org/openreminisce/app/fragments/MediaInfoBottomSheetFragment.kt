@@ -114,8 +114,17 @@ class MediaInfoBottomSheetFragment : BottomSheetDialogFragment() {
 
                         val w = meta.width
                         val h = meta.height
+                        // Landscape/Portrait/Square from the server (effective
+                        // dimensions after EXIF rotation applied).
+                        val orientLabel = meta.orientation_label
                         if (w != null && w > 0 && h != null && h > 0) {
-                            dimensionsText.text = "Dimensions: ${w} × ${h}"
+                            dimensionsText.text = buildString {
+                                append("Dimensions: ${w} × ${h}")
+                                if (!orientLabel.isNullOrEmpty()) append("  ·  $orientLabel")
+                            }
+                            dimensionsText.visibility = View.VISIBLE
+                        } else if (!orientLabel.isNullOrEmpty()) {
+                            dimensionsText.text = "Orientation: $orientLabel"
                             dimensionsText.visibility = View.VISIBLE
                         } else {
                             dimensionsText.visibility = View.GONE

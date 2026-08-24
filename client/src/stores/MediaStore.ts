@@ -56,6 +56,14 @@ export interface ImageMetadata {
     created_at: string;
     exif: string | null;
     starred: boolean;
+    width?: number | null;
+    height?: number | null;
+    /** Raw EXIF-style orientation value (1-8); null when unknown. */
+    orientation?: number | null;
+    /** "Landscape" / "Portrait" / "Square" derived from effective dimensions. */
+    orientation_label?: string | null;
+    device_id?: string | null;
+    file_size_bytes?: number | null;
 }
 
 export interface MediaGroup {

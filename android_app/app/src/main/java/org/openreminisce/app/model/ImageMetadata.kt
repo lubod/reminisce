@@ -12,5 +12,9 @@ data class ImageMetadata(
     val file_size_bytes: Long? = null,
     val width: Int? = null,
     val height: Int? = null,
+    /** Raw EXIF-style orientation value (1-8); null when unknown. */
+    val orientation: Int? = null,
+    /** "Landscape" / "Portrait" / "Square" as computed by the server. */
+    val orientation_label: String? = null,
     val media_type: String? = null
 )

@@ -209,6 +209,12 @@ export const LightboxSidebar: React.FC<LightboxSidebarProps> = ({
                                 <div>{formatFileSize(selectedMedia.file_size_bytes)}</div>
                             </div>
                         )}
+                        {metadata?.orientation_label && (
+                            <div>
+                                <div className="text-gray-400 text-xs mb-1">Orientation</div>
+                                <div>{metadata.orientation_label}</div>
+                            </div>
+                        )}
                     </div>
                 )}
 
