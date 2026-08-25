@@ -170,3 +170,81 @@ async fn list_and_delete_shards() {
     assert!(!server_storage.exists(shard1));
     assert!(server_storage.exists(shard2));
 }
+
+#[tokio::test]
+async fn oversize_stream_init_rejected_with_413() {
+    let tmp = tempdir().unwrap();
+    let server_storage = DiskStorage::new(tmp.path()).await.unwrap();
+    let server_identity = Arc::new(NodeIdentity::generate());
+    let (server_id_hex, addr) = spawn_server(server_storage, server_identity, None).await;
+
+    let client_id = NodeIdentity::generate();
+    let client_node = Node::new("127.0.0.1:0".parse().unwrap(), client_id.clone()).unwrap();
+    let conn = client_node.connect(addr, &server_id_hex).await.expect("connect");
+
+    let file_hash: [u8; 32] = [7u8; 32];
+    let shard_index: u8 = 0;
+    // Token is valid on purpose: the rejection must come from the SIZE cap, not from
+    // authentication. Such a shard would otherwise store fine yet never be retrievable
+    // (retrieval ships one frame capped at MAX_MESSAGE_LEN).
+    let binding: [u8; 32] = blake3::hash(&[file_hash.as_slice(), &[shard_index]].concat()).into();
+    let token = client_id.create_shard_token(np2p::crypto::ShardOp::Store, &binding);
+    let oversize: u64 = (np2p::network::protocol::MAX_MESSAGE_LEN as u64) - 512;
+
+    let (mut send, mut recv) = conn.open_bi().await.unwrap();
+    Protocol::send(&mut send, &Message::StoreShardStreamInit {
+        file_hash,
+        shard_index,
+        total_shard_bytes: oversize,
+        segment_count: 1,
+        token,
+    }).await.unwrap();
+
+    match Protocol::receive(&mut recv).await.unwrap() {
+        Message::Error { code, .. } => assert_eq!(code, 413, "oversize init refused at store time"),
+        other => panic!("expected Error(413), got {:?}", other),
+    }
+}
+
+// Paused time: once the client goes fully silent, the runtime fast-forwards to the
+// server's next timer deadline — the 120s read deadline fires instantly in virtual
+// time instead of burning real seconds.
+#[tokio::test(start_paused = true)]
+async fn silent_stream_dropped_without_leaking_permit() {
+    let tmp = tempdir().unwrap();
+    let server_storage = DiskStorage::new(tmp.path()).await.unwrap();
+    let server_identity = Arc::new(NodeIdentity::generate());
+    let (server_id_hex, addr) = spawn_server(server_storage, server_identity, None).await;
+
+    let client_id = NodeIdentity::generate();
+    let client_node = Node::new("127.0.0.1:0".parse().unwrap(), client_id.clone()).unwrap();
+    let conn = client_node.connect(addr, &server_id_hex).await.expect("connect");
+
+    // Open a stream and write an INCOMPLETE protocol frame (QUIC only transmits a
+    // stream once data exists, and a totally silent stream is never even accepted):
+    // the handler starts, takes a semaphore permit, then blocks on the first message.
+    // The read deadline must abort it (releasing the permit) instead of pinning it.
+    let (mut send, mut recv) = conn.open_bi().await.unwrap();
+    use tokio::io::AsyncWriteExt;
+    send.write_all(&[0x00, 0x00]).await.expect("write partial frame");
+    tokio::time::timeout(std::time::Duration::from_secs(600), async move {
+        loop {
+            match recv.read(&mut [0u8; 64]).await {
+                Ok(Some(0)) | Ok(None) => break,
+                Err(_) => break,
+                Ok(Some(_)) => {}
+            }
+        }
+    }).await.expect("server never dropped the silent stream");
+
+    // The permit came back: a fresh stream is still served normally.
+    let (mut send, mut recv) = conn.open_bi().await.unwrap();
+    Protocol::send(&mut send, &Message::Handshake {
+        node_id: client_id.node_id(),
+        version: np2p::PROTOCOL_VERSION.into(),
+    }).await.unwrap();
+    match Protocol::receive(&mut recv).await.unwrap() {
+        Message::HandshakeAck { .. } => {}
+        other => panic!("expected HandshakeAck after deadline drop, got {:?}", other),
+    }
+}

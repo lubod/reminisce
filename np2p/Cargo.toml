@@ -52,3 +52,5 @@ libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3.8"
+# start_paused (virtual time) for read-deadline tests.
+tokio = { version = "1", features = ["full", "test-util"] }

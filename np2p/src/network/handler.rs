@@ -111,7 +111,16 @@ impl ConnectionHandler {
         identity: Arc<NodeIdentity>,
         allowed_owner_id: Option<[u8; 32]>,
     ) -> Result<()> {
-        let msg = Protocol::receive(&mut recv).await?;
+        // Read deadline for EVERY inbound message: without it a peer that opens
+        // streams and goes silent pins a semaphore permit indefinitely (our own
+        // 15s keep-alive pings keep the QUIC idle timeout from ever firing).
+        const STREAM_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+        let msg = tokio::time::timeout(STREAM_READ_TIMEOUT, Protocol::receive(&mut recv))
+            .await
+            .map_err(|_| {
+                warn!("[CONN] First message timeout from peer — dropping stream");
+                crate::error::Np2pError::Network("stream read timeout".to_string())
+            })??;
 
         match msg {
             Message::Handshake { node_id, version } => {
@@ -156,7 +165,7 @@ impl ConnectionHandler {
                 Protocol::send(&mut send, &response).await?;
             }
 
-            Message::StoreShardStreamInit { file_hash, shard_index, token, .. } => {
+            Message::StoreShardStreamInit { file_hash, shard_index, token, total_shard_bytes, .. } => {
                 // Temp-file ID derived from (file_hash, shard_index) PLUS a per-connection
                 // random salt: deterministic addressing avoids collisions between different
                 // streams, while the salt prevents two concurrent duplicate uploads of the
@@ -174,6 +183,19 @@ impl ConnectionHandler {
                 let binding: [u8; 32] = blake3::hash(
                     &[file_hash.as_slice(), &[shard_index]].concat()
                 ).into();
+                // Retrieval ships the shard as ONE protocol frame capped at
+                // MAX_MESSAGE_LEN — anything larger can be stored but never
+                // retrieved. Refuse at store time instead of stranding bytes.
+                const MAX_RETRIEVABLE: u64 = (crate::network::protocol::MAX_MESSAGE_LEN as u64) - 1024;
+                if total_shard_bytes > MAX_RETRIEVABLE {
+                    warn!("[CONN] Shard {} declares {} bytes > retrievable cap {} — rejecting", shard_index, total_shard_bytes, MAX_RETRIEVABLE);
+                    let _ = Protocol::send(&mut send, &Message::Error {
+                        code: 413,
+                        message: format!("Shard exceeds retrievable size cap ({} MB)", MAX_RETRIEVABLE / (1024 * 1024)),
+                    }).await;
+                    return Ok(());
+                }
+
                 if !crate::crypto::verify_shard_token(&token, crate::crypto::ShardOp::Store, &binding, allowed_owner_id.as_ref()) {
                     warn!("[CONN] StoreShardStreamInit token verification failed (shard {}) — rejecting", shard_index);
                     let _ = Protocol::send(&mut send, &Message::Error {
@@ -189,7 +211,16 @@ impl ConnectionHandler {
                 let mut hasher = blake3::Hasher::new();
                 let mut received_bytes: u64 = 0;
                 loop {
-                    match Protocol::receive(&mut recv).await {
+                    let frame = match tokio::time::timeout(STREAM_READ_TIMEOUT, Protocol::receive(&mut recv)).await {
+                        Ok(r) => r,
+                        Err(_) => {
+                            error!("[CONN] Chunk timeout on shard {} — aborting stream", shard_index);
+                            let _ = tokio::fs::remove_file(&temp_path).await;
+                            let _ = Protocol::send(&mut send, &Message::StoreShardStreamResponse { success: false, available_space_bytes: storage.available_space() }).await;
+                            break;
+                        }
+                    };
+                    match frame {
                         Ok(Message::StoreShardChunk { data }) => {
                             received_bytes = received_bytes.saturating_add(data.len() as u64);
                             // Bound total disk used per shard stream regardless of what the
