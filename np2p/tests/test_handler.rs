@@ -225,7 +225,6 @@ async fn silent_stream_dropped_without_leaking_permit() {
     // the handler starts, takes a semaphore permit, then blocks on the first message.
     // The read deadline must abort it (releasing the permit) instead of pinning it.
     let (mut send, mut recv) = conn.open_bi().await.unwrap();
-    use tokio::io::AsyncWriteExt;
     send.write_all(&[0x00, 0x00]).await.expect("write partial frame");
     tokio::time::timeout(std::time::Duration::from_secs(600), async move {
         loop {

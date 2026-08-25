@@ -19,11 +19,63 @@ pub struct RebalanceProgress {
     pub target_nodes: usize,
 }
 
+/// Active-peer bar above which the mesh reports full parity ("healthy").
+/// Under admission control (non-empty allow-list) the mesh can never exceed the
+/// admitted node count, so the bar is the allow-list size itself; an open mesh
+/// keeps the absolute 3/5 Reed-Solomon total of 5.
+fn mesh_full_parity_bar(admitted_nodes: usize) -> usize {
+    if admitted_nodes == 0 { 5 } else { admitted_nodes }
+}
+
+/// Mesh health decision: healthy = every expected peer present; degraded = at least
+/// 3 active peers (every file still reconstructable); critical = fewer than 3.
+fn classify_mesh_health(active_peers: usize, full_parity_bar: usize) -> (bool, &'static str) {
+    if active_peers >= full_parity_bar {
+        (true, "healthy")
+    } else if active_peers >= 3 {
+        (true, "degraded")
+    } else {
+        (false, "critical")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn open_mesh_keeps_absolute_five_peer_bar() {
+        assert_eq!(mesh_full_parity_bar(0), 5);
+        assert_eq!(classify_mesh_health(5, 5), (true, "healthy"));
+        assert_eq!(classify_mesh_health(4, 5), (true, "degraded"));
+    }
+
+    #[test]
+    fn admitted_mesh_is_healthy_when_full() {
+        // Home topology: home server + 3 Pi nodes admitted.
+        let bar = mesh_full_parity_bar(4);
+        assert_eq!(bar, 4);
+        assert_eq!(
+            classify_mesh_health(4, bar),
+            (true, "healthy"),
+            "fully connected 4-node mesh must not report 'degraded' forever"
+        );
+        assert_eq!(classify_mesh_health(3, bar), (true, "degraded"));
+    }
+
+    #[test]
+    fn below_three_peers_is_critical_regardless_of_topology() {
+        assert_eq!(classify_mesh_health(2, 4), (false, "critical"));
+        assert_eq!(classify_mesh_health(0, 5), (false, "critical"));
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct P2PBackupStatusResponse {
     pub local_peer_id: String,
     pub is_healthy: bool,
-    /// "healthy" = 5+ active nodes (full 3/5 parity), "degraded" = 3-4 (reconstructable), "critical" = <3 (cannot tolerate node loss)
+    /// "healthy" = every expected peer active (admission allow-list size, or 5+ on an open mesh),
+    /// "degraded" = 3+ active (all files still reconstructable), "critical" = <3
     pub health_status: String,
     pub active_peers: usize,
     pub total_shards_stored: i64,
@@ -150,14 +202,10 @@ pub async fn get_p2p_backup_status(
     let db_backups_latest_at: Option<chrono::DateTime<chrono::Utc>> = db_backup_row.get(2);
     let db_backups_latest_at = db_backups_latest_at.map(|t| t.to_rfc3339());
 
-    // 3/5 Reed-Solomon: >=5 nodes = full parity, 3-4 = reconstructable only, <3 = cannot tolerate a loss.
-    let (is_healthy, health_status) = if active_peers >= 5 {
-        (true, "healthy")
-    } else if active_peers >= 3 {
-        (true, "degraded")
-    } else {
-        (false, "critical")
-    };
+    // Full parity when every expected peer is present: allow-list size under admission
+    // control, 5 for an open mesh. 3+ peers = reconstructable, <3 = critical.
+    let (is_healthy, health_status) =
+        classify_mesh_health(active_peers, mesh_full_parity_bar(config.p2p_allowed_node_ids.len()));
 
     let target_nodes = active_peers.clamp(1, crate::p2p_upload::SHARD_COUNT);
     let rebalance_row = client.query_one(
