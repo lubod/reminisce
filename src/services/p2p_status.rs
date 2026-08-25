@@ -21,10 +21,15 @@ pub struct RebalanceProgress {
 
 /// Active-peer bar above which the mesh reports full parity ("healthy").
 /// Under admission control (non-empty allow-list) the mesh can never exceed the
-/// admitted node count, so the bar is the allow-list size itself; an open mesh
-/// keeps the absolute 3/5 Reed-Solomon total of 5.
-fn mesh_full_parity_bar(admitted_nodes: usize) -> usize {
-    if admitted_nodes == 0 { 5 } else { admitted_nodes }
+/// admitted node count. The local node is listed in the allow-list too but never
+/// appears in its own live-peer registry, so it does not count toward the bar.
+/// An open mesh keeps the absolute 3/5 Reed-Solomon total of 5; a degenerate
+/// allow-list containing only this node falls back to the same total.
+fn mesh_full_parity_bar(admitted_ids: &[String], local_node_id_hex: &str) -> usize {
+    let admitted_remote = admitted_ids.iter()
+        .filter(|id| !id.trim().eq_ignore_ascii_case(local_node_id_hex))
+        .count();
+    if admitted_remote == 0 { 5 } else { admitted_remote }
 }
 
 /// Mesh health decision: healthy = every expected peer present; degraded = at least
@@ -45,22 +50,29 @@ mod tests {
 
     #[test]
     fn open_mesh_keeps_absolute_five_peer_bar() {
-        assert_eq!(mesh_full_parity_bar(0), 5);
+        assert_eq!(mesh_full_parity_bar(&[], "aa"), 5);
+        // Degenerate: allow-list holds only this node — fall back to the open-mesh bar.
+        assert_eq!(mesh_full_parity_bar(&["aa".to_string()], "aa"), 5);
         assert_eq!(classify_mesh_health(5, 5), (true, "healthy"));
         assert_eq!(classify_mesh_health(4, 5), (true, "degraded"));
     }
 
     #[test]
-    fn admitted_mesh_is_healthy_when_full() {
-        // Home topology: home server + 3 Pi nodes admitted.
-        let bar = mesh_full_parity_bar(4);
-        assert_eq!(bar, 4);
+    fn local_node_is_not_its_own_peer() {
+        // Home topology: home server + 3 Pi nodes admitted; the registry only ever
+        // shows the 3 remote Pis, so full house = 3 active peers.
+        let allowed = ["home", "pi1", "pi2", "pi3"].iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let bar = mesh_full_parity_bar(&allowed, "home");
+        assert_eq!(bar, 3);
         assert_eq!(
-            classify_mesh_health(4, bar),
+            classify_mesh_health(3, bar),
             (true, "healthy"),
             "fully connected 4-node mesh must not report 'degraded' forever"
         );
-        assert_eq!(classify_mesh_health(3, bar), (true, "degraded"));
+        assert_eq!(classify_mesh_health(2, bar), (false, "critical"));
+        // Case-insensitive match against hex ids.
+        let hex_ids = ["DA66".to_string(), "2349".to_string()];
+        assert_eq!(mesh_full_parity_bar(&hex_ids, "da66"), 1);
     }
 
     #[test]
@@ -204,8 +216,13 @@ pub async fn get_p2p_backup_status(
 
     // Full parity when every expected peer is present: allow-list size under admission
     // control, 5 for an open mesh. 3+ peers = reconstructable, <3 = critical.
-    let (is_healthy, health_status) =
-        classify_mesh_health(active_peers, mesh_full_parity_bar(config.p2p_allowed_node_ids.len()));
+    let (is_healthy, health_status) = classify_mesh_health(
+        active_peers,
+        mesh_full_parity_bar(
+            &config.p2p_allowed_node_ids,
+            &hex::encode(p2p_service.identity().node_id()),
+        ),
+    );
 
     let target_nodes = active_peers.clamp(1, crate::p2p_upload::SHARD_COUNT);
     let rebalance_row = client.query_one(
