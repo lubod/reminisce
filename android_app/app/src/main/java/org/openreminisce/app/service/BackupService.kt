@@ -130,7 +130,27 @@ class BackupService : Service() {
     }
     
     private var currentWorkId: java.util.UUID? = null
-    private var workInfoObserver: androidx.lifecycle.Observer<androidx.work.WorkInfo>? = null
+
+    // WorkManager delivers NULL WorkInfo once a tracked id leaves its database
+    // (ExistingWorkPolicy.REPLACE, pruneWork, cancelAllWork), so the observer
+    // parameter must be nullable — a non-null Kotlin parameter crashes the
+    // process with an intrinsic NullPointerException on that null delivery.
+    //
+    // Every getWorkInfoByIdLiveData() call returns a NEW LiveData wrapper around
+    // the same Room query. removeObserver() only works on the exact instance
+    // that observeForever() was called on, so we store the subscribed instance;
+    // otherwise observers silently leak across backup runs and receive stale
+    // (null) emissions from a previous run's work id — the instant second-start
+    // crash.
+    private var observedWorkLiveData: androidx.lifecycle.LiveData<androidx.work.WorkInfo>? = null
+    private val workStatusObserver =
+        androidx.lifecycle.Observer<androidx.work.WorkInfo?> { workInfo ->
+            if (workInfo == null) {
+                Log.d(TAG, "Work info unavailable (work replaced/pruned) — ignoring")
+                return@Observer
+            }
+            onWorkInfoUpdated(workInfo)
+        }
     private val handler = android.os.Handler(android.os.Looper.getMainLooper())
 
     @Volatile
@@ -208,60 +228,57 @@ class BackupService : Service() {
             backupWorkRequest
         )
 
-        // Remove any existing observer to prevent memory leaks
-        workInfoObserver?.let { observer ->
-            WorkManager.getInstance(this).getWorkInfoByIdLiveData(backupWorkRequest.id)
-                .removeObserver(observer)
-            Log.d(TAG, "Removed previous work info observer")
-        }
+        // Detach from any previous run before subscribing anew. This MUST target
+        // the same LiveData instance that observeForever() was called on — each
+        // getWorkInfoByIdLiveData() call returns a new wrapper, and removing
+        // from a different wrapper is a silent no-op (the second-start crash).
+        observedWorkLiveData?.let { it.removeObserver(workStatusObserver) }
 
-        // Listen for work completion and progress updates
-        val observer = androidx.lifecycle.Observer<androidx.work.WorkInfo> { workInfo ->
-                Log.d(TAG, "Work info updated: ${workInfo.state}")
-                Log.d(TAG, "Work ID: ${backupWorkRequest.id}")
-                Log.d(TAG, "Work tags: ${workInfo.tags.joinToString(", ")}")
-                Log.d(TAG, "Work run attempt count: ${workInfo.runAttemptCount}")
-                Log.d(TAG, "Work output data: ${workInfo.outputData}")
-
-                // Handle work completion
-                if (workInfo.state.isFinished) {
-                    handleWorkCompletion(workInfo, backupType, quickBackup)
-                } else {
-                    // Only handle progress updates when not finished
-                    // Handle progress updates
-                    workInfo.progress.let { progress ->
-                        val overallProgress = progress.getFloat("overallProgress", 0f)
-                        Log.d(TAG, "Sending progress: ${overallProgress * 100}%") // Debug log
-                        val progressIntent = android.content.Intent("org.openreminisce.app.BACKUP_PROGRESS")
-                        progressIntent.putExtra("overallProgress", overallProgress)
-                        progressIntent.putExtra("currentAction", progress.getString("currentAction"))
-                        progressIntent.putExtra("currentFile", progress.getString("currentFile"))
-                        progressIntent.putExtra("fileIndex", progress.getInt("fileIndex", 0))
-                        progressIntent.putExtra("totalFiles", progress.getInt("totalFiles", 0))
-                        progressIntent.putExtra("backedUpCount", progress.getInt("backedUpCount", 0))
-                        progressIntent.putExtra("skippedCount", progress.getInt("skippedCount", 0))
-                        progressIntent.putExtra("failedCount", progress.getInt("failedCount", 0))
-                        progressIntent.putExtra("fileProgress", progress.getFloat("fileProgress", 0f))
-                        progressIntent.putExtra("fileUploadProgress", progress.getFloat("fileUploadProgress", 0f))
-                        progressIntent.setPackage(this.packageName) // Restrict broadcast to this app only
-
-                        this.sendBroadcast(progressIntent)
-                    }
-
-                    Log.d(TAG, "Work is not finished, current state: ${workInfo.state}, scheduled for execution when constraints are met")
-                }
-            }
-
-        // Store the observer reference
-        workInfoObserver = observer
-
-        // Attach the observer to LiveData
-        WorkManager.getInstance(this).getWorkInfoByIdLiveData(backupWorkRequest.id)
-            .observeForever(observer)
+        // Subscribe to this run's work status via the shared null-safe observer
+        val liveData = WorkManager.getInstance(this)
+            .getWorkInfoByIdLiveData(backupWorkRequest.id)
+        observedWorkLiveData = liveData
+        liveData.observeForever(workStatusObserver)
         Log.d(TAG, "Attached work info observer")
 
         // Start polling as a backup mechanism in case observeForever stops working
         startPolling()
+    }
+
+    private fun onWorkInfoUpdated(workInfo: WorkInfo) {
+        Log.d(TAG, "Work info updated: ${workInfo.state}")
+        Log.d(TAG, "Work ID: ${workInfo.id}")
+        Log.d(TAG, "Work tags: ${workInfo.tags.joinToString(", ")}")
+        Log.d(TAG, "Work run attempt count: ${workInfo.runAttemptCount}")
+        Log.d(TAG, "Work output data: ${workInfo.outputData}")
+
+        // Handle work completion
+        if (workInfo.state.isFinished) {
+            handleWorkCompletion(workInfo)
+        } else {
+            // Only handle progress updates when not finished
+            // Handle progress updates
+            workInfo.progress.let { progress ->
+                val overallProgress = progress.getFloat("overallProgress", 0f)
+                Log.d(TAG, "Sending progress: ${overallProgress * 100}%") // Debug log
+                val progressIntent = android.content.Intent("org.openreminisce.app.BACKUP_PROGRESS")
+                progressIntent.putExtra("overallProgress", overallProgress)
+                progressIntent.putExtra("currentAction", progress.getString("currentAction"))
+                progressIntent.putExtra("currentFile", progress.getString("currentFile"))
+                progressIntent.putExtra("fileIndex", progress.getInt("fileIndex", 0))
+                progressIntent.putExtra("totalFiles", progress.getInt("totalFiles", 0))
+                progressIntent.putExtra("backedUpCount", progress.getInt("backedUpCount", 0))
+                progressIntent.putExtra("skippedCount", progress.getInt("skippedCount", 0))
+                progressIntent.putExtra("failedCount", progress.getInt("failedCount", 0))
+                progressIntent.putExtra("fileProgress", progress.getFloat("fileProgress", 0f))
+                progressIntent.putExtra("fileUploadProgress", progress.getFloat("fileUploadProgress", 0f))
+                progressIntent.setPackage(this.packageName) // Restrict broadcast to this app only
+
+                this.sendBroadcast(progressIntent)
+            }
+
+            Log.d(TAG, "Work is not finished, current state: ${workInfo.state}, scheduled for execution when constraints are met")
+        }
     }
 
     private fun handleWorkCompletion(workInfo: WorkInfo, @Suppress("UNUSED_PARAMETER") backupType: String? = null, quickBackup: Boolean? = null) {
@@ -313,15 +330,13 @@ class BackupService : Service() {
         this.sendBroadcast(broadcastIntent)
         Log.d(TAG, "Broadcast sent successfully")
 
-        // Remove observer when work is finished to prevent memory leak
-        workInfoObserver?.let { observer ->
-            currentWorkId?.let { workId ->
-                WorkManager.getInstance(this).getWorkInfoByIdLiveData(workId)
-                    .removeObserver(observer)
-                workInfoObserver = null
-                Log.d(TAG, "Removed work info observer after completion")
-            }
+        // Remove observer when work is finished to prevent memory leak.
+        // Must remove from the exact LiveData instance we subscribed to.
+        observedWorkLiveData?.let {
+            it.removeObserver(workStatusObserver)
+            Log.d(TAG, "Removed work info observer after completion")
         }
+        observedWorkLiveData = null
 
         // Stop polling
         stopPolling()
@@ -336,14 +351,12 @@ class BackupService : Service() {
         super.onDestroy()
         // Stop the poller
         stopPolling()
-        // Clean up observer when service is destroyed
-        workInfoObserver?.let { observer ->
-            currentWorkId?.let { workId ->
-                WorkManager.getInstance(this).getWorkInfoByIdLiveData(workId)
-                    .removeObserver(observer)
-                Log.d(TAG, "Removed work info observer in onDestroy")
-            }
-            workInfoObserver = null
+        // Clean up observer when service is destroyed — again, only the stored
+        // instance removal is effective.
+        observedWorkLiveData?.let {
+            it.removeObserver(workStatusObserver)
+            Log.d(TAG, "Removed work info observer in onDestroy")
         }
+        observedWorkLiveData = null
     }
 }
