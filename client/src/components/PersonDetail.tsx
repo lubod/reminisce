@@ -26,7 +26,7 @@ export const PersonDetail = observer(() => {
         );
         observer.observe(sentinel);
         return () => observer.disconnect();
-    }, [personStore.imagesHasMore]);
+    }, [personStore, personStore.imagesHasMore]);
 
     if (!personStore.selectedPerson) return null;
 

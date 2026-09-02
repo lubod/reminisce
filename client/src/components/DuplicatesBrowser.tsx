@@ -21,7 +21,7 @@ export const DuplicatesBrowser = observer(() => {
         if (!duplicatesStore.groups[lightboxState.groupIdx]) {
             setLightboxState(null);
         }
-    }, [duplicatesStore.groups.length, lightboxState]);
+    }, [duplicatesStore.groups, lightboxState]);
 
     const formatDate = (iso: string) => {
         try {

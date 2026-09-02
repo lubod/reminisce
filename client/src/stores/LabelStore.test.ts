@@ -87,7 +87,6 @@ describe("LabelStore", () => {
         mocks.routes["/labels"] = () => ({ data: { labels: [{ id: 1, name: "A" }, { id: 2, name: "B" }] } });
         await store.fetchLabels();
         await store.deleteLabel(2);
-        // eslint-disable-next-line no-console
         // Assert through the store's own view of the root: whatever object
         // graph the grid reads, the dangling filter must be cleared.
         const msViaStore = (store as unknown as { rootStore: { mediaStore?: { filters: { selectedLabelId: number | null } } } }).rootStore.mediaStore;

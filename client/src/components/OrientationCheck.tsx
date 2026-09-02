@@ -53,7 +53,8 @@ export const OrientationCheck = observer(() => {
         openFull(next);
     };
 
-    const handleKey = (e: KeyboardEvent) => {
+    const handleKeyRef = useRef<(e: KeyboardEvent) => void>(() => {});
+    handleKeyRef.current = (e: KeyboardEvent) => {
         if (selected === null) return;
         if (e.key === 'Escape') closeFull();
         if (e.key === 'ArrowRight') nav(1);
@@ -61,9 +62,10 @@ export const OrientationCheck = observer(() => {
     };
 
     useEffect(() => {
-        window.addEventListener('keydown', handleKey);
-        return () => window.removeEventListener('keydown', handleKey);
-    }, [selected, images.length]);
+        const onKeyDown = (e: KeyboardEvent) => handleKeyRef.current(e);
+        window.addEventListener('keydown', onKeyDown);
+        return () => window.removeEventListener('keydown', onKeyDown);
+    }, []);
 
     const handleDelete = async () => {
         if (selected === null || !images[selected]) return;
