@@ -250,10 +250,8 @@ impl DiskStorage {
                         if let Ok(metadata) = file_entry.metadata().await {
                             if let Ok(mtime) = metadata.modified() {
                                 if let Ok(age) = now.duration_since(mtime) {
-                                    if age >= max_age {
-                                        if fs::remove_file(&file_path).await.is_ok() {
-                                            count += 1;
-                                        }
+                                    if age >= max_age && fs::remove_file(&file_path).await.is_ok() {
+                                        count += 1;
                                     }
                                 }
                             }
