@@ -38,7 +38,9 @@ ARG CARGO_BUILD_JOBS=24
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo build --release -j ${CARGO_BUILD_JOBS} && \
     mkdir -p /app/bin && \
-    cp target/release/reminisce /app/bin/reminisce
+    cp target/release/reminisce /app/bin/reminisce && \
+    cp target/release/disaster_recovery /app/bin/disaster_recovery && \
+    cp target/release/p2p_restore /app/bin/p2p_restore
 
 # Stage 4: Runtime
 FROM debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241
@@ -64,6 +66,8 @@ WORKDIR /app
 
 # Copy binary from builder
 COPY --from=builder /app/bin/reminisce /usr/local/bin/reminisce
+COPY --from=builder /app/bin/disaster_recovery /usr/local/bin/disaster_recovery
+COPY --from=builder /app/bin/p2p_restore /usr/local/bin/p2p_restore
 
 # Set permissions
 RUN chown -R reminisce:reminisce /app

@@ -168,6 +168,12 @@ fn make_fetcher(svc: Arc<P2PService>) -> Box<ShardFetcher> {
     Box::new(move |node_id, shard_hash| {
         let svc = svc.clone();
         Box::pin(async move {
+            let hex_hash = hex::encode(shard_hash);
+            if let Some(peer) = svc.registry.get(&node_id) {
+                if let Ok(data) = reminisce::p2p_upload::retrieve_shard(&svc, peer.addr, &hex_hash).await {
+                    return Some(data);
+                }
+            }
             let token = svc.identity().create_shard_token(np2p::crypto::ShardOp::Retrieve, &shard_hash);
             match svc.send_message(&node_id, &Message::RetrieveShardRequest { shard_hash, token }).await {
                 Ok(Message::RetrieveShardResponse { data, .. }) => data,
