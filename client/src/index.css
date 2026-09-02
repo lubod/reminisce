@@ -1,18 +1,55 @@
 @import "tailwindcss";
 
 @layer utilities {
-  @keyframes slowZoomIn {
+  @keyframes zoomInSlow {
+    from { transform: scale(1.0); }
+    to { transform: scale(1.10); }
+  }
+  @keyframes zoomOutSlow {
+    from { transform: scale(1.10); }
+    to { transform: scale(1.0); }
+  }
+  @keyframes zoomInNormal {
     from { transform: scale(1.0); }
     to { transform: scale(1.20); }
   }
-  @keyframes slowZoomOut {
+  @keyframes zoomOutNormal {
     from { transform: scale(1.20); }
     to { transform: scale(1.0); }
   }
+  @keyframes zoomInFast {
+    from { transform: scale(1.0); }
+    to { transform: scale(1.35); }
+  }
+  @keyframes zoomOutFast {
+    from { transform: scale(1.35); }
+    to { transform: scale(1.0); }
+  }
+
+  .animate-zoom-in-slow {
+    animation: zoomInSlow var(--zoom-duration, 15s) linear forwards;
+  }
+  .animate-zoom-out-slow {
+    animation: zoomOutSlow var(--zoom-duration, 15s) linear forwards;
+  }
+  .animate-zoom-in-normal {
+    animation: zoomInNormal var(--zoom-duration, 15s) linear forwards;
+  }
+  .animate-zoom-out-normal {
+    animation: zoomOutNormal var(--zoom-duration, 15s) linear forwards;
+  }
+  .animate-zoom-in-fast {
+    animation: zoomInFast var(--zoom-duration, 15s) linear forwards;
+  }
+  .animate-zoom-out-fast {
+    animation: zoomOutFast var(--zoom-duration, 15s) linear forwards;
+  }
+
+  /* Backward compatibility */
   .animate-slow-zoom-in {
-    animation: slowZoomIn 15s linear forwards;
+    animation: zoomInNormal 15s linear forwards;
   }
   .animate-slow-zoom-out {
-    animation: slowZoomOut 15s linear forwards;
+    animation: zoomOutNormal 15s linear forwards;
   }
 }

@@ -2,14 +2,15 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { observer } from "mobx-react-lite";
 import { useStore } from "../stores/RootStore";
 import type { MediaItem } from "../stores/MediaStore";
-import { Maximize2, Minimize2, Star, Tag, Settings, X, Play, Pause, Info } from "lucide-react";
+import { Maximize2, Minimize2, Star, Tag, Settings, X, Play, Pause, Info, Timer, ZoomIn } from "lucide-react";
 import { logger } from "../utils/logger";
+
+export type ZoomSpeed = 'off' | 'slow' | 'normal' | 'fast';
 
 export const PresentationMode = observer(() => {
     const { mediaStore, uiStore, labelStore } = useStore();
     const [currentImage, setCurrentImage] = useState<MediaItem | null>(null);
     const [nextImage, setNextImage] = useState<MediaItem | null>(null);
-    const [timeLeft, setTimeLeft] = useState(15);
     const [opacity, setOpacity] = useState(0);
     const [error, setError] = useState(false);
     const [zoomDirection, setZoomDirection] = useState<'in' | 'out'>('in');
@@ -26,16 +27,47 @@ export const PresentationMode = observer(() => {
     const [showInfo, setShowInfo] = useState<boolean>(() => {
         try { return JSON.parse(localStorage.getItem("present.showInfo") ?? "true"); } catch { return true; }
     });
+    const [showTime, setShowTime] = useState<number>(() => {
+        try {
+            const saved = JSON.parse(localStorage.getItem("present.showTime") ?? "15");
+            const num = Number(saved);
+            return isNaN(num) || num < 3 || num > 300 ? 15 : num;
+        } catch {
+            return 15;
+        }
+    });
+    const [zoomSpeed, setZoomSpeed] = useState<ZoomSpeed>(() => {
+        try {
+            const saved = JSON.parse(localStorage.getItem("present.zoomSpeed") ?? '"normal"');
+            if (['off', 'slow', 'normal', 'fast'].includes(saved)) {
+                return saved as ZoomSpeed;
+            }
+            return 'normal';
+        } catch {
+            return 'normal';
+        }
+    });
+
+    const [timeLeft, setTimeLeft] = useState(showTime);
     const [labelSearch, setLabelSearch] = useState("");
     const [isPaused, setIsPaused] = useState(false);
     const [showSettings, setShowSettings] = useState(false);
     
     const settingsRef = useRef<HTMLDivElement>(null);
+    const showTimeRef = useRef(showTime);
+    showTimeRef.current = showTime;
 
     // Persist settings to localStorage
     useEffect(() => { localStorage.setItem("present.starredOnly", JSON.stringify(starredOnly)); }, [starredOnly]);
     useEffect(() => { localStorage.setItem("present.labelIds", JSON.stringify(selectedLabelIds)); }, [selectedLabelIds]);
     useEffect(() => { localStorage.setItem("present.showInfo", JSON.stringify(showInfo)); }, [showInfo]);
+    useEffect(() => { localStorage.setItem("present.showTime", JSON.stringify(showTime)); }, [showTime]);
+    useEffect(() => { localStorage.setItem("present.zoomSpeed", JSON.stringify(zoomSpeed)); }, [zoomSpeed]);
+
+    // When showTime changes, clamp current timeLeft if it exceeds new duration
+    useEffect(() => {
+        setTimeLeft(prev => Math.min(prev, showTime));
+    }, [showTime]);
 
     // Update clock every second
     useEffect(() => {
@@ -75,7 +107,7 @@ export const PresentationMode = observer(() => {
                 setCurrentImage(first);
                 setZoomDirection(Math.random() > 0.5 ? 'in' : 'out');
                 setOpacity(1);
-                setTimeLeft(15);
+                setTimeLeft(showTimeRef.current);
 
                 // Pre-fetch the next one
                 const next = await mediaStore.fetchRandomImage(starredOnly, selectedLabelIds);
@@ -110,7 +142,7 @@ export const PresentationMode = observer(() => {
                             setOpacity(1);
                             fetchNext();
                         }, 1000); // Wait for fade out
-                        return 15; // Reset timer
+                        return showTimeRef.current; // Reset timer to configured duration
                     } else {
                         // If no next image yet, try fetching again
                         fetchNext();
@@ -162,6 +194,17 @@ export const PresentationMode = observer(() => {
         return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
     }, [uiStore]);
 
+    const getZoomAnimationClass = () => {
+        if (zoomSpeed === 'off') return '';
+        if (zoomSpeed === 'slow') {
+            return zoomDirection === 'in' ? 'animate-zoom-in-slow' : 'animate-zoom-out-slow';
+        }
+        if (zoomSpeed === 'fast') {
+            return zoomDirection === 'in' ? 'animate-zoom-in-fast' : 'animate-zoom-out-fast';
+        }
+        return zoomDirection === 'in' ? 'animate-zoom-in-normal' : 'animate-zoom-out-normal';
+    };
+
     if (error) {
         return (
             <div className="flex flex-col items-center justify-center h-[80vh] text-gray-400 text-center bg-gray-900 rounded-lg border border-gray-800">
@@ -207,12 +250,13 @@ export const PresentationMode = observer(() => {
                             const img = e.currentTarget;
                             setOrientation(img.naturalWidth > img.naturalHeight ? 'landscape' : 'portrait');
                         }}
-                        style={{ opacity }}
+                        style={{
+                            opacity,
+                            animationDuration: zoomSpeed !== 'off' ? `${showTime}s` : undefined
+                        }}
                         className={`w-full h-full ${
                             orientation === 'landscape' ? 'object-cover' : 'object-contain'
-                        } transition-opacity duration-1000 will-change-transform ${
-                            zoomDirection === 'in' ? 'animate-slow-zoom-in' : 'animate-slow-zoom-out'
-                        }`}
+                        } transition-opacity duration-1000 will-change-transform ${getZoomAnimationClass()}`}
                     />
                 )}
             </div>
@@ -289,7 +333,7 @@ export const PresentationMode = observer(() => {
             {showSettings && (
                 <div 
                     ref={settingsRef}
-                    className="absolute top-20 right-6 w-72 bg-gray-900/95 backdrop-blur-xl border border-gray-700 rounded-xl shadow-2xl p-6 z-[60] animate-in fade-in zoom-in-95 duration-200"
+                    className="absolute top-20 right-6 w-80 bg-gray-900/95 backdrop-blur-xl border border-gray-700 rounded-xl shadow-2xl p-6 z-[60] animate-in fade-in zoom-in-95 duration-200 max-h-[85vh] overflow-y-auto"
                 >
                     <div className="flex justify-between items-center mb-6">
                         <h3 className="font-bold text-gray-100 flex items-center gap-2">
@@ -301,7 +345,70 @@ export const PresentationMode = observer(() => {
                         </button>
                     </div>
 
-                    <div className="space-y-6">
+                    <div className="space-y-5">
+                        {/* Slide Duration / Show Time */}
+                        <div className="space-y-2">
+                            <div className="flex items-center justify-between">
+                                <label className="text-sm font-medium text-gray-300 flex items-center gap-1.5">
+                                    <Timer size={14} className="text-blue-400" />
+                                    Slide Duration
+                                </label>
+                                <span className="text-sm font-bold font-mono text-blue-400">
+                                    {showTime}s
+                                </span>
+                            </div>
+                            <input 
+                                type="range"
+                                min={3}
+                                max={60}
+                                step={1}
+                                value={showTime}
+                                aria-label="Slide Duration"
+                                onChange={(e) => setShowTime(Number(e.target.value))}
+                                className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                            />
+                            <div className="flex justify-between gap-1 pt-1">
+                                {[5, 10, 15, 30, 60].map((seconds) => (
+                                    <button
+                                        key={seconds}
+                                        type="button"
+                                        onClick={() => setShowTime(seconds)}
+                                        className={`px-2 py-1 text-xs rounded font-medium transition-colors ${
+                                            showTime === seconds
+                                                ? 'bg-blue-600 text-white font-bold'
+                                                : 'bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-gray-200'
+                                        }`}
+                                    >
+                                        {seconds}s
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+
+                        {/* Zoom Speed */}
+                        <div className="space-y-2">
+                            <label className="text-sm font-medium text-gray-300 flex items-center gap-1.5">
+                                <ZoomIn size={14} className="text-blue-400" />
+                                Zoom Speed
+                            </label>
+                            <div className="grid grid-cols-4 gap-1 bg-gray-800 p-1 rounded-lg border border-gray-700">
+                                {(['off', 'slow', 'normal', 'fast'] as const).map((speed) => (
+                                    <button
+                                        key={speed}
+                                        type="button"
+                                        onClick={() => setZoomSpeed(speed)}
+                                        className={`py-1.5 text-xs rounded-md font-medium capitalize transition-all ${
+                                            zoomSpeed === speed
+                                                ? 'bg-blue-600 text-white shadow-sm font-bold'
+                                                : 'text-gray-400 hover:text-white hover:bg-gray-700/50'
+                                        }`}
+                                    >
+                                        {speed}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+
                         {/* Info Toggle */}
                         <div>
                             <label className="flex items-center justify-between cursor-pointer group">
@@ -414,6 +521,12 @@ export const PresentationMode = observer(() => {
                                 Current View Status
                             </div>
                             <div className="mt-2 flex flex-wrap gap-2">
+                                <span className="px-2 py-1 rounded text-[10px] font-bold border bg-blue-900/20 border-blue-700/50 text-blue-400">
+                                    {showTime}S SLIDES
+                                </span>
+                                <span className="px-2 py-1 rounded text-[10px] font-bold border bg-purple-900/20 border-purple-700/50 text-purple-400 uppercase">
+                                    ZOOM: {zoomSpeed}
+                                </span>
                                 <span className={`px-2 py-1 rounded text-[10px] font-bold border ${starredOnly ? 'bg-yellow-900/20 border-yellow-700/50 text-yellow-500' : 'bg-gray-800 border-gray-700 text-gray-400'}`}>
                                     {starredOnly ? 'STARRED ONLY' : 'ALL IMAGES'}
                                 </span>
