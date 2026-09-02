@@ -54,7 +54,27 @@ async fn perform_audit(
     config: &Config,
     p2p_service: &Arc<P2PService>,
 ) -> Result<bool, String> {
-        crate::shard_rebalance_worker::sync_db_nodes_to_registry(pool, p2p_service).await;
+    crate::shard_rebalance_worker::sync_db_nodes_to_registry(pool, p2p_service).await;
+
+    // Purge orphaned shard rows in DB for soft-deleted media files on every cycle
+    if let Ok(deleted) = cleanup_orphaned_shards_with_service(pool, Some(p2p_service)).await {
+        if deleted > 0 {
+            info!("Consistency check: purged {} orphaned shard records for deleted files", deleted);
+            P2P_ORPHANED_SHARDS_CLEANED_TOTAL.inc_by(deleted);
+        }
+    }
+
+    // Periodically sweep unreferenced physical shard files from storage nodes (every 24h)
+    static LAST_ORPHAN_SWEEP: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+    let now = chrono::Utc::now().timestamp();
+    if now - LAST_ORPHAN_SWEEP.load(std::sync::atomic::Ordering::Relaxed) > 86400 {
+        LAST_ORPHAN_SWEEP.store(now, std::sync::atomic::Ordering::Relaxed);
+        let pruned = sweep_storage_node_orphans(pool, p2p_service).await.unwrap_or(0);
+        if pruned > 0 {
+            info!("Consistency check: pruned {} unreferenced shard files across storage nodes", pruned);
+        }
+    }
+
     let client = pool.get().await.map_err(|e| e.to_string())?;
     let rows = client.query(
         "SELECT id, file_hash, shard_index, node_id, shard_hash
@@ -101,7 +121,25 @@ async fn perform_audit(
                 }
             }
             Err(e) => {
-                warn!("Shard {} index {} on node {} is MISSING: {}", file_hash, shard_index, node_id, e);
+                // If retrieval fails (e.g. shard exceeds single-frame MAX_MESSAGE_LEN 128 MB or network dropped),
+                // verify whether the shard is actually present on the remote node via inventory
+                // before declaring it lost and triggering an invalid repair.
+                if expected_shard_hash.len() >= 2 {
+                    let prefix = expected_shard_hash[..2].to_string();
+                    if let Ok(shard_bytes) = hex::decode(&expected_shard_hash) {
+                        if let Ok(shard_array) = shard_bytes.try_into() {
+                            if let Ok((remote_shards, _)) = crate::p2p_upload::list_remote_shards(p2p_service, addr, Some(prefix)).await {
+                                if remote_shards.contains(&shard_array) {
+                                    info!("Shard {} index {} verified present on node {} via inventory", file_hash, shard_index, node_id);
+                                    success = true;
+                                }
+                            }
+                        }
+                    }
+                }
+                if !success {
+                    warn!("Shard {} index {} on node {} is MISSING: {}", file_hash, shard_index, node_id, e);
+                }
             }
         }
 

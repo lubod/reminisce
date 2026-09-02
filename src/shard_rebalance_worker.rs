@@ -512,10 +512,18 @@ async fn upload_shard_to_node_inner(
             &[shard_hash_bytes.as_slice(), &[0u8]].concat()
         ).into();
         let token = p2p_service.identity().create_shard_token(np2p::crypto::ShardOp::Store, &binding);
+        // Dynamic chunked streaming: if the shard exceeds single-frame retrieval limit,
+        // declare 0 total_shard_bytes (matching p2p_upload::upload_segmented) so the storage
+        // node accepts the chunked stream instead of rejecting with Error 413.
+        let total_bytes = if shard_data.len() as u64 > (np2p::network::protocol::MAX_MESSAGE_LEN as u64 - 1024) {
+            0
+        } else {
+            shard_data.len() as u64
+        };
         Protocol::send(&mut send, &Message::StoreShardStreamInit {
             file_hash: shard_hash_bytes,
             shard_index: 0,
-            total_shard_bytes: shard_data.len() as u64,
+            total_shard_bytes: total_bytes,
             segment_count: 1,
             token,
         }).await.map_err(|e| e.to_string())?;
