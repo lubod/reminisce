@@ -54,8 +54,20 @@ export const PresentationMode = observer(() => {
     const [showSettings, setShowSettings] = useState(false);
     
     const settingsRef = useRef<HTMLDivElement>(null);
+    const settingsBtnRef = useRef<HTMLButtonElement>(null);
     const showTimeRef = useRef(showTime);
     showTimeRef.current = showTime;
+    const transitionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    // Ensure we exit fullscreen state and clean up timers on unmount
+    useEffect(() => {
+        return () => {
+            uiStore.setIsFullscreen(false);
+            if (transitionTimerRef.current) {
+                clearTimeout(transitionTimerRef.current);
+            }
+        };
+    }, [uiStore]);
 
     // Persist settings to localStorage
     useEffect(() => { localStorage.setItem("present.starredOnly", JSON.stringify(starredOnly)); }, [starredOnly]);
@@ -117,11 +129,6 @@ export const PresentationMode = observer(() => {
             }
         };
         init();
-
-        return () => {
-            // Ensure we exit fullscreen state on unmount
-            uiStore.setIsFullscreen(false);
-        };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [starredOnly, selectedLabelIds]);
 
@@ -135,7 +142,10 @@ export const PresentationMode = observer(() => {
                     // Time's up, switch images
                     if (nextImage) {
                         setOpacity(0);
-                        setTimeout(() => {
+                        if (transitionTimerRef.current) {
+                            clearTimeout(transitionTimerRef.current);
+                        }
+                        transitionTimerRef.current = setTimeout(() => {
                             setCurrentImage(nextImage);
                             setZoomDirection(Math.random() > 0.5 ? 'in' : 'out');
                             setNextImage(null);
@@ -153,7 +163,12 @@ export const PresentationMode = observer(() => {
             });
         }, 1000);
 
-        return () => clearInterval(timer);
+        return () => {
+            clearInterval(timer);
+            if (transitionTimerRef.current) {
+                clearTimeout(transitionTimerRef.current);
+            }
+        };
     }, [currentImage, nextImage, fetchNext, error, isPaused]);
 
     const toggleFullscreen = () => {
@@ -172,10 +187,15 @@ export const PresentationMode = observer(() => {
         }
     };
 
-    // Close settings on click outside
+    // Close settings on click outside (excluding settings toggle button)
     useEffect(() => {
         const handleClickOutside = (event: MouseEvent) => {
-            if (settingsRef.current && !settingsRef.current.contains(event.target as Node)) {
+            const target = event.target as Node;
+            if (
+                settingsRef.current && 
+                !settingsRef.current.contains(target) &&
+                !settingsBtnRef.current?.contains(target)
+            ) {
                 setShowSettings(false);
             }
         };
@@ -252,7 +272,8 @@ export const PresentationMode = observer(() => {
                         }}
                         style={{
                             opacity,
-                            animationDuration: zoomSpeed !== 'off' ? `${showTime}s` : undefined
+                            animationDuration: zoomSpeed !== 'off' ? `${showTime}s` : undefined,
+                            animationPlayState: isPaused ? 'paused' : 'running'
                         }}
                         className={`w-full h-full ${
                             orientation === 'landscape' ? 'object-cover' : 'object-contain'
@@ -314,6 +335,7 @@ export const PresentationMode = observer(() => {
                     <Info size={24} />
                 </button>
                 <button 
+                    ref={settingsBtnRef}
                     onClick={() => setShowSettings(!showSettings)}
                     className={`p-3 rounded-full text-white backdrop-blur-md border transition-all active:scale-95 ${showSettings ? 'bg-blue-600 border-blue-400' : 'bg-black/40 hover:bg-black/60 border-white/10'}`}
                     title="Presentation Settings"
@@ -360,7 +382,7 @@ export const PresentationMode = observer(() => {
                             <input 
                                 type="range"
                                 min={3}
-                                max={60}
+                                max={Math.max(60, showTime)}
                                 step={1}
                                 value={showTime}
                                 aria-label="Slide Duration"
@@ -387,15 +409,21 @@ export const PresentationMode = observer(() => {
 
                         {/* Zoom Speed */}
                         <div className="space-y-2">
-                            <label className="text-sm font-medium text-gray-300 flex items-center gap-1.5">
+                            <label id="zoom-speed-label" className="text-sm font-medium text-gray-300 flex items-center gap-1.5">
                                 <ZoomIn size={14} className="text-blue-400" />
                                 Zoom Speed
                             </label>
-                            <div className="grid grid-cols-4 gap-1 bg-gray-800 p-1 rounded-lg border border-gray-700">
+                            <div 
+                                role="radiogroup"
+                                aria-labelledby="zoom-speed-label"
+                                className="grid grid-cols-4 gap-1 bg-gray-800 p-1 rounded-lg border border-gray-700"
+                            >
                                 {(['off', 'slow', 'normal', 'fast'] as const).map((speed) => (
                                     <button
                                         key={speed}
                                         type="button"
+                                        role="radio"
+                                        aria-checked={zoomSpeed === speed}
                                         onClick={() => setZoomSpeed(speed)}
                                         className={`py-1.5 text-xs rounded-md font-medium capitalize transition-all ${
                                             zoomSpeed === speed

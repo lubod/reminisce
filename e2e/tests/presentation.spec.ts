@@ -20,11 +20,11 @@ test.describe("presentation mode", () => {
     test("opens settings and shows slide duration and zoom speed options", async ({ page }) => {
         await page.goto("/present");
         const settingsBtn = page.getByTitle(/presentation settings/i);
-        if (await settingsBtn.isVisible({ timeout: 5000 }).catch(() => false)) {
-            await settingsBtn.click();
-            await expect(page.getByText("Slide Duration")).toBeVisible();
-            await expect(page.getByText("Zoom Speed")).toBeVisible();
-            await expect(page.getByText("SLIDES", { exact: false })).toBeVisible();
-        }
+        const isVisible = await settingsBtn.isVisible({ timeout: 5000 }).catch(() => false);
+        test.skip(!isVisible, "Presentation settings button not visible (no photos in library)");
+        await settingsBtn.click();
+        await expect(page.getByText("Slide Duration")).toBeVisible();
+        await expect(page.getByText("Zoom Speed")).toBeVisible();
+        await expect(page.getByText("SLIDES", { exact: false })).toBeVisible();
     });
 });
