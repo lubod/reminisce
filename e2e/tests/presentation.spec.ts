@@ -16,4 +16,15 @@ test.describe("presentation mode", () => {
         const hasControl = page.getByRole("button").first().or(page.getByText(/press esc|zero photos|no photos|nothing/i));
         await expect(hasControl.first()).toBeVisible({ timeout: 5000 });
     });
+
+    test("opens settings and shows slide duration and zoom speed options", async ({ page }) => {
+        await page.goto("/present");
+        const settingsBtn = page.getByTitle(/presentation settings/i);
+        if (await settingsBtn.isVisible({ timeout: 5000 }).catch(() => false)) {
+            await settingsBtn.click();
+            await expect(page.getByText("Slide Duration")).toBeVisible();
+            await expect(page.getByText("Zoom Speed")).toBeVisible();
+            await expect(page.getByText("SLIDES", { exact: false })).toBeVisible();
+        }
+    });
 });
