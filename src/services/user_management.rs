@@ -262,6 +262,7 @@ pub async fn update_user(
         return HttpResponse::InternalServerError().json(serde_json::json!({"error": "Failed to commit changes"}));
     }
 
+    crate::auth_utils::invalidate_user_cache(&target_id);
     info!("Admin {} updated user {}", claims.username, target_id);
     HttpResponse::Ok().json(serde_json::json!({"status": "ok"}))
 }
@@ -310,6 +311,7 @@ pub async fn delete_user(
 
     match client.execute("DELETE FROM users WHERE id = $1", &[&target_id]).await {
         Ok(n) if n > 0 => {
+            crate::auth_utils::invalidate_user_cache(&target_id);
             info!("Admin {} deleted user {}", claims.username, target_id);
             HttpResponse::Ok().json(serde_json::json!({"status": "ok"}))
         }

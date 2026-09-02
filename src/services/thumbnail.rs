@@ -3,7 +3,7 @@ use chrono::{ DateTime, Utc };
 use log::{ error, info, warn };
 
 use serde::{ Deserialize, Serialize };
-use std::time::Instant;
+use std::time::{Instant, Duration};
 use tokio::fs as async_fs;
 use utoipa::{ IntoParams, ToSchema };
 use image::GenericImageView;
@@ -311,38 +311,48 @@ pub async fn generate_thumbnail_for_video(
     let output_path = output_path.to_path_buf();
     let start_time = Instant::now();
 
-    let result = tokio::process::Command::new("ffmpeg")
-        .args([
-            "-i", video_path.to_str().ok_or("Invalid video path")?,
-            "-ss", "00:00:01",           // Seek to 1 second
-            "-vframes", "1",              // Extract 1 frame
-            "-vf", "scale=500:-1",        // Scale to 500px width, preserve aspect ratio
-            "-q:v", "2",                  // High quality JPEG
-            "-y",                         // Overwrite output
-            output_path.to_str().ok_or("Invalid output path")?
-        ])
-        .output()
-        .await;
+    const FFMPEG_TIMEOUT: Duration = Duration::from_secs(60);
+    let result = tokio::time::timeout(
+        FFMPEG_TIMEOUT,
+        tokio::process::Command::new("ffmpeg")
+            .args([
+                "-i", video_path.to_str().ok_or("Invalid video path")?,
+                "-ss", "00:00:01",           // Seek to 1 second
+                "-vframes", "1",              // Extract 1 frame
+                "-vf", "scale=500:-1",        // Scale to 500px width, preserve aspect ratio
+                "-q:v", "2",                  // High quality JPEG
+                "-y",                         // Overwrite output
+                output_path.to_str().ok_or("Invalid output path")?
+            ])
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await;
 
     let duration = start_time.elapsed();
     THUMBNAIL_DURATION.observe(duration.as_secs_f64());
 
     match result {
-        Ok(output) if output.status.success() => {
+        Ok(Ok(output)) if output.status.success() => {
             THUMBNAIL_SUCCESS_TOTAL.inc();
             info!("Generated video thumbnail: {:?}", output_path);
             Ok(())
         }
-        Ok(output) => {
+        Ok(Ok(output)) => {
             THUMBNAIL_FAILURES_TOTAL.inc();
             let stderr = String::from_utf8_lossy(&output.stderr);
             error!("ffmpeg failed for {:?}: {}", video_path, stderr);
             Err(format!("ffmpeg failed: {}", stderr).into())
         }
-        Err(e) => {
+        Ok(Err(e)) => {
             THUMBNAIL_FAILURES_TOTAL.inc();
             error!("Failed to run ffmpeg for {:?}: {}", video_path, e);
             Err(format!("Failed to run ffmpeg: {}", e).into())
+        }
+        Err(_) => {
+            THUMBNAIL_FAILURES_TOTAL.inc();
+            error!("ffmpeg timed out after {}s for {:?}", FFMPEG_TIMEOUT.as_secs(), video_path);
+            Err(format!("ffmpeg timed out after {}s", FFMPEG_TIMEOUT.as_secs()).into())
         }
     }
 }

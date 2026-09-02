@@ -106,64 +106,11 @@ impl FromRequest for Claims {
             let user_uuid = uuid::Uuid::parse_str(&claims.user_id)
                 .map_err(|_| actix_web::error::ErrorUnauthorized("Invalid user ID in token"))?;
 
-            struct CachedUserStatus {
-                role: String,
-                is_active: bool,
-                fetched_at: std::time::Instant,
-            }
-            // RwLock: the hot path is a concurrent read per request; only the rare
-            // eviction + cache write take the exclusive lock, reducing contention.
-            static USER_CACHE: std::sync::OnceLock<std::sync::Arc<std::sync::RwLock<std::collections::HashMap<uuid::Uuid, CachedUserStatus>>>> = std::sync::OnceLock::new();
-            let cache = USER_CACHE.get_or_init(|| std::sync::Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())));
-
-            let (user_role, user_active) = {
-                // 1. Check the cache with a shared lock.
-                let hit = {
-                    let guard = cache.read().unwrap_or_else(|e| e.into_inner());
-                    if guard.len() > 500 {
-                        // Opportunistic eviction under the write lock (rare).
-                        drop(guard);
-                        let mut wguard = cache.write().unwrap_or_else(|e| e.into_inner());
-                        wguard.retain(|_, v| v.fetched_at.elapsed() < std::time::Duration::from_secs(60));
-                    }
-                    let guard = cache.read().unwrap_or_else(|e| e.into_inner());
-                    guard.get(&user_uuid)
-                        .filter(|c| c.fetched_at.elapsed() < std::time::Duration::from_secs(5))
-                        .map(|c| (c.role.clone(), c.is_active))
-                };
-
-                if let Some((r, a)) = hit {
-                    (r, a)
-                } else if let Some(pool) = pool {
-                    let client = pool.0.get().await.map_err(|e| {
-                        log::error!("FromRequest DB connection error: {:?}", e);
-                        actix_web::error::ErrorInternalServerError("Database connection failed")
-                    })?;
-                    let row = client.query_opt(
-                        "SELECT role, is_active FROM users WHERE id = $1",
-                        &[&user_uuid]
-                    ).await.map_err(|e| {
-                        log::error!("FromRequest DB query error: {:?}", e);
-                        actix_web::error::ErrorInternalServerError("Database error")
-                    })?;
-
-                    if let Some(row) = row {
-                        let r: String = row.get("role");
-                        let a: bool = row.get("is_active");
-                        let mut cache_write = cache.write().unwrap_or_else(|e| e.into_inner());
-                        cache_write.insert(user_uuid, CachedUserStatus {
-                            role: r.clone(),
-                            is_active: a,
-                            fetched_at: std::time::Instant::now(),
-                        });
-                        (r, a)
-                    } else {
-                        return Err(actix_web::error::ErrorUnauthorized("User not found"));
-                    }
-                } else {
-                    log::error!("MainDbPool app data is missing in Claims FromRequest");
-                    return Err(actix_web::error::ErrorInternalServerError("Database configuration error"));
-                }
+            let (user_role, user_active) = if let Some(pool) = pool {
+                crate::auth_utils::get_cached_or_query_user_status(&user_uuid, pool.as_ref()).await?
+            } else {
+                log::error!("MainDbPool app data is missing in Claims FromRequest");
+                return Err(actix_web::error::ErrorInternalServerError("Database configuration error"));
             };
 
             if !user_active {

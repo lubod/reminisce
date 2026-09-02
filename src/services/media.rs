@@ -837,11 +837,15 @@ async fn soft_restore_media(
     crate::utils::validate_table_name(table).map_err(actix_web::error::ErrorBadRequest)?;
     let client = utils::get_db_client(pool).await?;
 
+    let query = if table == "images" {
+        "UPDATE images SET deleted_at = NULL, duplicates_checked_at = NULL WHERE hash = $1 AND user_id = $2 AND deleted_at IS NOT NULL"
+    } else {
+        "UPDATE videos SET deleted_at = NULL WHERE hash = $1 AND user_id = $2 AND deleted_at IS NOT NULL"
+    };
+
     let result = client
-        .execute(
-            &format!("UPDATE {} SET deleted_at = NULL WHERE hash = $1 AND user_id = $2 AND deleted_at IS NOT NULL", table),
-            &[&hash, user_id]
-        ).await
+        .execute(query, &[&hash, user_id])
+        .await
         .map_err(|e| {
             error!("Failed to restore {}: {}", table, e);
             actix_web::error::ErrorInternalServerError("Database error")
@@ -939,6 +943,15 @@ async fn soft_delete_media(
             "status": "error",
             "message": format!("{} not found or already deleted.", media_type.chars().next().unwrap().to_uppercase().to_string() + &media_type[1..])
         })));
+    }
+
+    if table == "images" {
+        let _ = client
+            .execute(
+                "DELETE FROM image_duplicate_pairs WHERE user_id = $1 AND (hash_a = $2 OR hash_b = $2)",
+                &[user_id, &hash],
+            )
+            .await;
     }
 
     info!("{} marked as deleted: {}", table, hash);

@@ -65,6 +65,77 @@ const MEDIA_READ_SAFE_HANDLERS: &[&str] = &["get_image", "get_video"];
 
 /// Authenticates a request by checking for a valid JWT in the Authorization header or
 /// `token` query parameter. Returns the decoded claims on success.
+
+#[derive(Clone)]
+pub struct CachedUserStatus {
+    pub role: String,
+    pub is_active: bool,
+    pub fetched_at: std::time::Instant,
+}
+
+static USER_CACHE: std::sync::OnceLock<std::sync::Arc<std::sync::RwLock<std::collections::HashMap<uuid::Uuid, CachedUserStatus>>>> = std::sync::OnceLock::new();
+
+pub fn user_cache() -> std::sync::Arc<std::sync::RwLock<std::collections::HashMap<uuid::Uuid, CachedUserStatus>>> {
+    USER_CACHE.get_or_init(|| std::sync::Arc::new(std::sync::RwLock::new(std::collections::HashMap::new()))).clone()
+}
+
+pub fn invalidate_user_cache(user_id: &uuid::Uuid) {
+    if let Some(cache) = USER_CACHE.get() {
+        let mut guard = cache.write().unwrap_or_else(|e| e.into_inner());
+        guard.remove(user_id);
+    }
+}
+
+pub async fn get_cached_or_query_user_status(
+    user_uuid: &uuid::Uuid,
+    pool: &crate::db::MainDbPool,
+) -> Result<(String, bool), actix_web::Error> {
+    let cache = user_cache();
+    let hit = {
+        let guard = cache.read().unwrap_or_else(|e| e.into_inner());
+        if guard.len() > 500 {
+            drop(guard);
+            let mut wguard = cache.write().unwrap_or_else(|e| e.into_inner());
+            wguard.retain(|_, v| v.fetched_at.elapsed() < std::time::Duration::from_secs(60));
+        }
+        let guard = cache.read().unwrap_or_else(|e| e.into_inner());
+        guard.get(user_uuid)
+            .filter(|c| c.fetched_at.elapsed() < std::time::Duration::from_secs(5))
+            .map(|c| (c.role.clone(), c.is_active))
+    };
+
+    if let Some((r, a)) = hit {
+        return Ok((r, a));
+    }
+
+    let client = pool.0.get().await.map_err(|e| {
+        log::error!("DB connection error in get_cached_or_query_user_status: {:?}", e);
+        actix_web::error::ErrorInternalServerError("Database connection failed")
+    })?;
+
+    let row = client.query_opt(
+        "SELECT role, is_active FROM users WHERE id = $1",
+        &[user_uuid]
+    ).await.map_err(|e| {
+        log::error!("DB query error in get_cached_or_query_user_status: {:?}", e);
+        actix_web::error::ErrorInternalServerError("Database error")
+    })?;
+
+    if let Some(row) = row {
+        let r: String = row.get("role");
+        let a: bool = row.get("is_active");
+        let mut cache_write = cache.write().unwrap_or_else(|e| e.into_inner());
+        cache_write.insert(*user_uuid, CachedUserStatus {
+            role: r.clone(),
+            is_active: a,
+            fetched_at: std::time::Instant::now(),
+        });
+        Ok((r, a))
+    } else {
+        Err(actix_web::error::ErrorUnauthorized("User not found"))
+    }
+}
+
 pub async fn authenticate_request(
     req: &HttpRequest,
     handler_name: &str,
@@ -131,36 +202,19 @@ pub async fn authenticate_request(
                 };
 
                 if let Some(pool) = req.app_data::<web::Data<crate::db::MainDbPool>>() {
-                    let client = match pool.0.get().await {
-                        Ok(c) => c,
-                        Err(e) => {
-                            log::error!("authenticate_request DB connection error: {:?}", e);
-                            return Err(HttpResponse::InternalServerError().json(serde_json::json!({"error": "Database connection failed"})));
+                    let (role, is_active) = match get_cached_or_query_user_status(&user_uuid, pool.as_ref()).await {
+                        Ok(status) => status,
+                        Err(_) => {
+                            return Err(HttpResponse::Unauthorized().json(serde_json::json!({"error": "User not found or database error"})));
                         }
                     };
 
-                    let row = match client.query_opt(
-                        "SELECT role, is_active FROM users WHERE id = $1",
-                        &[&user_uuid]
-                    ).await {
-                        Ok(r) => r,
-                        Err(e) => {
-                            log::error!("authenticate_request DB query error: {:?}", e);
-                            return Err(HttpResponse::InternalServerError().json(serde_json::json!({"error": "Database error"})));
-                        }
-                    };
-
-                    if let Some(row) = row {
-                        let is_active: bool = row.get("is_active");
-                        if !is_active {
-                            return Err(HttpResponse::Unauthorized().json(serde_json::json!({"error": "Account is disabled"})));
-                        }
-                        let mut claims_updated = claims;
-                        claims_updated.role = row.get("role");
-                        return Ok(claims_updated);
-                    } else {
-                        return Err(HttpResponse::Unauthorized().json(serde_json::json!({"error": "User not found"})));
+                    if !is_active {
+                        return Err(HttpResponse::Unauthorized().json(serde_json::json!({"error": "Account is disabled"})));
                     }
+                    let mut claims_updated = claims;
+                    claims_updated.role = role;
+                    return Ok(claims_updated);
                 } else {
                     log::error!("MainDbPool app data is missing in authenticate_request");
                     return Err(HttpResponse::InternalServerError().json(serde_json::json!({"error": "Database configuration error"})));
@@ -228,5 +282,30 @@ mod tests {
         assert!(parse_user_uuid("not-a-uuid").is_err());
         assert!(parse_user_uuid("").is_err());
         assert!(parse_user_uuid(&"a".repeat(40)).is_err());
+    }
+
+    #[test]
+    fn test_user_cache_insert_lookup_and_invalidate() {
+        let user_id = uuid::Uuid::new_v4();
+        let cache = user_cache();
+        {
+            let mut guard = cache.write().unwrap();
+            guard.insert(user_id, CachedUserStatus {
+                role: "admin".to_string(),
+                is_active: true,
+                fetched_at: std::time::Instant::now(),
+            });
+        }
+        {
+            let guard = cache.read().unwrap();
+            let entry = guard.get(&user_id).unwrap();
+            assert_eq!(entry.role, "admin");
+            assert!(entry.is_active);
+        }
+        invalidate_user_cache(&user_id);
+        {
+            let guard = cache.read().unwrap();
+            assert!(guard.get(&user_id).is_none());
+        }
     }
 }

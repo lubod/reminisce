@@ -53,8 +53,9 @@ export class TrashStore {
             runInAction(() => {
                 this.items = this.items.filter((item) => item.hash !== hash);
             });
-            // Stores aren't cross-wired; notify MediaStore so it refreshes the
-            // library with the restored item.
+            // Directly notify MediaStore so it refreshes the library with the restored item
+            this.rootStore.mediaStore?.applyFilters();
+            // Also dispatch window event for external listeners
             window.dispatchEvent(new CustomEvent("reminisce:media-changed"));
         } catch {
             runInAction(() => {
