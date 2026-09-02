@@ -193,27 +193,96 @@ pub async fn retrieve_shard(
         .await
         .map_err(|e| crate::p2p_error::P2pError::connect(addr.to_string(), e.to_string()))?;
 
-    let (mut send, mut recv) = conn
+    let token = p2p_service
+        .identity()
+        .create_shard_token(np2p::crypto::ShardOp::Retrieve, &shard_hash_bytes);
+
+    // Attempt 1: Streaming retrieval (chunked, bypasses 128 MB frame limit for large shards)
+    let stream_attempt = async {
+        let (mut send, mut recv) = conn
+            .open_bi()
+            .await
+            .map_err(|e| crate::p2p_error::P2pError::open_bi(addr.to_string(), e.to_string()))?;
+
+        Protocol::send(&mut send, &Message::RetrieveShardStreamInit {
+            shard_hash: shard_hash_bytes,
+            token: token.clone(),
+        })
+        .await
+        .map_err(|e| crate::p2p_error::P2pError::Send { message: e.to_string() })?;
+
+        match Protocol::receive(&mut recv).await {
+            Ok(Message::RetrieveShardStreamAck { found: true, total_bytes }) => {
+                let mut data = Vec::with_capacity(total_bytes as usize);
+                let mut hasher = blake3::Hasher::new();
+                loop {
+                    match Protocol::receive(&mut recv).await {
+                        Ok(Message::RetrieveShardChunk { data: chunk }) => {
+                            hasher.update(&chunk);
+                            data.extend_from_slice(&chunk);
+                        }
+                        Ok(Message::RetrieveShardStreamFinal { shard_hash: expected_hash }) => {
+                            let actual_hash: [u8; 32] = hasher.finalize().into();
+                            let _ = send.finish();
+                            if actual_hash == expected_hash && actual_hash == shard_hash_bytes {
+                                conn.close(0u32.into(), b"done");
+                                return Ok(Some(data));
+                            } else {
+                                conn.close(1u32.into(), b"hash_mismatch");
+                                return Err(crate::p2p_error::P2pError::Receive { message: "Hash mismatch in stream".to_string() });
+                            }
+                        }
+                        Ok(other) => {
+                            let _ = send.finish();
+                            return Err(crate::p2p_error::P2pError::Receive { message: format!("Unexpected stream message: {:?}", other) });
+                        }
+                        Err(e) => {
+                            let _ = send.finish();
+                            return Err(crate::p2p_error::P2pError::Receive { message: e.to_string() });
+                        }
+                    }
+                }
+            }
+            Ok(Message::RetrieveShardStreamAck { found: false, .. }) => {
+                let _ = send.finish();
+                conn.close(0u32.into(), b"not_found");
+                Err(crate::p2p_error::P2pError::ShardNotFound)
+            }
+            _ => {
+                let _ = send.finish();
+                // Peer may not support streaming (older node) -> fallback
+                Ok(None)
+            }
+        }
+    }.await;
+
+    match stream_attempt {
+        Ok(Some(data)) => return Ok(data),
+        Err(crate::p2p_error::P2pError::ShardNotFound) => {
+            return Err(crate::p2p_error::P2pError::ShardNotFound.to_string());
+        }
+        _ => {} // Fall through to legacy attempt
+    }
+
+    // Attempt 2: Legacy single-frame RetrieveShardRequest
+    let (mut send2, mut recv2) = conn
         .open_bi()
         .await
         .map_err(|e| crate::p2p_error::P2pError::open_bi(addr.to_string(), e.to_string()))?;
 
-    let token = p2p_service
-        .identity()
-        .create_shard_token(np2p::crypto::ShardOp::Retrieve, &shard_hash_bytes);
-    Protocol::send(&mut send, &Message::RetrieveShardRequest {
+    Protocol::send(&mut send2, &Message::RetrieveShardRequest {
         shard_hash: shard_hash_bytes,
         token,
     })
     .await
     .map_err(|e| crate::p2p_error::P2pError::Send { message: e.to_string() })?;
 
-    let result = match Protocol::receive(&mut recv).await {
+    let result = match Protocol::receive(&mut recv2).await {
         Ok(Message::RetrieveShardResponse { data: Some(data), .. }) => Ok(data),
         Ok(_) => Err(crate::p2p_error::P2pError::ShardNotFound),
         Err(e) => Err(crate::p2p_error::P2pError::Receive { message: e.to_string() }),
     };
-    let _ = send.finish();
+    let _ = send2.finish();
     conn.close(0u32.into(), if result.is_ok() { b"done" } else { b"error" });
     result.map_err(|e| e.to_string())
 }

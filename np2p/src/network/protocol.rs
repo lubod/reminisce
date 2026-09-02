@@ -96,6 +96,12 @@ pub enum Message {
     /// Request to list stored shard hashes on the node (optionally scoped by 2-hex prefix).
     ListShardsRequest { prefix: Option<String>, token: ShardToken },
     ListShardsResponse { prefix: Option<String>, shards: Vec<[u8; 32]>, available_space_bytes: u64 },
+
+    /// Stream an encrypted shard in chunks (supports shards of arbitrary size > 128 MB frame cap).
+    RetrieveShardStreamInit { shard_hash: [u8; 32], token: ShardToken },
+    RetrieveShardStreamAck { found: bool, total_bytes: u64 },
+    RetrieveShardChunk { data: Vec<u8> },
+    RetrieveShardStreamFinal { shard_hash: [u8; 32] },
 }
 
 /// Hard cap on the size of a single framed protocol message.

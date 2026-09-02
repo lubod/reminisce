@@ -247,3 +247,62 @@ async fn silent_stream_dropped_without_leaking_permit() {
         other => panic!("expected HandshakeAck after deadline drop, got {:?}", other),
     }
 }
+
+#[tokio::test]
+async fn retrieve_shard_stream_success_and_not_found() {
+    let tmp = tempdir().unwrap();
+    let server_storage = DiskStorage::new(tmp.path()).await.unwrap();
+
+    let shard_data = vec![0xA5u8; 1024 * 512]; // 512 KB test shard
+    let shard_hash: [u8; 32] = blake3::hash(&shard_data).into();
+    server_storage.store(shard_hash, &shard_data).await.unwrap();
+
+    let server_identity = Arc::new(NodeIdentity::generate());
+    let (server_id_hex, addr) = spawn_server(server_storage, server_identity, None).await;
+
+    let client_id = NodeIdentity::generate();
+    let client_node = Node::new("127.0.0.1:0".parse().unwrap(), client_id.clone()).unwrap();
+    let conn = client_node.connect(addr, &server_id_hex).await.expect("connect");
+
+    // 1. Success case: retrieve existing shard via stream
+    {
+        let (mut send, mut recv) = conn.open_bi().await.unwrap();
+        let token = client_id.create_shard_token(np2p::crypto::ShardOp::Retrieve, &shard_hash);
+        Protocol::send(&mut send, &Message::RetrieveShardStreamInit { shard_hash, token }).await.unwrap();
+
+        match Protocol::receive(&mut recv).await.unwrap() {
+            Message::RetrieveShardStreamAck { found: true, total_bytes } => {
+                assert_eq!(total_bytes, shard_data.len() as u64);
+            }
+            other => panic!("expected RetrieveShardStreamAck found=true, got {:?}", other),
+        }
+
+        let mut streamed_bytes = Vec::new();
+        loop {
+            match Protocol::receive(&mut recv).await.unwrap() {
+                Message::RetrieveShardChunk { data } => {
+                    streamed_bytes.extend_from_slice(&data);
+                }
+                Message::RetrieveShardStreamFinal { shard_hash: final_hash } => {
+                    assert_eq!(final_hash, shard_hash);
+                    break;
+                }
+                other => panic!("unexpected message: {:?}", other),
+            }
+        }
+        assert_eq!(streamed_bytes, shard_data);
+    }
+
+    // 2. Not found case: retrieve nonexistent shard via stream
+    {
+        let (mut send, mut recv) = conn.open_bi().await.unwrap();
+        let missing_hash = [0xEEu8; 32];
+        let token = client_id.create_shard_token(np2p::crypto::ShardOp::Retrieve, &missing_hash);
+        Protocol::send(&mut send, &Message::RetrieveShardStreamInit { shard_hash: missing_hash, token }).await.unwrap();
+
+        match Protocol::receive(&mut recv).await.unwrap() {
+            Message::RetrieveShardStreamAck { found: false, total_bytes: 0 } => {}
+            other => panic!("expected RetrieveShardStreamAck found=false, got {:?}", other),
+        }
+    }
+}

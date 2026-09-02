@@ -280,6 +280,42 @@ impl ConnectionHandler {
                 }
             }
 
+            Message::RetrieveShardStreamInit { shard_hash, token } => {
+                if !crate::crypto::verify_shard_token(&token, crate::crypto::ShardOp::Retrieve, &shard_hash, allowed_owner_id.as_ref()) {
+                    warn!("RetrieveShardStreamInit: token verification failed for shard {}", hex::encode(shard_hash));
+                    let response = Message::Error {
+                        code: 401,
+                        message: "Unauthorized shard retrieval".to_string(),
+                    };
+                    Protocol::send(&mut send, &response).await?;
+                    return Ok(());
+                }
+
+                let (mut file, total_bytes) = match storage.open_shard_file(shard_hash).await? {
+                    Some(f) => f,
+                    None => {
+                        Protocol::send(&mut send, &Message::RetrieveShardStreamAck { found: false, total_bytes: 0 }).await?;
+                        return Ok(());
+                    }
+                };
+
+                Protocol::send(&mut send, &Message::RetrieveShardStreamAck { found: true, total_bytes }).await?;
+
+                let mut buf = vec![0u8; 16 * 1024 * 1024];
+                use tokio::io::AsyncReadExt;
+                let mut hasher = blake3::Hasher::new();
+                loop {
+                    let n = file.read(&mut buf).await?;
+                    if n == 0 {
+                        break;
+                    }
+                    hasher.update(&buf[..n]);
+                    Protocol::send(&mut send, &Message::RetrieveShardChunk { data: buf[..n].to_vec() }).await?;
+                }
+                let final_hash: [u8; 32] = hasher.finalize().into();
+                Protocol::send(&mut send, &Message::RetrieveShardStreamFinal { shard_hash: final_hash }).await?;
+            }
+
             Message::Heartbeat { available_space_bytes } => {
                 info!("[CONN] Heartbeat: {} bytes available", available_space_bytes);
             }

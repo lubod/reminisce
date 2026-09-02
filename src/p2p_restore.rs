@@ -47,9 +47,17 @@ pub async fn restore_file(
     owner_user_id: Option<&str>,
 ) -> Result<RestoredFile, Box<dyn std::error::Error + Send + Sync>> {
     let svc = p2p_service.clone();
+    let pool_clone = pool.clone();
     restore_file_with_fetcher(pool, file_hash, owner_user_id, move |node_id, shard_hash| {
         let svc = svc.clone();
+        let pool = pool_clone.clone();
         async move {
+            let hex_hash = hex::encode(shard_hash);
+            if let Some(addr) = crate::shard_rebalance_worker::lookup_node_addr(&pool, &svc, &node_id).await {
+                if let Ok(data) = crate::p2p_upload::retrieve_shard(&svc, addr, &hex_hash).await {
+                    return Some(data);
+                }
+            }
             let token = svc.identity().create_shard_token(np2p::crypto::ShardOp::Retrieve, &shard_hash);
             match svc.send_message(&node_id, &Message::RetrieveShardRequest { shard_hash, token }).await {
                 Ok(Message::RetrieveShardResponse { data, .. }) => data,

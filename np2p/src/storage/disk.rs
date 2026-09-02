@@ -68,7 +68,10 @@ impl DiskStorage {
         if !base_path.exists() {
             fs::create_dir_all(&base_path).await?;
         }
-        Ok(Self { base_path })
+        let storage = Self { base_path };
+        // Purge any stale temp files left behind from aborted uploads on startup (> 1 hour old)
+        let _ = storage.cleanup_stale_temp_files(std::time::Duration::from_secs(3600)).await;
+        Ok(storage)
     }
 
     /// Reports free bytes on the storage volume (0 if it cannot be determined).
@@ -210,6 +213,59 @@ impl DiskStorage {
         // Persist the directory entry (best-effort).
         Self::sync_parent_dir(&final_path).await;
         Ok(())
+    }
+
+    /// Opens a shard file for streaming read, returning the File handle and its size in bytes.
+    pub async fn open_shard_file(&self, shard_hash: [u8; 32]) -> Result<Option<(tokio::fs::File, u64)>> {
+        let path = self.get_shard_path(&shard_hash);
+        if !path.exists() {
+            return Ok(None);
+        }
+        let metadata = tokio::fs::metadata(&path).await?;
+        let file = tokio::fs::File::open(&path).await?;
+        Ok(Some((file, metadata.len())))
+    }
+
+    /// Purges orphaned temp files (*.tmp) older than max_age (e.g. from aborted uploads or daemon restarts).
+    pub async fn cleanup_stale_temp_files(&self, max_age: std::time::Duration) -> Result<u64> {
+        let mut count = 0u64;
+        let now = std::time::SystemTime::now();
+        let mut entries = match fs::read_dir(&self.base_path).await {
+            Ok(e) => e,
+            Err(_) => return Ok(0),
+        };
+        while let Ok(Some(prefix_entry)) = entries.next_entry().await {
+            let prefix_path = prefix_entry.path();
+            if !prefix_path.is_dir() {
+                continue;
+            }
+            let mut sub_entries = match fs::read_dir(&prefix_path).await {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            while let Ok(Some(file_entry)) = sub_entries.next_entry().await {
+                let file_path = file_entry.path();
+                if let Some(file_name) = file_path.file_name().and_then(|n| n.to_str()) {
+                    if file_name.ends_with(".tmp") {
+                        if let Ok(metadata) = file_entry.metadata().await {
+                            if let Ok(mtime) = metadata.modified() {
+                                if let Ok(age) = now.duration_since(mtime) {
+                                    if age >= max_age {
+                                        if fs::remove_file(&file_path).await.is_ok() {
+                                            count += 1;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if count > 0 {
+            tracing::info!("Cleaned up {} stale temp shard file(s) from {}", count, self.base_path.display());
+        }
+        Ok(count)
     }
 
     /// Retrieves a shard from disk.
@@ -357,5 +413,39 @@ mod tests {
         storage.store_pinned("manifest:abc", b"other").await.unwrap();
         assert_eq!(storage.get_pinned("manifest:abc").await.unwrap().unwrap(), b"other");
         assert_eq!(storage.get_pinned("manifest:latest").await.unwrap().unwrap(), b"v2");
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_stale_temp_files_and_open_shard() {
+        let tmp = tempdir().unwrap();
+        let storage = DiskStorage::new(tmp.path()).await.unwrap();
+
+        let hash = [0x42u8; 32];
+        let data = b"test shard content for streaming read";
+        storage.store(hash, data).await.unwrap();
+
+        // Verify open_shard_file
+        let (mut file, size) = storage.open_shard_file(hash).await.unwrap().expect("shard exists");
+        assert_eq!(size, data.len() as u64);
+        use tokio::io::AsyncReadExt;
+        let mut read_buf = Vec::new();
+        file.read_to_end(&mut read_buf).await.unwrap();
+        assert_eq!(read_buf, data);
+
+        // Verify nonexistent open_shard_file
+        assert!(storage.open_shard_file([0x99u8; 32]).await.unwrap().is_none());
+
+        // Create a temp file inside a prefix directory
+        let temp_path = storage.temp_path(&[0x11u8; 32]);
+        if let Some(p) = temp_path.parent() {
+            tokio::fs::create_dir_all(p).await.unwrap();
+        }
+        tokio::fs::write(&temp_path, b"temp data").await.unwrap();
+        assert!(temp_path.exists());
+
+        // Calling with max_age of 0 duration purges the file immediately
+        let cleaned = storage.cleanup_stale_temp_files(std::time::Duration::from_secs(0)).await.unwrap();
+        assert_eq!(cleaned, 1);
+        assert!(!temp_path.exists());
     }
 }
