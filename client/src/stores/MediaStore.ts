@@ -66,6 +66,8 @@ export interface ImageMetadata {
     resolution_label?: string | null;
     device_id?: string | null;
     file_size_bytes?: number | null;
+    latitude?: number | null;
+    longitude?: number | null;
 }
 
 export interface MediaGroup {
@@ -666,6 +668,90 @@ export class MediaStore {
     };
 
     clearImageMetadata = () => { this.imageMetadata = null; this.lastLoadedMetadataHash = null; };
+
+    updateImageOrientation = async (hash: string, action: 'cw' | 'ccw' | number) => {
+        try {
+            const payload = typeof action === 'number'
+                ? { orientation: action }
+                : { rotate: action };
+            const response = await axios.post<{ status: string; orientation: number; orientation_label?: string }>(
+                `/image/${hash}/orientation`,
+                payload
+            );
+
+            const { orientation, orientation_label } = response.data;
+
+            runInAction(() => {
+                if (this.imageMetadata && this.imageMetadata.hash === hash) {
+                    this.imageMetadata.orientation = orientation;
+                    this.imageMetadata.orientation_label = orientation_label ?? null;
+                }
+
+                // Cache-bust thumbnail and full image URL so view reloads with new orientation
+                const v = Date.now();
+                const authBase = this.getAuthenticatedUrl(`/api/image/${hash}`);
+                this.fullMediaUrl = `${authBase}${authBase.includes('?') ? '&' : '?'}v=${v}`;
+
+                const updateList = (list: MediaItem[]) => {
+                    for (const item of list) {
+                        if (item.hash === hash) {
+                            const tBase = this.getAuthenticatedUrl(`/api/thumbnail/${hash}`);
+                            item.thumbnailUrl = `${tBase}${tBase.includes('?') ? '&' : '?'}v=${v}`;
+                        }
+                    }
+                };
+
+                updateList(this.allMedia);
+                updateList(this.customLightboxItems);
+                updateList(this.noExifImages);
+            });
+
+            return response.data;
+        } catch (error) {
+            logger.error("Failed to update image orientation", error);
+            throw error;
+        }
+    };
+
+    updateImagePlace = async (hash: string, place: string | null, latitude?: number, longitude?: number) => {
+        try {
+            const response = await axios.post<{ status: string; place: string | null; latitude?: number; longitude?: number }>(
+                `/image/${hash}/place`,
+                { place, latitude, longitude }
+            );
+
+            const newPlace = response.data.place ?? null;
+
+            runInAction(() => {
+                if (this.imageMetadata && this.imageMetadata.hash === hash) {
+                    this.imageMetadata.place = newPlace;
+                    if (response.data.latitude !== undefined) {
+                        this.imageMetadata.latitude = response.data.latitude;
+                    }
+                    if (response.data.longitude !== undefined) {
+                        this.imageMetadata.longitude = response.data.longitude;
+                    }
+                }
+
+                const updateList = (list: MediaItem[]) => {
+                    for (const item of list) {
+                        if (item.hash === hash) {
+                            item.place = newPlace ?? undefined;
+                        }
+                    }
+                };
+
+                updateList(this.allMedia);
+                updateList(this.customLightboxItems);
+                updateList(this.noExifImages);
+            });
+
+            return response.data;
+        } catch (error) {
+            logger.error("Failed to update image place", error);
+            throw error;
+        }
+    };
 
     toggleStarMedia = async (hash: string, deviceId?: string) => {
         // Identity is (hash, device_id): the same hash can exist on several

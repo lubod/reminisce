@@ -440,3 +440,150 @@ async fn test_ping_service() {
     let response_body = test::read_body(response).await;
     assert_eq!(response_body, Bytes::from_static(b"OK"));
 }
+
+#[actix_web::test]
+#[serial]
+async fn test_update_image_orientation() {
+    let (pool, _test_db) = setup_test_database_with_instance().await;
+    let client = pool.get().await.expect("Failed to get client from pool");
+
+    let config = common::utils::create_test_config();
+    client.execute("DELETE FROM images WHERE hash = $1", &[&common::TEST_IMAGE_HASH]).await.ok();
+
+    client
+        .execute(
+            "INSERT INTO images (user_id, hash, name, exif, created_at, type, deviceid, ext, orientation, width, height) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+            &[
+                &uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap(),
+                &common::TEST_IMAGE_HASH,
+                &common::TEST_IMAGE_NAME,
+                &Option::<&str>::None,
+                &chrono::Utc::now(),
+                &"camera",
+                &"test_device_id",
+                &"jpg",
+                &1i16,
+                &4000i32,
+                &3000i32,
+            ]
+        ).await
+        .expect("Failed to insert test data");
+
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(reminisce::db::MainDbPool(pool.clone())))
+            .app_data(web::Data::new(config.clone()))
+            .service(update_image_orientation)
+    ).await;
+
+    let token = common::utils::create_test_jwt_token().await;
+
+    // Rotate CW (1 -> 6, portrait)
+    let req = test::TestRequest::post()
+        .uri(&format!("/image/{}/orientation", common::TEST_IMAGE_HASH))
+        .insert_header(("Authorization", format!("Bearer {}", token)))
+        .set_json(serde_json::json!({ "rotate": "cw" }))
+        .to_request();
+
+    let response = test::call_service(&app, req).await;
+    assert_eq!(response.status(), http::StatusCode::OK);
+    let body: serde_json::Value = test::read_body_json(response).await;
+    assert_eq!(body["status"], "success");
+    assert_eq!(body["orientation"], 6);
+    assert_eq!(body["orientation_label"], "Portrait");
+
+    // Check DB
+    let row = client.query_one("SELECT orientation FROM images WHERE hash = $1", &[&common::TEST_IMAGE_HASH]).await.unwrap();
+    let o: i16 = row.get(0);
+    assert_eq!(o, 6);
+
+    // Rotate again CW (6 -> 3)
+    let req = test::TestRequest::post()
+        .uri(&format!("/image/{}/orientation", common::TEST_IMAGE_HASH))
+        .insert_header(("Authorization", format!("Bearer {}", token)))
+        .set_json(serde_json::json!({ "rotate": "cw" }))
+        .to_request();
+    let response = test::call_service(&app, req).await;
+    let body: serde_json::Value = test::read_body_json(response).await;
+    assert_eq!(body["orientation"], 3);
+
+    // Clean up
+    client.execute("DELETE FROM images WHERE hash = $1", &[&common::TEST_IMAGE_HASH]).await.ok();
+}
+
+#[actix_web::test]
+#[serial]
+async fn test_update_image_place() {
+    let (pool, _test_db) = setup_test_database_with_instance().await;
+    let client = pool.get().await.expect("Failed to get client from pool");
+
+    let config = common::utils::create_test_config();
+    client.execute("DELETE FROM images WHERE hash = $1", &[&common::TEST_IMAGE_HASH]).await.ok();
+
+    client
+        .execute(
+            "INSERT INTO images (user_id, hash, name, exif, created_at, type, deviceid, ext) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+            &[
+                &uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap(),
+                &common::TEST_IMAGE_HASH,
+                &common::TEST_IMAGE_NAME,
+                &Option::<&str>::None,
+                &chrono::Utc::now(),
+                &"camera",
+                &"test_device_id",
+                &"jpg",
+            ]
+        ).await
+        .expect("Failed to insert test data");
+
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(reminisce::db::MainDbPool(pool.clone())))
+            .app_data(web::Data::new(config.clone()))
+            .service(update_image_place)
+    ).await;
+
+    let token = common::utils::create_test_jwt_token().await;
+
+    // Update place with coordinates
+    let req = test::TestRequest::post()
+        .uri(&format!("/image/{}/place", common::TEST_IMAGE_HASH))
+        .insert_header(("Authorization", format!("Bearer {}", token)))
+        .set_json(serde_json::json!({
+            "place": "Eiffel Tower, Paris",
+            "latitude": 48.8584,
+            "longitude": 2.2945
+        }))
+        .to_request();
+
+    let response = test::call_service(&app, req).await;
+    assert_eq!(response.status(), http::StatusCode::OK);
+    let body: serde_json::Value = test::read_body_json(response).await;
+    assert_eq!(body["status"], "success");
+    assert_eq!(body["place"], "Eiffel Tower, Paris");
+
+    // Verify DB
+    let row = client.query_one("SELECT place, ST_Y(location::geometry), ST_X(location::geometry) FROM images WHERE hash = $1", &[&common::TEST_IMAGE_HASH]).await.unwrap();
+    let place: String = row.get(0);
+    let lat: f64 = row.get(1);
+    let lon: f64 = row.get(2);
+    assert_eq!(place, "Eiffel Tower, Paris");
+    assert!((lat - 48.8584).abs() < 0.0001);
+    assert!((lon - 2.2945).abs() < 0.0001);
+
+    // Clear place
+    let req = test::TestRequest::post()
+        .uri(&format!("/image/{}/place", common::TEST_IMAGE_HASH))
+        .insert_header(("Authorization", format!("Bearer {}", token)))
+        .set_json(serde_json::json!({
+            "place": ""
+        }))
+        .to_request();
+    let response = test::call_service(&app, req).await;
+    assert_eq!(response.status(), http::StatusCode::OK);
+    let body: serde_json::Value = test::read_body_json(response).await;
+    assert_eq!(body["place"], serde_json::Value::Null);
+
+    // Clean up
+    client.execute("DELETE FROM images WHERE hash = $1", &[&common::TEST_IMAGE_HASH]).await.ok();
+}

@@ -122,7 +122,7 @@ pub use crate::services::health::{ping, health_check, HealthCheckResponse};
 pub use crate::services::existence_check::{check_image_exists, check_video_exists};
 pub use crate::services::upload::{upload_image, upload_video, upload_image_metadata, upload_video_metadata, batch_upload_image, check_images_exist_batch, check_videos_exist_batch, batch_check_images, batch_check_videos};
 pub use crate::services::thumbnail::{list_image_thumbnails, list_video_thumbnails, list_all_media_thumbnails, get_thumbnail, get_face_thumbnail};
-pub use crate::services::media::{get_image, get_video, get_image_metadata, toggle_image_star, toggle_video_star, delete_image, delete_video, get_device_ids, get_random_image, restore_image, restore_video, get_trash, enhance_image, save_enhanced_image};
+pub use crate::services::media::{get_image, get_video, get_image_metadata, toggle_image_star, toggle_video_star, delete_image, delete_video, get_device_ids, get_random_image, restore_image, restore_video, get_trash, enhance_image, save_enhanced_image, update_image_orientation, update_image_place};
 pub use crate::services::embedding::search_images;
 pub use crate::services::embedding::search_video_keyframes;
 pub use crate::services::stats::get_stats;
@@ -641,6 +641,8 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
                     .service(get_video)
                     .service(get_image_metadata)
                     .service(toggle_image_star)
+                    .service(update_image_orientation)
+                    .service(update_image_place)
                     .service(toggle_video_star)
                     .service(delete_image)
                     .service(delete_video)

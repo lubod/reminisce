@@ -9,6 +9,8 @@ import {
     Columns2,
     Info,
     Wand2,
+    RotateCcw,
+    RotateCw,
 } from "lucide-react";
 import axios from "../api/axiosConfig";
 import { logger } from "../utils/logger";
@@ -33,6 +35,8 @@ export const MediaLightbox = observer(() => {
     const [showEnhanced, setShowEnhanced] = useState(false);
     const [enhanceOps, setEnhanceOps] = useState<string[]>([]);
     const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
+    const [isRotating, setIsRotating] = useState(false);
+    const [isUpdatingPlace, setIsUpdatingPlace] = useState(false);
 
     // Drag-to-pan state
     const isDragging = useRef(false);
@@ -57,6 +61,30 @@ export const MediaLightbox = observer(() => {
             await mediaStore.deleteMedia(selectedMedia.hash);
         }
     }, [selectedMedia, mediaStore]);
+
+    const handleRotate = useCallback(async (dir: "cw" | "ccw") => {
+        if (!selectedMedia || selectedMedia.media_type === "video" || isRotating) return;
+        setIsRotating(true);
+        try {
+            await mediaStore.updateImageOrientation(selectedMedia.hash, dir);
+        } catch (e) {
+            logger.error("Failed to rotate image", e);
+        } finally {
+            setIsRotating(false);
+        }
+    }, [selectedMedia, isRotating, mediaStore]);
+
+    const handleUpdatePlace = useCallback(async (place: string | null, lat?: number, lon?: number) => {
+        if (!selectedMedia || isUpdatingPlace) return;
+        setIsUpdatingPlace(true);
+        try {
+            await mediaStore.updateImagePlace(selectedMedia.hash, place, lat, lon);
+        } catch (e) {
+            logger.error("Failed to update place", e);
+        } finally {
+            setIsUpdatingPlace(false);
+        }
+    }, [selectedMedia, isUpdatingPlace, mediaStore]);
 
     // Keyboard navigation
     useEffect(() => {
@@ -87,12 +115,18 @@ export const MediaLightbox = observer(() => {
                 setShowInfo((prev) => !prev);
             } else if (e.key.toLowerCase() === "d" && isAdmin) {
                 void handleDelete();
+            } else if (e.key.toLowerCase() === "r" && selectedMedia?.media_type !== "video") {
+                if (e.shiftKey) {
+                    void handleRotate("ccw");
+                } else {
+                    void handleRotate("cw");
+                }
             }
         };
 
         window.addEventListener("keydown", handleKeyDown);
         return () => window.removeEventListener("keydown", handleKeyDown);
-    }, [mediaStore, isAdmin, handleDelete]);
+    }, [mediaStore, isAdmin, handleDelete, handleRotate, selectedMedia?.media_type]);
 
     // Non-passive wheel zoom (native listener via ref, mirrors DuplicatesLightbox)
     useEffect(() => {
@@ -325,6 +359,34 @@ export const MediaLightbox = observer(() => {
                         <Wand2 size={24} />
                     </button>
                 )}
+                {!isVideo && (
+                    <>
+                        <button
+                            className="p-2 bg-black bg-opacity-50 rounded hover:bg-opacity-70 text-white disabled:opacity-50 transition-opacity"
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                void handleRotate("ccw");
+                            }}
+                            disabled={isRotating}
+                            title="Rotate 90° CCW (Shift+R)"
+                            aria-label="Rotate 90° CCW"
+                        >
+                            <RotateCcw size={24} className={isRotating ? "animate-spin" : ""} />
+                        </button>
+                        <button
+                            className="p-2 bg-black bg-opacity-50 rounded hover:bg-opacity-70 text-white disabled:opacity-50 transition-opacity"
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                void handleRotate("cw");
+                            }}
+                            disabled={isRotating}
+                            title="Rotate 90° CW (R)"
+                            aria-label="Rotate 90° CW"
+                        >
+                            <RotateCw size={24} className={isRotating ? "animate-spin" : ""} />
+                        </button>
+                    </>
+                )}
                 <button
                     className="p-2 bg-black bg-opacity-50 rounded hover:bg-opacity-70 text-white"
                     onClick={(e) => {
@@ -451,6 +513,10 @@ export const MediaLightbox = observer(() => {
                         handleAddLabel={handleAddLabel}
                         handleRemoveLabel={handleRemoveLabel}
                         handleCreateAndAddLabel={handleCreateAndAddLabel}
+                        onRotate={handleRotate}
+                        onUpdatePlace={handleUpdatePlace}
+                        isUpdatingOrientation={isRotating}
+                        isUpdatingPlace={isUpdatingPlace}
                     />
                 )}
             </div>

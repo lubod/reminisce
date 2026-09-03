@@ -83,7 +83,7 @@ pub async fn get_image(
                 //   Covers photos whose files never had an Orientation tag but
                 //   whose orientation was fixed by AI detection later.
                 // - PNG (no EXIF container): rotate pixels losslessly instead.
-                let data = match orientation.filter(|o| (2..=8).contains(o)) {
+                let data = match orientation.filter(|o| (1..=8).contains(o)) {
                     Some(o) => {
                         let ext_lc = extension.to_lowercase();
                         if ext_lc == "jpg" || ext_lc == "jpeg" {
@@ -331,6 +331,10 @@ pub struct ImageMetadata {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resolution_label: Option<String>,
     pub media_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latitude: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub longitude: Option<f64>,
 }
 
 #[utoipa::path(
@@ -363,8 +367,7 @@ pub async fn get_image_metadata(
         .query_opt(
             "SELECT i.hash, i.name, i.description, i.place, i.created_at, i.exif, 
              CASE WHEN s.hash IS NOT NULL THEN true ELSE false END as starred, 
-             i.deviceid, i.file_size_bytes, i.width, i.height, i.orientation 
-             FROM images i 
+             i.deviceid, i.file_size_bytes, i.width, i.height, i.orientation, ST_Y(i.location::geometry) as latitude, ST_X(i.location::geometry) as longitude FROM images i 
              LEFT JOIN starred_images s ON i.hash = s.hash AND s.user_id = $1 
              WHERE i.user_id = $1 AND i.hash = $2 AND i.deleted_at IS NULL LIMIT 1",
             &[&user_uuid, &hash_to_find]
@@ -392,6 +395,8 @@ pub async fn get_image_metadata(
             orientation_label: orientation_label(row.get(9), row.get(10), row.get(11)),
             resolution_label: resolution_label(row.get(9), row.get(10), row.get(11)),
             media_type: Some("image".to_string()),
+            latitude: row.get(12),
+            longitude: row.get(13),
         };
 
         info!("Serving metadata for image: {}", hash_to_find);
@@ -431,6 +436,8 @@ pub async fn get_image_metadata(
             orientation_label: None,
             resolution_label: None,
             media_type: Some("video".to_string()),
+            latitude: None,
+            longitude: None,
         };
 
         info!("Serving metadata for video: {}", hash_to_find);
@@ -597,6 +604,279 @@ pub async fn toggle_video_star(
     let user_uuid = utils::parse_user_uuid(&claims.user_id)?;
     let hash = path.into_inner();
     toggle_media_star_inner(&pool.0, "videos", "starred_videos", &hash, &user_uuid).await
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct UpdateOrientationRequest {
+    /// Desired EXIF orientation (1-8), or None
+    #[serde(default)]
+    pub orientation: Option<i16>,
+    /// Relative rotation: "cw" (90° clockwise), "ccw" (90° counter-clockwise), or "180"
+    #[serde(default)]
+    pub rotate: Option<String>,
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct UpdateOrientationResponse {
+    pub status: String,
+    pub orientation: i16,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub orientation_label: Option<String>,
+}
+
+#[utoipa::path(
+    post,
+    path = "/image/{image_hash}/orientation",
+    request_body = UpdateOrientationRequest,
+    responses(
+        (status = 200, description = "Image orientation updated successfully", body = UpdateOrientationResponse),
+        (status = 400, description = "Invalid orientation request"),
+        (status = 401, description = "Unauthorized"),
+        (status = 404, description = "Image not found"),
+        (status = 500, description = "Internal server error")
+    )
+)]
+#[actix_web::post("/image/{image_hash}/orientation")]
+pub async fn update_image_orientation(
+    req: HttpRequest,
+    path: web::Path<String>,
+    body: web::Json<UpdateOrientationRequest>,
+    pool: web::Data<MainDbPool>,
+    config: web::Data<Config>,
+) -> Result<HttpResponse, actix_web::Error> {
+    let claims = match utils::authenticate_request(&req, "update_image_orientation", config.get_api_key()).await {
+        Ok(claims) => claims,
+        Err(response) => return Ok(response),
+    };
+    let user_uuid = utils::parse_user_uuid(&claims.user_id)?;
+    let hash = path.into_inner();
+    if !crate::media_utils::is_valid_content_hash(&hash) {
+        return Ok(HttpResponse::NotFound().json(serde_json::json!({
+            "status": "error",
+            "message": "Image not found"
+        })));
+    }
+    let client = utils::get_db_client(&pool.0).await?;
+
+    let row = client
+        .query_opt(
+            "SELECT ext, orientation, width, height FROM images WHERE user_id = $1 AND hash = $2 AND deleted_at IS NULL LIMIT 1",
+            &[&user_uuid, &hash]
+        )
+        .await
+        .map_err(|e| {
+            error!("Failed to query image for orientation update: {}", e);
+            actix_web::error::ErrorInternalServerError("Database error")
+        })?;
+
+    let (ext, cur_orient, width, height) = match row {
+        Some(r) => (
+            r.get::<_, String>(0),
+            r.get::<_, Option<i16>>(1),
+            r.get::<_, Option<i32>>(2),
+            r.get::<_, Option<i32>>(3),
+        ),
+        None => {
+            return Ok(HttpResponse::NotFound().json(serde_json::json!({
+                "status": "error",
+                "message": "Image not found"
+            })));
+        }
+    };
+
+    let new_orient = if let Some(ref dir) = body.rotate {
+        match dir.to_lowercase().as_str() {
+            "cw" | "90" | "right" => crate::media_utils::rotate_orientation_cw(cur_orient),
+            "ccw" | "-90" | "270" | "left" => crate::media_utils::rotate_orientation_ccw(cur_orient),
+            "180" => crate::media_utils::rotate_orientation_180(cur_orient),
+            _ => {
+                return Ok(HttpResponse::BadRequest().json(serde_json::json!({
+                    "status": "error",
+                    "message": "Invalid rotate direction. Use 'cw', 'ccw', or '180'."
+                })));
+            }
+        }
+    } else if let Some(o) = body.orientation {
+        if !(1..=8).contains(&o) {
+            return Ok(HttpResponse::BadRequest().json(serde_json::json!({
+                "status": "error",
+                "message": "Orientation must be between 1 and 8"
+            })));
+        }
+        o
+    } else {
+        return Ok(HttpResponse::BadRequest().json(serde_json::json!({
+            "status": "error",
+            "message": "Either 'rotate' or 'orientation' must be specified"
+        })));
+    };
+
+    client
+        .execute(
+            "UPDATE images SET orientation = $1, has_thumbnail = true WHERE user_id = $2 AND hash = $3 AND deleted_at IS NULL",
+            &[&new_orient, &user_uuid, &hash]
+        )
+        .await
+        .map_err(|e| {
+            error!("Failed to update image orientation in database: {}", e);
+            actix_web::error::ErrorInternalServerError("Database error")
+        })?;
+
+    // Regenerate thumbnail on disk with the new orientation
+    let thumb_filename = format!("{}.thumb.jpg", hash);
+    let image_sub_dir_path = utils::get_subdirectory_path(config.get_images_dir(), &hash);
+    let image_thumb_path = image_sub_dir_path.join(&thumb_filename);
+    if let Ok(image_path) = crate::media_utils::safe_resolve_content_path(
+        config.get_images_dir(),
+        &hash,
+        &ext,
+    ) {
+        let _ = crate::services::thumbnail::generate_thumbnail_for_image(
+            &image_path,
+            &image_thumb_path,
+            500,
+            Some(new_orient),
+        ).await;
+    }
+
+    let new_label = orientation_label(width, height, Some(new_orient));
+
+    info!("Updated orientation for image {} to {} ({:?})", hash, new_orient, new_label);
+    Ok(HttpResponse::Ok().json(UpdateOrientationResponse {
+        status: "success".to_string(),
+        orientation: new_orient,
+        orientation_label: new_label,
+    }))
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct UpdatePlaceRequest {
+    /// Name of place / location (e.g. "Paris, France"). Passing None or empty string clears the place.
+    #[serde(default)]
+    pub place: Option<String>,
+    /// Latitude in decimal degrees (optional)
+    #[serde(default)]
+    pub latitude: Option<f64>,
+    /// Longitude in decimal degrees (optional)
+    #[serde(default)]
+    pub longitude: Option<f64>,
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct UpdatePlaceResponse {
+    pub status: String,
+    pub place: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latitude: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub longitude: Option<f64>,
+}
+
+#[utoipa::path(
+    post,
+    path = "/image/{image_hash}/place",
+    request_body = UpdatePlaceRequest,
+    responses(
+        (status = 200, description = "Image place updated successfully", body = UpdatePlaceResponse),
+        (status = 401, description = "Unauthorized"),
+        (status = 404, description = "Image not found"),
+        (status = 500, description = "Internal server error")
+    )
+)]
+#[actix_web::post("/image/{image_hash}/place")]
+pub async fn update_image_place(
+    req: HttpRequest,
+    path: web::Path<String>,
+    body: web::Json<UpdatePlaceRequest>,
+    pool: web::Data<MainDbPool>,
+    config: web::Data<Config>,
+) -> Result<HttpResponse, actix_web::Error> {
+    let claims = match utils::authenticate_request(&req, "update_image_place", config.get_api_key()).await {
+        Ok(claims) => claims,
+        Err(response) => return Ok(response),
+    };
+    let user_uuid = utils::parse_user_uuid(&claims.user_id)?;
+    let hash = path.into_inner();
+    if !crate::media_utils::is_valid_content_hash(&hash) {
+        return Ok(HttpResponse::NotFound().json(serde_json::json!({
+            "status": "error",
+            "message": "Image not found"
+        })));
+    }
+    let client = utils::get_db_client(&pool.0).await?;
+
+    let exists = client
+        .query_one(
+            "SELECT EXISTS (SELECT 1 FROM images WHERE user_id = $1 AND hash = $2 AND deleted_at IS NULL)",
+            &[&user_uuid, &hash]
+        )
+        .await
+        .map_err(|e| {
+            error!("Failed to verify image existence: {}", e);
+            actix_web::error::ErrorInternalServerError("Database error")
+        })?
+        .get::<_, bool>(0);
+
+    if !exists {
+        return Ok(HttpResponse::NotFound().json(serde_json::json!({
+            "status": "error",
+            "message": "Image not found"
+        })));
+    }
+
+    let cleaned_place = body
+        .place
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+
+    match (cleaned_place.as_ref(), body.latitude, body.longitude) {
+        (Some(p), Some(lat), Some(lon)) => {
+            client
+                .execute(
+                    "UPDATE images SET place = $1, location = ST_SetSRID(ST_MakePoint($2, $3), 4326) WHERE user_id = $4 AND hash = $5 AND deleted_at IS NULL",
+                    &[&p, &lon, &lat, &user_uuid, &hash]
+                )
+                .await
+                .map_err(|e| {
+                    error!("Failed to update image place and coordinates: {}", e);
+                    actix_web::error::ErrorInternalServerError("Database error")
+                })?;
+        }
+        (Some(p), _, _) => {
+            client
+                .execute(
+                    "UPDATE images SET place = $1 WHERE user_id = $2 AND hash = $3 AND deleted_at IS NULL",
+                    &[&p, &user_uuid, &hash]
+                )
+                .await
+                .map_err(|e| {
+                    error!("Failed to update image place: {}", e);
+                    actix_web::error::ErrorInternalServerError("Database error")
+                })?;
+        }
+        (None, _, _) => {
+            client
+                .execute(
+                    "UPDATE images SET place = NULL, location = NULL WHERE user_id = $1 AND hash = $2 AND deleted_at IS NULL",
+                    &[&user_uuid, &hash]
+                )
+                .await
+                .map_err(|e| {
+                    error!("Failed to clear image place and location: {}", e);
+                    actix_web::error::ErrorInternalServerError("Database error")
+                })?;
+        }
+    }
+
+    info!("Updated place for image {} to {:?}", hash, cleaned_place);
+    Ok(HttpResponse::Ok().json(UpdatePlaceResponse {
+        status: "success".to_string(),
+        place: cleaned_place,
+        latitude: body.latitude,
+        longitude: body.longitude,
+    }))
 }
 
 #[derive(Serialize, ToSchema)]

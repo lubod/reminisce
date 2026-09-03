@@ -1,7 +1,7 @@
 import { observer } from "mobx-react-lite";
 import { useStore } from "../stores/RootStore";
 import { useEffect, useRef, useState } from "react";
-import { RefreshCw, X, ChevronLeft, ChevronRight, Trash2, Loader, AlertTriangle } from "lucide-react";
+import { RefreshCw, X, ChevronLeft, ChevronRight, Trash2, Loader, AlertTriangle, RotateCcw, RotateCw } from "lucide-react";
 
 // "Orientation check" tab — lists images that carry NO EXIF metadata (so they have no
 // EXIF orientation and rely on AI orientation detection). Lets you review them manually,
@@ -157,6 +157,34 @@ export const OrientationCheck = observer(() => {
                         <span className="text-sm text-gray-300 truncate flex-1">
                             {selected + 1} / {images.length} — {images[selected]?.name}
                         </span>
+                        <button
+                            onClick={async () => {
+                                const item = images[selected];
+                                if (!item) return;
+                                await mediaStore.updateImageOrientation(item.hash, "ccw");
+                                const v = Date.now();
+                                const base = mediaStore.getAuthenticatedUrl(`/api/image/${item.hash}`);
+                                setFullUrl(`${base}${base.includes('?') ? '&' : '?'}v=${v}`);
+                            }}
+                            className="p-2 rounded-md hover:bg-gray-700 text-gray-300 mr-1"
+                            title="Rotate 90° CCW"
+                        >
+                            <RotateCcw size={20} />
+                        </button>
+                        <button
+                            onClick={async () => {
+                                const item = images[selected];
+                                if (!item) return;
+                                await mediaStore.updateImageOrientation(item.hash, "cw");
+                                const v = Date.now();
+                                const base = mediaStore.getAuthenticatedUrl(`/api/image/${item.hash}`);
+                                setFullUrl(`${base}${base.includes('?') ? '&' : '?'}v=${v}`);
+                            }}
+                            className="p-2 rounded-md hover:bg-gray-700 text-gray-300 mr-1"
+                            title="Rotate 90° CW"
+                        >
+                            <RotateCw size={20} />
+                        </button>
                         {isAdmin && (
                             <button onClick={handleDelete} className="p-2 rounded-md hover:bg-red-900/60 text-red-400 mr-1" title="Delete">
                                 <Trash2 size={20} />

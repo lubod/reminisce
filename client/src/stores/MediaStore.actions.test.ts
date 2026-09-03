@@ -13,7 +13,7 @@ configure({ enforceActions: "never" });
 (globalThis as unknown as { URL: { createObjectURL: (o: unknown) => string } }).URL.createObjectURL = () => "blob:mock";
 (globalThis as unknown as { URL: { revokeObjectURL: (u: string) => void } }).URL.revokeObjectURL = () => {};
 
-type Handler = { verb: string; re: RegExp; fn: (url: string, u: URL) => unknown };
+type Handler = { verb: string; re: RegExp; fn: (url: string, u: URL, body?: unknown) => unknown };
 
 const api = vi.hoisted(() => {
     const handlers: Handler[] = [];
@@ -24,9 +24,9 @@ const api = vi.hoisted(() => {
         const u = new URL(url, "http://localhost");
         return h ? h.fn(url, u) : { data: { results: [], total: 0, thumbnails: [], page: 1, limit: 50 }, status: 200 };
     });
-    const post = vi.fn(async (url: string) => {
+    const post = vi.fn(async (url: string, body?: unknown) => {
         const h = find("post", url);
-        return h ? h.fn(url, new URL(url, "http://localhost")) : { data: {}, status: 200 };
+        return h ? h.fn(url, new URL(url, "http://localhost"), body) : { data: {}, status: 200 };
     });
     const state: {
         imagePool: MediaItem[];
@@ -146,6 +146,8 @@ beforeEach(() => {
         { verb: "post", re: /^\/image\/[^/]+\/star$/, fn: () => ({ data: { starred: true }, status: 200 }) },
         { verb: "post", re: /^\/video\/[^/]+\/star$/, fn: () => ({ data: { starred: true }, status: 200 }) },
         { verb: "post", re: /^\/(image|video)\/[^/]+\/delete$/, fn: () => ({ data: {}, status: 200 }) },
+        { verb: "post", re: /^\/image\/[^/]+\/orientation$/, fn: (_u, _url, body) => ({ data: { status: "success", orientation: (body as any)?.rotate === "cw" ? 6 : ((body as any)?.orientation ?? 1), orientation_label: "Portrait" }, status: 200 }) },
+        { verb: "post", re: /^\/image\/[^/]+\/place$/, fn: (_u, _url, body) => ({ data: { status: "success", place: (body as any)?.place ?? null, latitude: (body as any)?.latitude, longitude: (body as any)?.longitude }, status: 200 }) },
     );
 });
 
@@ -597,5 +599,58 @@ describe("MediaStore map error + grouping", () => {
         s.allMedia = [item({ created_at: `${today}T10:00:00Z` })];
         s.allMediaGroupBy = "day";
         expect(s.groupedAllMedia[0].displayDate).toBe("Today");
+    });
+});
+
+describe("MediaStore updateImageOrientation and updateImagePlace", () => {
+    it("updateImageOrientation calls orientation endpoint, updates metadata and busts URLs", async () => {
+        const s = makeStore();
+        s.imageMetadata = {
+            hash: "h1",
+            name: "test.jpg",
+            description: null,
+            place: null,
+            created_at: "2024-01-01",
+            exif: null,
+            starred: false,
+            orientation: 1,
+            orientation_label: "Landscape",
+        };
+        s.allMedia = [item({ hash: "h1", thumbnailUrl: "/api/thumbnail/h1" })];
+
+        const res = await s.updateImageOrientation("h1", "cw");
+        expect(res.orientation).toBe(6);
+        expect(s.imageMetadata.orientation).toBe(6);
+        expect(s.imageMetadata.orientation_label).toBe("Portrait");
+        expect(s.allMedia[0].thumbnailUrl).toContain("/api/thumbnail/h1");
+        expect(s.allMedia[0].thumbnailUrl).toContain("v=");
+        expect(s.fullMediaUrl).toContain("/api/image/h1");
+        expect(s.fullMediaUrl).toContain("v=");
+    });
+
+    it("updateImagePlace calls place endpoint and updates metadata and media list", async () => {
+        const s = makeStore();
+        s.imageMetadata = {
+            hash: "h1",
+            name: "test.jpg",
+            description: null,
+            place: null,
+            created_at: "2024-01-01",
+            exif: null,
+            starred: false,
+        };
+        s.allMedia = [item({ hash: "h1", place: "Old Place" })];
+
+        const res = await s.updateImagePlace("h1", "Paris, France", 48.85, 2.35);
+        expect(res.place).toBe("Paris, France");
+        expect(s.imageMetadata.place).toBe("Paris, France");
+        expect(s.imageMetadata.latitude).toBe(48.85);
+        expect(s.imageMetadata.longitude).toBe(2.35);
+        expect(s.allMedia[0].place).toBe("Paris, France");
+
+        // Clear place
+        await s.updateImagePlace("h1", null);
+        expect(s.imageMetadata.place).toBeNull();
+        expect(s.allMedia[0].place).toBeUndefined();
     });
 });

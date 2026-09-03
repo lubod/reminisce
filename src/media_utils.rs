@@ -16,6 +16,51 @@ use crate::services::thumbnail::ThumbnailItem;
 
 /// Apply an EXIF orientation value to a `DynamicImage`, returning the correctly rotated image.
 /// Orientation 1 (normal) and any unknown value are returned unchanged.
+/// Rotate an EXIF orientation value 90 degrees clockwise.
+pub fn rotate_orientation_cw(current: Option<i16>) -> i16 {
+    match current.unwrap_or(1) {
+        1 => 6,
+        6 => 3,
+        3 => 8,
+        8 => 1,
+        2 => 7,
+        7 => 4,
+        4 => 5,
+        5 => 2,
+        _ => 6,
+    }
+}
+
+/// Rotate an EXIF orientation value 90 degrees counter-clockwise.
+pub fn rotate_orientation_ccw(current: Option<i16>) -> i16 {
+    match current.unwrap_or(1) {
+        1 => 8,
+        8 => 3,
+        3 => 6,
+        6 => 1,
+        2 => 5,
+        5 => 4,
+        4 => 7,
+        7 => 2,
+        _ => 8,
+    }
+}
+
+/// Rotate an EXIF orientation value 180 degrees.
+pub fn rotate_orientation_180(current: Option<i16>) -> i16 {
+    match current.unwrap_or(1) {
+        1 => 3,
+        3 => 1,
+        6 => 8,
+        8 => 6,
+        2 => 4,
+        4 => 2,
+        5 => 7,
+        7 => 5,
+        _ => 3,
+    }
+}
+
 pub fn apply_orientation_to_image(
     img: image::DynamicImage,
     orientation: u16,
@@ -1718,5 +1763,33 @@ mod exif_orientation_tests {
         let bad = vec![0xFF, 0xD8, 0xFF, 0xE1, 0x00]; // truncated segment
         assert_eq!(ensure_exif_orientation(&bad, 6), bad);
         assert_eq!(ensure_exif_orientation(&[], 6), Vec::<u8>::new());
+    }
+
+    #[test]
+    fn test_rotate_orientation_cycles() {
+        use super::{rotate_orientation_cw, rotate_orientation_ccw, rotate_orientation_180};
+
+        // None defaults to 1
+        assert_eq!(rotate_orientation_cw(None), 6);
+        assert_eq!(rotate_orientation_ccw(None), 8);
+        assert_eq!(rotate_orientation_180(None), 3);
+
+        // CW full cycle: 1 -> 6 -> 3 -> 8 -> 1
+        assert_eq!(rotate_orientation_cw(Some(1)), 6);
+        assert_eq!(rotate_orientation_cw(Some(6)), 3);
+        assert_eq!(rotate_orientation_cw(Some(3)), 8);
+        assert_eq!(rotate_orientation_cw(Some(8)), 1);
+
+        // CCW full cycle: 1 -> 8 -> 3 -> 6 -> 1
+        assert_eq!(rotate_orientation_ccw(Some(1)), 8);
+        assert_eq!(rotate_orientation_ccw(Some(8)), 3);
+        assert_eq!(rotate_orientation_ccw(Some(3)), 6);
+        assert_eq!(rotate_orientation_ccw(Some(6)), 1);
+
+        // 180 degrees
+        assert_eq!(rotate_orientation_180(Some(1)), 3);
+        assert_eq!(rotate_orientation_180(Some(3)), 1);
+        assert_eq!(rotate_orientation_180(Some(6)), 8);
+        assert_eq!(rotate_orientation_180(Some(8)), 6);
     }
 }

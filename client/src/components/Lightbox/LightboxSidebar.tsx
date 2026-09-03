@@ -1,8 +1,9 @@
 import React from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Tag, X, Plus } from "lucide-react";
-import type { MediaItem, ImageMetadata } from "../../stores/MediaStore";
+import { Tag, X, Plus, Pencil, Check, RotateCcw, RotateCw, Loader2 } from "lucide-react";
+import axios from "../../api/axiosConfig";
+import type { MediaItem, ImageMetadata, LocationResult } from "../../stores/MediaStore";
 import type { Label } from "../../stores/LabelStore";
 
 interface LightboxSidebarProps {
@@ -19,6 +20,10 @@ interface LightboxSidebarProps {
     handleAddLabel: (labelId: number) => void;
     handleRemoveLabel: (labelId: number) => void;
     handleCreateAndAddLabel: () => void;
+    onRotate?: (direction: "cw" | "ccw") => Promise<void>;
+    onUpdatePlace?: (place: string | null, latitude?: number, longitude?: number) => Promise<void>;
+    isUpdatingOrientation?: boolean;
+    isUpdatingPlace?: boolean;
 }
 
 export const LightboxSidebar: React.FC<LightboxSidebarProps> = ({
@@ -35,8 +40,70 @@ export const LightboxSidebar: React.FC<LightboxSidebarProps> = ({
     handleAddLabel,
     handleRemoveLabel,
     handleCreateAndAddLabel,
+    onRotate,
+    onUpdatePlace,
+    isUpdatingOrientation = false,
+    isUpdatingPlace = false,
 }) => {
-    const isVideo = selectedMedia.media_type === "video";
+        const isVideo = selectedMedia.media_type === "video";
+
+    const [isEditingPlace, setIsEditingPlace] = React.useState(false);
+    const [placeInput, setPlaceInput] = React.useState("");
+    const [placeSuggestions, setPlaceSuggestions] = React.useState<LocationResult[]>([]);
+    const [selectedCoords, setSelectedCoords] = React.useState<{ lat?: number; lon?: number } | null>(null);
+    const placeDebounceTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    React.useEffect(() => {
+        setIsEditingPlace(false);
+        setPlaceSuggestions([]);
+        setSelectedCoords(null);
+    }, [selectedMedia.hash]);
+
+    const handlePlaceInputChange = (val: string) => {
+        setPlaceInput(val);
+        setSelectedCoords(null);
+        if (placeDebounceTimer.current) {
+            clearTimeout(placeDebounceTimer.current);
+            placeDebounceTimer.current = null;
+        }
+        if (val.trim().length >= 2) {
+            placeDebounceTimer.current = setTimeout(async () => {
+                try {
+                    const res = await axios.get<LocationResult[]>("/search/places", {
+                        params: { query: val.trim(), limit: 5 },
+                    });
+                    setPlaceSuggestions(res.data || []);
+                } catch {
+                    setPlaceSuggestions([]);
+                }
+            }, 250);
+        } else {
+            setPlaceSuggestions([]);
+        }
+    };
+
+    const handleSelectSuggestion = (loc: LocationResult) => {
+        setPlaceInput(loc.name || loc.display_name);
+        setSelectedCoords({ lat: loc.latitude, lon: loc.longitude });
+        setPlaceSuggestions([]);
+    };
+
+    const handleSavePlace = async () => {
+        if (!onUpdatePlace) return;
+        const cleaned = placeInput.trim();
+        await onUpdatePlace(cleaned || null, selectedCoords?.lat, selectedCoords?.lon);
+        setIsEditingPlace(false);
+        setPlaceSuggestions([]);
+    };
+
+    const handleClearPlace = async () => {
+        if (!onUpdatePlace) return;
+        await onUpdatePlace(null);
+        setPlaceInput("");
+        setSelectedCoords(null);
+        setIsEditingPlace(false);
+        setPlaceSuggestions([]);
+    };
 
     const formatFileSize = (bytes: number): string => {
         if (bytes >= 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
@@ -189,9 +256,96 @@ export const LightboxSidebar: React.FC<LightboxSidebarProps> = ({
                             <div className="text-gray-400 text-xs mb-1">Date & Time</div>
                             <div>{formatDate(selectedMedia.created_at)}</div>
                         </div>
-                        <div>
-                            <div className="text-gray-400 text-xs mb-1">Location</div>
-                            <div className="truncate">{selectedMedia.place || "Unknown"}</div>
+                        <div className="relative">
+                            <div className="flex items-center justify-between text-gray-400 text-xs mb-1">
+                                <span>Location</span>
+                                {!isVideo && !isEditingPlace && onUpdatePlace && (
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setPlaceInput(selectedMedia.place || "");
+                                            setIsEditingPlace(true);
+                                        }}
+                                        className="text-blue-400 hover:text-blue-300 p-0.5 rounded hover:bg-gray-800 transition-colors"
+                                        title="Edit Location"
+                                        aria-label="Edit Location"
+                                    >
+                                        <Pencil size={12} />
+                                    </button>
+                                )}
+                            </div>
+                            {isEditingPlace ? (
+                                <div className="bg-gray-800/90 p-2 rounded border border-gray-700 space-y-2 mt-1">
+                                    <div className="relative">
+                                        <input
+                                            type="text"
+                                            value={placeInput}
+                                            onChange={(e) => handlePlaceInputChange(e.target.value)}
+                                            onKeyDown={(e) => {
+                                                if (e.key === "Enter") handleSavePlace();
+                                                if (e.key === "Escape") setIsEditingPlace(false);
+                                            }}
+                                            placeholder="Search place or enter name..."
+                                            className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-blue-500"
+                                            autoFocus
+                                            disabled={isUpdatingPlace}
+                                        />
+                                        {placeSuggestions.length > 0 && (
+                                            <div className="absolute left-0 right-0 top-full mt-1 bg-gray-800 border border-gray-600 rounded shadow-2xl max-h-36 overflow-y-auto z-50">
+                                                {placeSuggestions.map((loc, idx) => (
+                                                    <button
+                                                        key={`${loc.name}-${loc.latitude}-${loc.longitude}-${idx}`}
+                                                        type="button"
+                                                        onClick={() => handleSelectSuggestion(loc)}
+                                                        className="w-full text-left px-2 py-1.5 hover:bg-gray-700 text-xs border-b border-gray-700/50 last:border-0"
+                                                    >
+                                                        <div className="font-medium text-gray-200">{loc.name}</div>
+                                                        <div className="text-[10px] text-gray-400 truncate">{loc.display_name}</div>
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
+                                    <div className="flex items-center justify-between gap-1 pt-0.5">
+                                        <div className="flex items-center gap-1">
+                                            <button
+                                                type="button"
+                                                onClick={handleSavePlace}
+                                                disabled={isUpdatingPlace}
+                                                className="px-2 py-0.5 bg-blue-600 hover:bg-blue-500 text-white rounded text-xs flex items-center gap-1 font-medium disabled:opacity-50"
+                                                title="Save location"
+                                            >
+                                                {isUpdatingPlace ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
+                                                Save
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => setIsEditingPlace(false)}
+                                                disabled={isUpdatingPlace}
+                                                className="px-2 py-0.5 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded text-xs"
+                                                title="Cancel"
+                                            >
+                                                Cancel
+                                            </button>
+                                        </div>
+                                        {selectedMedia.place && (
+                                            <button
+                                                type="button"
+                                                onClick={handleClearPlace}
+                                                disabled={isUpdatingPlace}
+                                                className="text-[11px] text-red-400 hover:text-red-300 p-0.5 hover:bg-gray-700 rounded"
+                                                title="Remove location"
+                                            >
+                                                Clear
+                                            </button>
+                                        )}
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="truncate text-gray-200" title={selectedMedia.place || undefined}>
+                                    {selectedMedia.place || "Unknown"}
+                                </div>
+                            )}
                         </div>
                         {selectedMedia.device_id && (
                             <div className="md:col-span-2">
@@ -209,10 +363,38 @@ export const LightboxSidebar: React.FC<LightboxSidebarProps> = ({
                                 <div>{formatFileSize(selectedMedia.file_size_bytes)}</div>
                             </div>
                         )}
-                        {metadata?.orientation_label && (
+                        {(!isVideo || metadata?.orientation_label) && (
                             <div>
                                 <div className="text-gray-400 text-xs mb-1">Orientation</div>
-                                <div>{metadata.orientation_label}</div>
+                                <div className="flex items-center justify-between gap-2">
+                                    <span className="truncate">
+                                        {metadata?.orientation_label || (metadata?.orientation ? `Orientation ${metadata.orientation}` : "Normal")}
+                                    </span>
+                                    {!isVideo && onRotate && (
+                                        <div className="flex items-center gap-1 shrink-0">
+                                            <button
+                                                type="button"
+                                                onClick={() => onRotate("ccw")}
+                                                disabled={isUpdatingOrientation}
+                                                className="p-1 rounded bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white transition-colors disabled:opacity-50"
+                                                title="Rotate 90° CCW"
+                                                aria-label="Rotate 90° CCW"
+                                            >
+                                                <RotateCcw size={14} className={isUpdatingOrientation ? "animate-spin" : ""} />
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => onRotate("cw")}
+                                                disabled={isUpdatingOrientation}
+                                                className="p-1 rounded bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white transition-colors disabled:opacity-50"
+                                                title="Rotate 90° CW"
+                                                aria-label="Rotate 90° CW"
+                                            >
+                                                <RotateCw size={14} className={isUpdatingOrientation ? "animate-spin" : ""} />
+                                            </button>
+                                        </div>
+                                    )}
+                                </div>
                             </div>
                         )}
                         {(metadata?.resolution_label || (metadata?.width != null && metadata?.height != null)) && (
