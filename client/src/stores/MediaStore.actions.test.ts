@@ -146,8 +146,14 @@ beforeEach(() => {
         { verb: "post", re: /^\/image\/[^/]+\/star$/, fn: () => ({ data: { starred: true }, status: 200 }) },
         { verb: "post", re: /^\/video\/[^/]+\/star$/, fn: () => ({ data: { starred: true }, status: 200 }) },
         { verb: "post", re: /^\/(image|video)\/[^/]+\/delete$/, fn: () => ({ data: {}, status: 200 }) },
-        { verb: "post", re: /^\/image\/[^/]+\/orientation$/, fn: (_u, _url, body) => ({ data: { status: "success", orientation: (body as any)?.rotate === "cw" ? 6 : ((body as any)?.orientation ?? 1), orientation_label: "Portrait" }, status: 200 }) },
-        { verb: "post", re: /^\/image\/[^/]+\/place$/, fn: (_u, _url, body) => ({ data: { status: "success", place: (body as any)?.place ?? null, latitude: (body as any)?.latitude, longitude: (body as any)?.longitude }, status: 200 }) },
+        { verb: "post", re: /^\/image\/[^/]+\/orientation$/, fn: (_u, _url, body) => {
+            const b = body as { rotate?: string; orientation?: number } | undefined;
+            return { data: { status: "success", orientation: b?.rotate === "cw" ? 6 : (b?.orientation ?? 1), orientation_label: "Portrait" }, status: 200 };
+        } },
+        { verb: "post", re: /^\/image\/[^/]+\/place$/, fn: (_u, _url, body) => {
+            const b = body as { place?: string | null; latitude?: number; longitude?: number } | undefined;
+            return { data: { status: "success", place: b?.place ?? null, latitude: b?.latitude, longitude: b?.longitude }, status: 200 };
+        } },
     );
 });
 
