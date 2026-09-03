@@ -81,6 +81,8 @@ services:
       - /dev/kfd:/dev/kfd
     group_add:
       - "0"
+      - "render"
+      - "video"
     restart: unless-stopped
 
   # === P2P COORDINATOR ===

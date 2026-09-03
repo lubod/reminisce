@@ -176,7 +176,13 @@ pub fn ensure_exif_orientation(jpeg_bytes: &[u8], orientation: u16) -> Vec<u8> {
     if !(1..=8).contains(&orientation) {
         return jpeg_bytes.to_vec();
     }
-    if read_exif_orientation_from_bytes(jpeg_bytes) == Some(orientation) {
+    let existing_orientation = read_exif_orientation_from_bytes(jpeg_bytes);
+    if existing_orientation == Some(orientation) {
+        return jpeg_bytes.to_vec();
+    }
+    // If orientation is 1 (normal / upright) and the image has no existing EXIF orientation tag,
+    // standard decoders already display it upright (0°); short-circuit to avoid injecting a useless APP1 segment.
+    if orientation == 1 && existing_orientation.is_none() {
         return jpeg_bytes.to_vec();
     }
     // Only touch plausible complete JPEGs (must reach a Start-of-Scan).
@@ -478,6 +484,9 @@ fn splice_orientation_into_app1(
 /// Rotate a PNG's pixel data according to an EXIF orientation value and
 /// re-encode as PNG (lossless).  Returns `None` if the bytes cannot be decoded.
 pub fn rotate_png_bytes(png_bytes: &[u8], orientation: u16) -> Option<Vec<u8>> {
+    if orientation == 1 {
+        return Some(png_bytes.to_vec());
+    }
     let img = image::load_from_memory(png_bytes).ok()?;
     let rotated = apply_orientation_to_image(img, orientation);
     let mut buf = std::io::Cursor::new(Vec::new());
@@ -1791,5 +1800,19 @@ mod exif_orientation_tests {
         assert_eq!(rotate_orientation_180(Some(3)), 1);
         assert_eq!(rotate_orientation_180(Some(6)), 8);
         assert_eq!(rotate_orientation_180(Some(8)), 6);
+    }
+
+    #[test]
+    fn jpeg_without_exif_and_orientation_one_returns_identical_bytes() {
+        let jpg = minimal_jpeg();
+        let out = ensure_exif_orientation(&jpg, 1);
+        assert_eq!(out, jpg);
+    }
+
+    #[test]
+    fn png_orientation_one_returns_identical_bytes_fast_path() {
+        let dummy_png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+        let out = rotate_png_bytes(&dummy_png, 1);
+        assert_eq!(out, Some(dummy_png));
     }
 }

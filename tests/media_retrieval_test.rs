@@ -571,7 +571,62 @@ async fn test_update_image_place() {
     assert!((lat - 48.8584).abs() < 0.0001);
     assert!((lon - 2.2945).abs() < 0.0001);
 
-    // Clear place
+    // 1. Reject partial coordinate pair (latitude without longitude)
+    let req = test::TestRequest::post()
+        .uri(&format!("/image/{}/place", common::TEST_IMAGE_HASH))
+        .insert_header(("Authorization", format!("Bearer {}", token)))
+        .set_json(serde_json::json!({
+            "place": "Test",
+            "latitude": 48.8584
+        }))
+        .to_request();
+    let response = test::call_service(&app, req).await;
+    assert_eq!(response.status(), http::StatusCode::BAD_REQUEST);
+
+    // 2. Reject out-of-range coordinates
+    let req = test::TestRequest::post()
+        .uri(&format!("/image/{}/place", common::TEST_IMAGE_HASH))
+        .insert_header(("Authorization", format!("Bearer {}", token)))
+        .set_json(serde_json::json!({
+            "latitude": 95.0,
+            "longitude": 2.2945
+        }))
+        .to_request();
+    let response = test::call_service(&app, req).await;
+    assert_eq!(response.status(), http::StatusCode::BAD_REQUEST);
+
+    // 3. Update coordinates without place (sets location, clears place, echoes persisted values)
+    let req = test::TestRequest::post()
+        .uri(&format!("/image/{}/place", common::TEST_IMAGE_HASH))
+        .insert_header(("Authorization", format!("Bearer {}", token)))
+        .set_json(serde_json::json!({
+            "latitude": 51.5074,
+            "longitude": -0.1278
+        }))
+        .to_request();
+    let response = test::call_service(&app, req).await;
+    assert_eq!(response.status(), http::StatusCode::OK);
+    let body: serde_json::Value = test::read_body_json(response).await;
+    assert_eq!(body["place"], serde_json::Value::Null);
+    assert!((body["latitude"].as_f64().unwrap() - 51.5074).abs() < 0.0001);
+    assert!((body["longitude"].as_f64().unwrap() - -0.1278).abs() < 0.0001);
+
+    // 4. Update place without coordinates (preserves existing coordinates in DB and response)
+    let req = test::TestRequest::post()
+        .uri(&format!("/image/{}/place", common::TEST_IMAGE_HASH))
+        .insert_header(("Authorization", format!("Bearer {}", token)))
+        .set_json(serde_json::json!({
+            "place": "London Eye"
+        }))
+        .to_request();
+    let response = test::call_service(&app, req).await;
+    assert_eq!(response.status(), http::StatusCode::OK);
+    let body: serde_json::Value = test::read_body_json(response).await;
+    assert_eq!(body["place"], "London Eye");
+    assert!((body["latitude"].as_f64().unwrap() - 51.5074).abs() < 0.0001);
+    assert!((body["longitude"].as_f64().unwrap() - -0.1278).abs() < 0.0001);
+
+    // 5. Clear place and location
     let req = test::TestRequest::post()
         .uri(&format!("/image/{}/place", common::TEST_IMAGE_HASH))
         .insert_header(("Authorization", format!("Bearer {}", token)))
@@ -583,6 +638,8 @@ async fn test_update_image_place() {
     assert_eq!(response.status(), http::StatusCode::OK);
     let body: serde_json::Value = test::read_body_json(response).await;
     assert_eq!(body["place"], serde_json::Value::Null);
+    assert_eq!(body["latitude"], serde_json::Value::Null);
+    assert_eq!(body["longitude"], serde_json::Value::Null);
 
     // Clean up
     client.execute("DELETE FROM images WHERE hash = $1", &[&common::TEST_IMAGE_HASH]).await.ok();

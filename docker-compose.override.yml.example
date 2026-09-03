@@ -1,0 +1,19 @@
+# Docker Compose override file for enabling ROCm GPU acceleration (AMD Radeon / Instinct / APU).
+# Copy this file to docker-compose.override.yml in the same directory:
+#   cp docker-compose.override.yml.example docker-compose.override.yml
+# Docker Compose automatically merges this file when running `docker compose up`.
+
+services:
+  ai-server:
+    devices:
+      - /dev/dri:/dev/dri
+      - /dev/kfd:/dev/kfd
+    group_add:
+      - "0"        # For LXC containers where device nodes map to root:root (GID 0)
+      - "render"   # Standard Linux render group for bare-metal / VM hosts
+      - "video"    # Standard Linux video group for bare-metal / VM hosts
+    environment:
+      # Use gfx1100 precompiled kernels for RDNA 3 / 3.5 APUs (Radeon 890M / gfx1150)
+      - HSA_OVERRIDE_GFX_VERSION=11.0.0
+      - TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1
+      - ROCBLAS_USE_HIPBLASLT=1

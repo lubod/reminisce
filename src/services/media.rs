@@ -88,7 +88,7 @@ pub async fn get_image(
                         let ext_lc = extension.to_lowercase();
                         if ext_lc == "jpg" || ext_lc == "jpeg" {
                             crate::media_utils::ensure_exif_orientation(&data, o as u16)
-                        } else if no_exif && ext_lc == "png" {
+                        } else if no_exif && ext_lc == "png" && o > 1 {
                             crate::media_utils::rotate_png_bytes(&data, o as u16).unwrap_or(data)
                         } else {
                             data
@@ -711,33 +711,41 @@ pub async fn update_image_orientation(
         })));
     };
 
+    // Regenerate thumbnail on disk with the new orientation BEFORE committing the DB update
+    let thumb_filename = format!("{}.thumb.jpg", hash);
+    let image_sub_dir_path = utils::get_subdirectory_path(config.get_images_dir(), &hash);
+    let image_thumb_path = image_sub_dir_path.join(&thumb_filename);
+    let has_thumbnail = if let Ok(image_path) = crate::media_utils::safe_resolve_content_path(
+        config.get_images_dir(),
+        &hash,
+        &ext,
+    ) {
+        crate::services::thumbnail::generate_thumbnail_for_image(
+            &image_path,
+            &image_thumb_path,
+            500,
+            Some(new_orient),
+        )
+        .await
+        .map_err(|e| {
+            error!("Failed to regenerate thumbnail for image {}: {}", hash, e);
+            actix_web::error::ErrorInternalServerError("Failed to regenerate thumbnail")
+        })?;
+        true
+    } else {
+        false
+    };
+
     client
         .execute(
-            "UPDATE images SET orientation = $1, has_thumbnail = true WHERE user_id = $2 AND hash = $3 AND deleted_at IS NULL",
-            &[&new_orient, &user_uuid, &hash]
+            "UPDATE images SET orientation = $1, has_thumbnail = $2 WHERE user_id = $3 AND hash = $4 AND deleted_at IS NULL",
+            &[&new_orient, &has_thumbnail, &user_uuid, &hash]
         )
         .await
         .map_err(|e| {
             error!("Failed to update image orientation in database: {}", e);
             actix_web::error::ErrorInternalServerError("Database error")
         })?;
-
-    // Regenerate thumbnail on disk with the new orientation
-    let thumb_filename = format!("{}.thumb.jpg", hash);
-    let image_sub_dir_path = utils::get_subdirectory_path(config.get_images_dir(), &hash);
-    let image_thumb_path = image_sub_dir_path.join(&thumb_filename);
-    if let Ok(image_path) = crate::media_utils::safe_resolve_content_path(
-        config.get_images_dir(),
-        &hash,
-        &ext,
-    ) {
-        let _ = crate::services::thumbnail::generate_thumbnail_for_image(
-            &image_path,
-            &image_thumb_path,
-            500,
-            Some(new_orient),
-        ).await;
-    }
 
     let new_label = orientation_label(width, height, Some(new_orient));
 
@@ -824,6 +832,24 @@ pub async fn update_image_place(
         })));
     }
 
+    // Validate coordinate pair: both latitude and longitude must be provided together
+    if body.latitude.is_some() != body.longitude.is_some() {
+        return Ok(HttpResponse::BadRequest().json(serde_json::json!({
+            "status": "error",
+            "message": "Both latitude and longitude must be provided together"
+        })));
+    }
+
+    // Validate coordinate ranges and finiteness
+    if let (Some(lat), Some(lon)) = (body.latitude, body.longitude) {
+        if !lat.is_finite() || !(-90.0..=90.0).contains(&lat) || !lon.is_finite() || !(-180.0..=180.0).contains(&lon) {
+            return Ok(HttpResponse::BadRequest().json(serde_json::json!({
+                "status": "error",
+                "message": "Latitude must be between -90 and 90, and longitude between -180 and 180"
+            })));
+        }
+    }
+
     let cleaned_place = body
         .place
         .as_deref()
@@ -831,51 +857,69 @@ pub async fn update_image_place(
         .filter(|s| !s.is_empty())
         .map(String::from);
 
-    match (cleaned_place.as_ref(), body.latitude, body.longitude) {
+    let updated_row = match (cleaned_place.as_ref(), body.latitude, body.longitude) {
         (Some(p), Some(lat), Some(lon)) => {
             client
-                .execute(
-                    "UPDATE images SET place = $1, location = ST_SetSRID(ST_MakePoint($2, $3), 4326) WHERE user_id = $4 AND hash = $5 AND deleted_at IS NULL",
+                .query_opt(
+                    "UPDATE images SET place = $1, location = ST_SetSRID(ST_MakePoint($2, $3), 4326) WHERE user_id = $4 AND hash = $5 AND deleted_at IS NULL RETURNING place, ST_Y(location::geometry), ST_X(location::geometry)",
                     &[&p, &lon, &lat, &user_uuid, &hash]
                 )
                 .await
-                .map_err(|e| {
-                    error!("Failed to update image place and coordinates: {}", e);
-                    actix_web::error::ErrorInternalServerError("Database error")
-                })?;
         }
-        (Some(p), _, _) => {
+        (None, Some(lat), Some(lon)) => {
             client
-                .execute(
-                    "UPDATE images SET place = $1 WHERE user_id = $2 AND hash = $3 AND deleted_at IS NULL",
+                .query_opt(
+                    "UPDATE images SET place = NULL, location = ST_SetSRID(ST_MakePoint($1, $2), 4326) WHERE user_id = $3 AND hash = $4 AND deleted_at IS NULL RETURNING place, ST_Y(location::geometry), ST_X(location::geometry)",
+                    &[&lon, &lat, &user_uuid, &hash]
+                )
+                .await
+        }
+        (Some(p), None, None) => {
+            client
+                .query_opt(
+                    "UPDATE images SET place = $1 WHERE user_id = $2 AND hash = $3 AND deleted_at IS NULL RETURNING place, ST_Y(location::geometry), ST_X(location::geometry)",
                     &[&p, &user_uuid, &hash]
                 )
                 .await
-                .map_err(|e| {
-                    error!("Failed to update image place: {}", e);
-                    actix_web::error::ErrorInternalServerError("Database error")
-                })?;
         }
-        (None, _, _) => {
+        (None, None, None) => {
             client
-                .execute(
-                    "UPDATE images SET place = NULL, location = NULL WHERE user_id = $1 AND hash = $2 AND deleted_at IS NULL",
+                .query_opt(
+                    "UPDATE images SET place = NULL, location = NULL WHERE user_id = $1 AND hash = $2 AND deleted_at IS NULL RETURNING place, ST_Y(location::geometry), ST_X(location::geometry)",
                     &[&user_uuid, &hash]
                 )
                 .await
-                .map_err(|e| {
-                    error!("Failed to clear image place and location: {}", e);
-                    actix_web::error::ErrorInternalServerError("Database error")
-                })?;
         }
+        _ => unreachable!(),
     }
+    .map_err(|e| {
+        error!("Failed to update image place/location in database: {}", e);
+        actix_web::error::ErrorInternalServerError("Database error")
+    })?;
 
-    info!("Updated place for image {} to {:?}", hash, cleaned_place);
+    let (persisted_place, persisted_lat, persisted_lon) = match updated_row {
+        Some(r) => (
+            r.get::<_, Option<String>>(0),
+            r.get::<_, Option<f64>>(1),
+            r.get::<_, Option<f64>>(2),
+        ),
+        None => {
+            return Ok(HttpResponse::NotFound().json(serde_json::json!({
+                "status": "error",
+                "message": "Image not found"
+            })));
+        }
+    };
+
+    info!(
+        "Updated place for image {} to {:?} (coords: {:?}, {:?})",
+        hash, persisted_place, persisted_lat, persisted_lon
+    );
     Ok(HttpResponse::Ok().json(UpdatePlaceResponse {
         status: "success".to_string(),
-        place: cleaned_place,
-        latitude: body.latitude,
-        longitude: body.longitude,
+        place: persisted_place,
+        latitude: persisted_lat,
+        longitude: persisted_lon,
     }))
 }
 

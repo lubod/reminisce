@@ -725,12 +725,8 @@ export class MediaStore {
             runInAction(() => {
                 if (this.imageMetadata && this.imageMetadata.hash === hash) {
                     this.imageMetadata.place = newPlace;
-                    if (response.data.latitude !== undefined) {
-                        this.imageMetadata.latitude = response.data.latitude;
-                    }
-                    if (response.data.longitude !== undefined) {
-                        this.imageMetadata.longitude = response.data.longitude;
-                    }
+                    this.imageMetadata.latitude = response.data.latitude ?? undefined;
+                    this.imageMetadata.longitude = response.data.longitude ?? undefined;
                 }
 
                 const updateList = (list: MediaItem[]) => {

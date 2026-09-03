@@ -69,17 +69,23 @@ services:
       - face_model_cache:/app/.insightface
       - ./ai/ai_service.py:/app/ai_service.py
       - ./ai/ai_service_grpc.py:/app/ai_service_grpc.py
-    devices:
-      - /dev/dri:/dev/dri
-      - /dev/kfd:/dev/kfd
-    group_add:
-      - "0"
     environment:
       - API_SECRET_KEY=${API_SECRET_KEY:?api_secret_key is required}
       - HF_HOME=/home/ai_user/.cache/huggingface
-      - HSA_OVERRIDE_GFX_VERSION=11.0.0
-      - TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1
-      - ROCBLAS_USE_HIPBLASLT=1
+    # Optional GPU acceleration (AMD ROCm / iGPU):
+    # To enable, copy docker-compose.override.yml.example to docker-compose.override.yml,
+    # or uncomment the lines below:
+    #GPU#devices:
+    #GPU#  - /dev/dri:/dev/dri
+    #GPU#  - /dev/kfd:/dev/kfd
+    #GPU#group_add:
+    #GPU#  - "0"
+    #GPU#  - "render"
+    #GPU#  - "video"
+    #GPU#environment:
+    #GPU#  - HSA_OVERRIDE_GFX_VERSION=11.0.0
+    #GPU#  - TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1
+    #GPU#  - ROCBLAS_USE_HIPBLASLT=1
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8081/health || exit 1"]
