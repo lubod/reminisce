@@ -73,12 +73,14 @@ services:
     environment:
       - API_SECRET_KEY=${API_SECRET_KEY:-}
       - HF_HOME=/home/ai_user/.cache/huggingface
-      - HSA_OVERRIDE_GFX_VERSION=11.5.0
+      - HSA_OVERRIDE_GFX_VERSION=11.0.0
       - TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1
       - ROCBLAS_USE_HIPBLASLT=1
     devices:
       - /dev/dri:/dev/dri
       - /dev/kfd:/dev/kfd
+    group_add:
+      - "0"
     restart: unless-stopped
 
   # === P2P COORDINATOR ===
