@@ -92,6 +92,9 @@ class MainActivity : AppCompatActivity() {
 
         setupViewPager()
 
+        // Ensure Glide is configured with the authenticated OkHttpClient
+        (application as? ReminisceApplication)?.registerAuthClientWithGlide()
+
         viewPager.registerOnPageChangeCallback(object : ViewPager2.OnPageChangeCallback() {
             override fun onPageSelected(position: Int) {
                 invalidateOptionsMenu()

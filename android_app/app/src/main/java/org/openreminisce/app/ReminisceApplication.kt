@@ -8,7 +8,9 @@ import androidx.work.WorkManager
 import com.bumptech.glide.Glide
 import com.bumptech.glide.integration.okhttp3.OkHttpUrlLoader
 import com.bumptech.glide.load.model.GlideUrl
+import okhttp3.Call
 import org.openreminisce.app.util.AuthenticatedHttpClient
+import org.openreminisce.app.util.LogCollector
 import org.openreminisce.app.util.PreferenceHelper
 import org.openreminisce.app.util.SecureStorageHelper
 import java.io.InputStream
@@ -45,9 +47,6 @@ class ReminisceApplication : Application() {
             previous?.uncaughtException(thread, throwable)
         }
 
-
-        super.onCreate()
-
         // Set dark theme as default
         AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES)
 
@@ -61,7 +60,7 @@ class ReminisceApplication : Application() {
         // Now manually initialize WorkManager
         initializeWorkManager()
 
-        // Register the custom OkHttpClient with Glide
+        // Register the dynamic OkHttpClient with Glide
         registerAuthClientWithGlide()
     }
 
@@ -122,21 +121,22 @@ class ReminisceApplication : Application() {
         Log.d(TAG, "Migration to relay mode completed")
     }
 
-    private fun registerAuthClientWithGlide() {
-        if (!PreferenceHelper.isConfigured(this)) {
-            Log.d("ReminisceApplication", "Not configured yet, skipping Glide auth client registration")
-            return
+    fun registerAuthClientWithGlide() {
+        try {
+            val callFactory = Call.Factory { request ->
+                AuthenticatedHttpClient.getClient(this).newCall(request)
+            }
+
+            // Replace Glide's default URL loader with one dynamically delegating to our authenticated OkHttpClient
+            Glide.get(this).registry.replace(
+                GlideUrl::class.java,
+                InputStream::class.java,
+                OkHttpUrlLoader.Factory(callFactory)
+            )
+
+            LogCollector.d(TAG, "Registered dynamic OkHttpClient with Glide")
+        } catch (e: Exception) {
+            LogCollector.e(TAG, "Failed to register dynamic OkHttpClient with Glide", e)
         }
-
-        val okHttpClient = AuthenticatedHttpClient.getClient(this)
-
-        // Replace Glide's default URL loader with one using our authenticated client
-        Glide.get(this).registry.replace(
-            GlideUrl::class.java,
-            InputStream::class.java,
-            OkHttpUrlLoader.Factory(okHttpClient)
-        )
-
-        Log.d("ReminisceApplication", "Registered authenticated OkHttpClient with Glide")
     }
 }

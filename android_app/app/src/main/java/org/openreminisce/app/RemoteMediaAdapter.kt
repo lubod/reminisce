@@ -10,7 +10,10 @@ import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
 import com.bumptech.glide.Glide
 import com.bumptech.glide.load.engine.DiskCacheStrategy
+import com.bumptech.glide.load.model.GlideUrl
+import com.bumptech.glide.load.model.LazyHeaders
 import org.openreminisce.app.model.ThumbnailInfo
+import org.openreminisce.app.util.AuthHelper
 import org.openreminisce.app.util.PreferenceHelper
 import org.openreminisce.app.model.ImageInfo
 import org.openreminisce.app.util.MediaSessionHolder
@@ -174,11 +177,21 @@ class RemoteMediaAdapter(
         private val similarityBadge: TextView = itemView.findViewById(R.id.similarityBadge)
 
         fun bind(thumbnailInfo: ThumbnailInfo, position: Int) {
-            val baseUrl = PreferenceHelper.getServerUrl(context)
+            val baseUrl = PreferenceHelper.getServerUrl(context).trimEnd('/')
             val thumbnailUrl = "$baseUrl/api/thumbnail/${thumbnailInfo.hash}"
 
+            val glideUrl = GlideUrl(
+                thumbnailUrl,
+                LazyHeaders.Builder()
+                    .addHeader("Authorization") {
+                        val token = AuthHelper.getValidToken(context)
+                        if (!token.isNullOrEmpty()) "Bearer $token" else ""
+                    }
+                    .build()
+            )
+
             Glide.with(context)
-                .load(thumbnailUrl)
+                .load(glideUrl)
                 .diskCacheStrategy(DiskCacheStrategy.ALL)
                 .placeholder(R.drawable.ic_image_placeholder)
                 .error(R.drawable.ic_broken_image)

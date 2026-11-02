@@ -26,6 +26,14 @@
 -keepclassmembers class com.bumptech.glide.integration.okhttp3.OkHttpLibraryGlideModule {
     public <init>(...);
 }
+-keep public class * extends com.bumptech.glide.GeneratedAppGlideModule
+-keep class com.bumptech.glide.GeneratedAppGlideModuleImpl { *; }
+-keep class org.openreminisce.app.util.MyAppGlideModule { *; }
+-keep class org.openreminisce.app.util.ThumbnailAuthInterceptor { *; }
+-keep class org.openreminisce.app.util.AuthenticatedHttpClient { *; }
+-keepclassmembers class * extends okhttp3.Interceptor {
+    public <init>(...);
+}
 -dontwarn com.bumptech.glide.**
 
 # ExoPlayer / Media3

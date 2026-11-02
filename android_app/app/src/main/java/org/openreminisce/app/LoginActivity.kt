@@ -337,6 +337,7 @@ class LoginActivity : AppCompatActivity() {
                     if (loginOk) {
                         SecureStorageHelper.setUsername(this@LoginActivity, username)
                         SecureStorageHelper.setPassword(this@LoginActivity, password)
+                        (application as? ReminisceApplication)?.registerAuthClientWithGlide()
                         navigateToMain()
                     } else {
                         showError("Account created. Please sign in.")
@@ -371,6 +372,7 @@ class LoginActivity : AppCompatActivity() {
                 if (result) {
                     SecureStorageHelper.setUsername(this@LoginActivity, username)
                     SecureStorageHelper.setPassword(this@LoginActivity, password)
+                    (application as? ReminisceApplication)?.registerAuthClientWithGlide()
                     withContext(Dispatchers.Main) {
                         hideLoading()
                         navigateToMain()

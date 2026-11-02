@@ -48,21 +48,30 @@ object NetworkHelper {
     }
 
     /**
-     * Determines if the URL is a private/local IP address or localhost.
+     * Determines if the URL is a private/local IP address, local domain, or localhost.
      */
     fun isPrivateOrLocalAddress(url: String): Boolean {
-        val host = try {
-            java.net.URL(url).host.lowercase()
+        if (url.isBlank()) return false
+        val cleanUrl = if (!url.contains("://")) "http://$url" else url
+        val rawHost = try {
+            java.net.URL(cleanUrl).host?.lowercase() ?: return false
         } catch (e: Exception) {
             return false
         }
+
+        val host = rawHost.removePrefix("[").removeSuffix("]")
 
         // Check for localhost
         if (host == "localhost" || host == "127.0.0.1" || host == "::1") {
             return true
         }
 
-        // Check private IPv4
+        // Local domain suffixes
+        if (host.endsWith(".local") || host.endsWith(".lan") || host.endsWith(".home") || host.endsWith(".internal")) {
+            return true
+        }
+
+        // Check private IPv4 & CGNAT ranges (including NetBird 100.64.0.0/10)
         if (host.matches(Regex("^\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}$"))) {
             val parts = host.split(".").mapNotNull { it.toIntOrNull() }
             if (parts.size == 4) {
@@ -71,16 +80,16 @@ object NetworkHelper {
                 return first == 10 ||
                        (first == 172 && second in 16..31) ||
                        (first == 192 && second == 168) ||
-                       (first == 169 && second == 254)
+                       (first == 169 && second == 254) ||
+                       (first == 100 && second in 64..127)
             }
         }
 
         // Check private IPv6
         if (host.contains(":")) {
-            val cleanHost = host.lowercase()
-            return cleanHost.startsWith("fe80:") ||
-                   cleanHost.startsWith("fc00:") ||
-                   cleanHost.startsWith("fd00:")
+            return host.startsWith("fe80:") ||
+                   host.startsWith("fc00:") ||
+                   host.startsWith("fd00:")
         }
 
         return false
