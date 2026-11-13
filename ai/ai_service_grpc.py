@@ -115,11 +115,56 @@ def _validate_image_input(request_image_data, context):
     return image
 
 
+_QUALITY_TEXT_FEATURES_LOCK = threading.Lock()
+_QUALITY_TEXT_FEATURES = None
+
+
+def _extract_siglip_image_features(svc, image):
+    """Run SigLIP2 vision encoder under caller lock and return L2-normalized tensor."""
+    inputs = svc.siglip_processor(images=image, return_tensors="pt").to(svc.device)
+    model_dtype = next(svc.siglip_model.parameters()).dtype
+    inputs = {k: v.to(model_dtype) if v.is_floating_point() else v for k, v in inputs.items()}
+
+    with torch.no_grad():
+        image_features = svc.siglip_model.get_image_features(**inputs)
+        if hasattr(image_features, "pooler_output"):
+            image_features = image_features.pooler_output
+        elif not torch.is_tensor(image_features) and hasattr(image_features, "last_hidden_state"):
+            image_features = image_features.last_hidden_state[:, 0, :]
+        image_features = image_features / image_features.norm(dim=-1, keepdim=True)
+    return image_features
+
+
+def _get_quality_text_features(svc):
+    """Encode and normalize QUALITY_TEXTS once so QualityScore avoids text-encoder work per image."""
+    global _QUALITY_TEXT_FEATURES
+    with _QUALITY_TEXT_FEATURES_LOCK:
+        if _QUALITY_TEXT_FEATURES is not None:
+            return _QUALITY_TEXT_FEATURES
+        inputs = svc.siglip_processor(
+            text=svc.QUALITY_TEXTS,
+            return_tensors="pt",
+            padding="max_length",
+        ).to(svc.device)
+        model_dtype = next(svc.siglip_model.parameters()).dtype
+        inputs = {k: v.to(model_dtype) if v.is_floating_point() else v for k, v in inputs.items()}
+        with torch.no_grad():
+            text_features = svc.siglip_model.get_text_features(**inputs)
+            if hasattr(text_features, "pooler_output"):
+                text_features = text_features.pooler_output
+            elif not torch.is_tensor(text_features) and hasattr(text_features, "last_hidden_state"):
+                text_features = text_features.last_hidden_state[:, 0, :]
+            text_features = text_features / text_features.norm(dim=-1, keepdim=True)
+        _QUALITY_TEXT_FEATURES = text_features
+        return _QUALITY_TEXT_FEATURES
+
+
 class AIServiceServicer(ai_service_pb2_grpc.AIServiceServicer):
 
     def EmbedImage(self, request, context):
         check_api_key(context)
-        if get_ai_service().siglip_model is None:
+        svc = get_ai_service()
+        if svc.siglip_model is None:
             context.abort(grpc.StatusCode.UNAVAILABLE, "SigLIP model not loaded")
 
         # Validation aborts before the inference try so their INVALID_ARGUMENT status
@@ -133,18 +178,7 @@ class AIServiceServicer(ai_service_pb2_grpc.AIServiceServicer):
         _INFERENCE_SEMAPHORE.acquire()
         try:
             with _EMBEDDING_LOCK:
-                inputs = get_ai_service().siglip_processor(images=image, return_tensors="pt").to(get_ai_service().device)
-                model_dtype = next(get_ai_service().siglip_model.parameters()).dtype
-                inputs = {k: v.to(model_dtype) if v.is_floating_point() else v for k, v in inputs.items()}
-
-                with torch.no_grad():
-                    image_features = get_ai_service().siglip_model.get_image_features(**inputs)
-                    if hasattr(image_features, "pooler_output"):
-                        image_features = image_features.pooler_output
-                    elif not torch.is_tensor(image_features) and hasattr(image_features, "last_hidden_state"):
-                        image_features = image_features.last_hidden_state[:, 0, :]
-                    image_features = image_features / image_features.norm(dim=-1, keepdim=True)
-
+                image_features = _extract_siglip_image_features(svc, image)
                 embedding = image_features.cpu().numpy().flatten().tolist()
             return ai_service_pb2.EmbedImageResponse(embedding=embedding)
         except Exception as e:
@@ -325,17 +359,23 @@ class AIServiceServicer(ai_service_pb2_grpc.AIServiceServicer):
             gray = np.array(image.convert('L'))
             sharpness = float(cv2.Laplacian(gray, cv2.CV_64F).var())
 
-            # Aesthetic: zero-shot SigLIP text comparison
+            # Aesthetic: zero-shot SigLIP text comparison using cached text embeddings
             with _EMBEDDING_LOCK:
-                inputs = svc.siglip_processor(text=svc.QUALITY_TEXTS, images=image, return_tensors="pt", padding="max_length")
-                inputs = {k: v.to(svc.device) for k, v in inputs.items()}
-                model_dtype = next(svc.siglip_model.parameters()).dtype
-                inputs = {k: v.to(model_dtype) if v.is_floating_point() else v for k, v in inputs.items()}
-
+                image_features = _extract_siglip_image_features(svc, image)
+                text_features = _get_quality_text_features(svc).to(
+                    device=image_features.device,
+                    dtype=image_features.dtype,
+                )
                 with torch.no_grad():
-                    outputs = svc.siglip_model(**inputs)
-                probs = outputs.logits_per_image.softmax(dim=-1)[0]
-                aesthetic_score = float(probs[0].item()) * 10.0  # 0-10
+                    scale = (
+                        svc.siglip_model.logit_scale.exp()
+                        if hasattr(svc.siglip_model, "logit_scale")
+                        else 1.0
+                    )
+                    bias = getattr(svc.siglip_model, "logit_bias", 0.0)
+                    logits = torch.matmul(image_features, text_features.t()) * scale + bias
+                    probs = logits.softmax(dim=-1)[0]
+                    aesthetic_score = float(probs[0].item()) * 10.0  # 0-10
 
             return ai_service_pb2.QualityScoreResponse(
                 aesthetic_score=aesthetic_score,
@@ -490,7 +530,7 @@ class AIServiceServicer(ai_service_pb2_grpc.AIServiceServicer):
 def serve_grpc(port=50051, max_workers=4):
     options = [
         ('grpc.max_send_message_length', 64 * 1024 * 1024),
-        ('grpc.max_receive_message_length', 10 * 1024 * 1024),
+        ('grpc.max_receive_message_length', 64 * 1024 * 1024),
     ]
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=max_workers), options=options)
     ai_service_pb2_grpc.add_AIServiceServicer_to_server(AIServiceServicer(), server)

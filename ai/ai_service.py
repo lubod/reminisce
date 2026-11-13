@@ -123,15 +123,15 @@ def load_models():
     except Exception as e:
         logger.warning(f"Failed to apply PretrainedConfig patch: {e}")
 
+    device = detect_device()
+
     # Only set CPU threading when not using GPU (avoids unnecessary overhead)
-    if detect_device() == "cpu":
+    if device == "cpu":
         try:
             torch.set_num_threads(4)
             torch.set_num_interop_threads(2)
         except Exception:
             pass
-
-    device = detect_device()
 
     # Load SigLIP2 for embeddings (drop-in replacement with better multilingual + spatial understanding)
     logger.info("Loading SigLIP2 model...")
@@ -147,30 +147,32 @@ def load_models():
         logger.error(f"Failed to load SigLIP2 model: {e}")
         raise
 
-    # Load Qwen2.5-VL-3B for descriptions
-    # Visual tokens capped at 256 max (down from 16384 default) — biggest perf lever on iGPU
-    # bfloat16 preferred over float16 for ROCm (matches training dtype, less conversion)
-    logger.info("Loading Qwen2.5-VL-3B-Instruct model for descriptions...")
-    vlm_model_name = os.environ.get("VLM_MODEL_NAME", "Qwen/Qwen2.5-VL-3B-Instruct")
-    try:
-        from transformers import Qwen2_5_VLForConditionalGeneration
-        vlm_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-            vlm_model_name,
-            torch_dtype=torch.float16 if device == "cuda" else torch.float32,
-            attn_implementation="sdpa",
-        ).to(device)
-        # Cap visual tokens aggressively: 256 tokens max (~200K pixels)
-        # Halving from 512 → 256 cuts attention cost ~2x and decode overhead ~2x
-        vlm_processor = AutoProcessor.from_pretrained(
-            vlm_model_name,
-            min_pixels=64 * 28 * 28,
-            max_pixels=256 * 28 * 28,
-        )
-        vlm_model.eval()
-        logger.info(f"Qwen2.5-VL-3B-Instruct loaded on {device} (bfloat16, sdpa, max_pixels=256)")
-    except Exception as e:
-        logger.error(f"Failed to load Qwen2.5-VL model: {e}")
-        # Continue without VLM - descriptions won't work but embeddings will
+    # Gate heavy Qwen2.5-VL-3B (~6 GB) behind ENABLE_QWEN_VLM=true so CPU/small hosts don't OOM;
+    # SmolVLM-500M serves all default captions unless Qwen is explicitly enabled.
+    enable_qwen = os.environ.get("ENABLE_QWEN_VLM", "").strip().lower() in ("1", "true", "yes")
+    if enable_qwen:
+        logger.info("Loading Qwen2.5-VL-3B-Instruct model for descriptions...")
+        vlm_model_name = os.environ.get("VLM_MODEL_NAME", "Qwen/Qwen2.5-VL-3B-Instruct")
+        try:
+            from transformers import Qwen2_5_VLForConditionalGeneration
+            vlm_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+                vlm_model_name,
+                torch_dtype=torch.float16 if device == "cuda" else torch.float32,
+                attn_implementation="sdpa",
+            ).to(device)
+            # Cap visual tokens aggressively: 256 tokens max (~200K pixels)
+            # Halving from 512 → 256 cuts attention cost ~2x and decode overhead ~2x
+            vlm_processor = AutoProcessor.from_pretrained(
+                vlm_model_name,
+                min_pixels=64 * 28 * 28,
+                max_pixels=256 * 28 * 28,
+            )
+            vlm_model.eval()
+            logger.info(f"Qwen2.5-VL-3B-Instruct loaded on {device} (bfloat16, sdpa, max_pixels=256)")
+        except Exception as e:
+            logger.error(f"Failed to load Qwen2.5-VL model: {e}")
+    else:
+        logger.info("Skipping Qwen2.5-VL-3B load (set ENABLE_QWEN_VLM=true to enable)")
 
     # Load SmolVLM-500M for fast descriptions
     # 500M params — ~64 visual tokens per patch, target <5s per image
