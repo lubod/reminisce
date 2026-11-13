@@ -91,8 +91,14 @@ impl TokenBucket {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum BucketKind {
+    General,
+    Login,
+}
+
 struct LimiterState {
-    buckets: HashMap<IpAddr, TokenBucket>,
+    buckets: HashMap<(IpAddr, BucketKind), TokenBucket>,
     last_cleanup: Instant,
 }
 
@@ -239,13 +245,15 @@ where
 
         let is_login = path.contains("/user-login") || path.contains("/login") || path.contains("/register");
 
-        // General limits: max 2000 tokens, refills 100 tokens/second (supports large gallery loads & parallel requests)
-        // Stricter login limits: max 10 tokens, refills 1 token every 2 seconds
-        let (max_tokens, refill_rate) = if is_login {
-            (10.0, 0.5)
+        // Isolate login and general buckets per IP: sharing a single bucket
+        // would let a login request clamp the IP's general API bucket down to
+        // 10 tokens (or let general gallery/dashboard traffic drain logins).
+        let (kind, max_tokens, refill_rate) = if is_login {
+            (BucketKind::Login, 10.0, 0.5)
         } else {
-            (2000.0, 100.0)
+            (BucketKind::General, 2000.0, 100.0)
         };
+        let bucket_key = (ip, kind);
 
         let mut state = self
             .limiter
@@ -267,20 +275,20 @@ where
         // Emergency eviction if flooded with distinct IPs beyond MAX_BUCKETS:
         // sweep all stale entries in one pass first (the old single-oldest
         // eviction was O(n) per request under sustained flood).
-        if state.buckets.len() >= MAX_BUCKETS && !state.buckets.contains_key(&ip) {
+        if state.buckets.len() >= MAX_BUCKETS && !state.buckets.contains_key(&bucket_key) {
             state.buckets.retain(|_, b| now.duration_since(b.last_update).as_secs() < 600);
             if state.buckets.len() >= MAX_BUCKETS {
-                if let Some(oldest_ip) = state.buckets.iter()
+                if let Some(oldest_key) = state.buckets.iter()
                     .min_by_key(|(_, b)| b.last_update)
-                    .map(|(ip, _)| *ip)
+                    .map(|(k, _)| *k)
                 {
-                    state.buckets.remove(&oldest_ip);
+                    state.buckets.remove(&oldest_key);
                 }
             }
         }
 
         let bucket = state.buckets
-            .entry(ip)
+            .entry(bucket_key)
             .or_insert_with(|| TokenBucket::new(max_tokens));
 
         let allowed = bucket.consume(max_tokens, refill_rate, 1.0);
@@ -567,13 +575,64 @@ mod tests {
             let _ = test::call_service(&app, req).await;
         }
 
-        // 51st request should be throttled (429 Too Many Requests)
+        // 11th+ request should be throttled (429 Too Many Requests)
         let req_over = test::TestRequest::post()
             .uri("/api/auth/login")
             .insert_header(("x-real-ip", "198.51.100.55"))
             .to_request();
         let resp_over = test::call_service(&app, req_over).await;
         assert_eq!(resp_over.status(), actix_web::http::StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[actix_web::test]
+    async fn login_and_general_buckets_are_isolated_per_ip() {
+        use actix_web::{test, web, App, HttpResponse};
+
+        let app = test::init_service(
+            App::new()
+                .wrap(RateLimiter::new())
+                .route("/api/auth/user-login-form", web::post().to(|| async { HttpResponse::Ok().body("logged_in") }))
+                .route("/api/system-stats", web::get().to(|| async { HttpResponse::Ok().body("stats") }))
+        ).await;
+
+        let client_ip = "198.51.100.77";
+
+        // General requests must not drain the login bucket, and logging in
+        // afterwards must not clamp the general bucket down to 10 tokens.
+        for _ in 0..25 {
+            let req = test::TestRequest::get()
+                .uri("/api/system-stats")
+                .insert_header(("x-real-ip", client_ip))
+                .to_request();
+            let resp = test::call_service(&app, req).await;
+            assert_eq!(resp.status(), actix_web::http::StatusCode::OK);
+        }
+
+        // All 10 login burst tokens remain available for this IP.
+        for i in 0..10 {
+            let req = test::TestRequest::post()
+                .uri("/api/auth/user-login-form")
+                .insert_header(("x-real-ip", client_ip))
+                .to_request();
+            let resp = test::call_service(&app, req).await;
+            assert_eq!(resp.status(), actix_web::http::StatusCode::OK, "login {i} should succeed");
+        }
+        let req_over = test::TestRequest::post()
+            .uri("/api/auth/user-login-form")
+            .insert_header(("x-real-ip", client_ip))
+            .to_request();
+        let resp_over = test::call_service(&app, req_over).await;
+        assert_eq!(resp_over.status(), actix_web::http::StatusCode::TOO_MANY_REQUESTS);
+
+        // General API traffic from the same IP still has its own bucket intact.
+        for i in 0..25 {
+            let req = test::TestRequest::get()
+                .uri("/api/system-stats")
+                .insert_header(("x-real-ip", client_ip))
+                .to_request();
+            let resp = test::call_service(&app, req).await;
+            assert_eq!(resp.status(), actix_web::http::StatusCode::OK, "general call {i} after login exhaustion must succeed");
+        }
     }
 }
 
