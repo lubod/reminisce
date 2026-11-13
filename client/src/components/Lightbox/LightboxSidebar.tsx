@@ -1,4 +1,5 @@
 import React from "react";
+import { observer } from "mobx-react-lite";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Tag, X, Plus, Pencil, Check, RotateCcw, RotateCw, Loader2 } from "lucide-react";
@@ -26,7 +27,7 @@ interface LightboxSidebarProps {
     isUpdatingPlace?: boolean;
 }
 
-export const LightboxSidebar: React.FC<LightboxSidebarProps> = ({
+export const LightboxSidebar = observer<LightboxSidebarProps>(({
     selectedMedia,
     metadata,
     activeTab,
@@ -58,6 +59,14 @@ export const LightboxSidebar: React.FC<LightboxSidebarProps> = ({
         setPlaceSuggestions([]);
         setSelectedCoords(null);
     }, [selectedMedia.hash]);
+
+    React.useEffect(() => {
+        return () => {
+            if (placeDebounceTimer.current) {
+                clearTimeout(placeDebounceTimer.current);
+            }
+        };
+    }, []);
 
     const handlePlaceInputChange = (val: string) => {
         setPlaceInput(val);
@@ -516,7 +525,7 @@ export const LightboxSidebar: React.FC<LightboxSidebarProps> = ({
                                             type="text"
                                             value={newLabelName}
                                             onChange={(e) => setNewLabelName(e.target.value)}
-                                            onKeyPress={(e) => {
+                                            onKeyDown={(e) => {
                                                 if (e.key === "Enter") {
                                                     handleCreateAndAddLabel();
                                                 } else if (e.key === "Escape") {
@@ -552,4 +561,4 @@ export const LightboxSidebar: React.FC<LightboxSidebarProps> = ({
             </div>
         </div>
     );
-};
+});

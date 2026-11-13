@@ -85,7 +85,7 @@ export class PersonStore {
 
             const personsWithThumbnails = response.data.persons.map(person => ({
                 ...person,
-                thumbnailUrl: person.representative_face_url ? this.getAuthenticatedUrl(person.representative_face_url) : undefined
+                thumbnailUrl: person.representative_face_url ?? undefined
             }));
 
             runInAction(() => {
@@ -116,9 +116,7 @@ export class PersonStore {
             const response = await axios.get<PersonResponse>(`/persons/${id}`);
             const person = {
                 ...response.data.person,
-                thumbnailUrl: response.data.person.representative_face_url 
-                    ? this.getAuthenticatedUrl(response.data.person.representative_face_url) 
-                    : undefined
+                thumbnailUrl: response.data.person.representative_face_url ?? undefined
             };
 
             runInAction(() => {
@@ -158,8 +156,8 @@ export class PersonStore {
 
             const imagesWithThumbnails = response.data.images.map(image => ({
                 ...image,
-                thumbnailUrl: this.getAuthenticatedUrl(`/api/face/${image.face_id}/thumbnail`),
-                fullThumbnailUrl: image.thumbnail_url ? this.getAuthenticatedUrl(image.thumbnail_url) : undefined,
+                thumbnailUrl: `/api/face/${image.face_id}/thumbnail`,
+                fullThumbnailUrl: image.thumbnail_url ?? undefined,
             }));
 
             runInAction(() => {
@@ -246,12 +244,5 @@ export class PersonStore {
         this.imagesOffset = 0;
         this.imagesTotal = 0;
         this.imagesHasMore = false;
-    };
-
-    // Media URLs are authenticated by the httpOnly session cookie — no token in the URL.
-    getAuthenticatedUrl = (baseUrl: string) => baseUrl;
-
-    cleanup = () => {
-        // No-op (no blob URLs are produced for person thumbnails)
     };
 }

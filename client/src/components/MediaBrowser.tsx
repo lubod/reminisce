@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback, useState } from "react";
+import { useEffect, useMemo, useRef, useCallback, useState } from "react";
 import { observer } from "mobx-react-lite";
 import { useStore } from "../stores/RootStore";
 import type { SearchType, MediaTypeFilter } from "../stores/MediaStore";
@@ -11,6 +11,14 @@ export const MediaBrowser = observer(() => {
     const observerTarget = useRef<HTMLDivElement>(null);
     const [filtersExpanded, setFiltersExpanded] = useState(false);
     const [searchInput, setSearchInput] = useState(mediaStore.searchQuery);
+
+    const mediaIndexMap = useMemo(() => {
+        const map = new globalThis.Map<string, number>();
+        mediaStore.allMedia.forEach((m, idx) => {
+            map.set(`${m.hash}_${m.device_id ?? ''}`, idx);
+        });
+        return map;
+    }, [mediaStore.allMedia]);
 
     // Sync local input with store query (e.g. when cleared)
     useEffect(() => {
@@ -98,6 +106,7 @@ export const MediaBrowser = observer(() => {
                                         {searchInput && (
                                             <button 
                                                 type="button"
+                                                aria-label="Clear search"
                                                 onClick={() => {
                                                     setSearchInput("");
                                                     mediaStore.clearSearch();
@@ -131,6 +140,7 @@ export const MediaBrowser = observer(() => {
                                             type="range"
                                             min="0"
                                             max="20"
+                                            aria-label="Minimum similarity"
                                             value={mediaStore.minSimilarity * 100}
                                             onChange={(e) => mediaStore.setMinSimilarity(parseInt(e.target.value) / 100)}
                                             className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
@@ -186,7 +196,7 @@ export const MediaBrowser = observer(() => {
                                     <div className="space-y-2">
                                         <div className="flex items-center justify-between bg-blue-900/20 border border-blue-500/30 p-2 rounded text-xs text-blue-300">
                                             <span className="truncate font-semibold">{mediaStore.filters.location.name}</span>
-                                            <button onClick={() => mediaStore.clearLocationFilter()} className="p-1 hover:bg-blue-800/30 rounded transition-colors"><X size={14}/></button>
+                                            <button onClick={() => mediaStore.clearLocationFilter()} aria-label="Clear location" className="p-1 hover:bg-blue-800/30 rounded transition-colors"><X size={14}/></button>
                                         </div>
                                         
                                         <div>
@@ -201,6 +211,7 @@ export const MediaBrowser = observer(() => {
                                                 min="1"
                                                 max="500"
                                                 step="1"
+                                                aria-label="Location radius in kilometers"
                                                 value={mediaStore.filters.locationRadiusKm}
                                                 onChange={(e) => mediaStore.setLocationRadiusKm(parseInt(e.target.value))}
                                                 className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
@@ -228,6 +239,7 @@ export const MediaBrowser = observer(() => {
                                 </select>
                                 <button
                                     onClick={() => mediaStore.toggleStarredFilter()}
+                                    aria-pressed={mediaStore.filters.starredOnly}
                                     className={`w-full py-2 rounded-md text-sm font-medium transition-all flex items-center justify-center gap-2 ${
                                         mediaStore.filters.starredOnly ? 'bg-yellow-600 text-white' : 'bg-gray-700 text-gray-300 border border-gray-600'
                                     }`}
@@ -324,30 +336,35 @@ export const MediaBrowser = observer(() => {
                     )}
                 </div>
             ) : (
-            mediaStore.groupedAllMedia.map((group) => (
-                <div key={group.date} className="mb-8 animate-in fade-in slide-in-from-bottom-2 duration-500">
+            mediaStore.groupedAllMedia.map((group, groupIdx) => (
+                <div
+                    key={group.date}
+                    className="mb-8 animate-in fade-in slide-in-from-bottom-2 duration-500"
+                    style={groupIdx > 0 ? { contentVisibility: "auto", containIntrinsicSize: "auto 400px" } : undefined}
+                >
                     <h2 className="text-lg font-bold text-gray-200 border-b border-gray-800 pb-2 mb-4 flex items-center justify-between">
                         {group.displayDate}
                         <span className="text-xs font-normal text-gray-500">{group.items.length} items</span>
                     </h2>
                     <div className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2">
                         {group.items.map((item) => {
+                            const key = `${item.hash}_${item.device_id ?? ''}`;
+                            const openItem = () => {
+                                const idx = mediaIndexMap.get(key);
+                                if (idx !== undefined) mediaStore.openMediaLightbox(idx, 'all');
+                            };
                             return (
                                 <div
-                                    key={`${item.hash}_${item.device_id ?? ''}`}
+                                    key={key}
                                     className="group relative aspect-square bg-gray-800 rounded-xl overflow-hidden cursor-pointer hover:ring-2 ring-blue-500 transition-all shadow-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                                     tabIndex={0}
                                     role="button"
                                     aria-label={`Open ${item.media_type === 'video' ? 'video' : 'image'} ${item.name}`}
-                                    onClick={() => {
-                                        const idx = mediaStore.allMedia.findIndex(m => m.hash === item.hash && m.device_id === item.device_id);
-                                        if (idx !== -1) mediaStore.openMediaLightbox(idx, 'all');
-                                    }}
+                                    onClick={openItem}
                                     onKeyDown={(e) => {
                                         if ((e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget) {
                                             e.preventDefault();
-                                            const idx = mediaStore.allMedia.findIndex(m => m.hash === item.hash && m.device_id === item.device_id);
-                                            if (idx !== -1) mediaStore.openMediaLightbox(idx, 'all');
+                                            openItem();
                                         }
                                     }}
                                 >
@@ -388,10 +405,11 @@ export const MediaBrowser = observer(() => {
                                             e.stopPropagation();
                                             mediaStore.toggleStarMedia(item.hash, item.device_id);
                                         }}
+                                        aria-label={item.starred ? "Unstar media" : "Star media"}
                                         className={`absolute top-2 right-2 p-1.5 rounded-full transition-all ${
                                             item.starred
                                                 ? 'bg-yellow-400/20 opacity-100'
-                                                : 'bg-black/50 opacity-0 group-hover:opacity-100'
+                                                : 'bg-black/50 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus:opacity-100 [@media(hover:none)]:opacity-100'
                                         } hover:bg-black/70 hover:scale-110`}
                                         title={item.starred ? "Unstar" : "Star"}
                                     >
@@ -408,7 +426,7 @@ export const MediaBrowser = observer(() => {
                                             </div>
                                         </div>
                                     )}
-                                    <div className="absolute bottom-0 left-0 right-0 p-2 bg-gradient-to-t from-black/80 to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
+                                    <div className="absolute bottom-0 left-0 right-0 p-2 bg-gradient-to-t from-black/80 to-transparent opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity">
                                         <p className="text-[10px] text-white truncate">{item.place || item.name}</p>
                                     </div>
                                 </div>

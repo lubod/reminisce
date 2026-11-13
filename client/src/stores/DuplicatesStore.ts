@@ -64,21 +64,6 @@ export class DuplicatesStore {
         this.threshold = Math.min(1.0, Math.max(0.8, value));
     }
 
-    private authUrl(url: string): string {
-        // Authenticated by the httpOnly session cookie — no token in the URL.
-        return url;
-    }
-
-    private withAuthUrls(groups: DuplicateGroup[]): DuplicateGroup[] {
-        return groups.map(group => ({
-            ...group,
-            images: group.images.map(img => ({
-                ...img,
-                thumbnail_url: this.authUrl(img.thumbnail_url),
-            })),
-        }));
-    }
-
     fetchDuplicates = async () => {
         this.isLoading = true;
         this.error = null;
@@ -88,7 +73,7 @@ export class DuplicatesStore {
                 params: { threshold: this.threshold, page: 1, limit: PAGE_SIZE },
             });
             runInAction(() => {
-                this.groups = this.withAuthUrls(response.data.groups);
+                this.groups = response.data.groups;
                 this.totalGroups = response.data.total_groups;
                 this.page = 1;
                 this.isLoading = false;
@@ -110,7 +95,7 @@ export class DuplicatesStore {
                 params: { threshold: this.threshold, page: nextPage, limit: PAGE_SIZE },
             });
             runInAction(() => {
-                this.groups = [...this.groups, ...this.withAuthUrls(response.data.groups)];
+                this.groups = [...this.groups, ...response.data.groups];
                 this.totalGroups = response.data.total_groups;
                 this.page = nextPage;
                 this.isLoadingMore = false;
@@ -171,13 +156,15 @@ export class DuplicatesStore {
         try {
             await api.post(`/image/${hash}/delete`);
             runInAction(() => {
+                const prevCount = this.groups.length;
                 this.groups = this.groups
                     .map((group) => ({
                         ...group,
                         images: group.images.filter((img) => img.hash !== hash),
                     }))
                     .filter((group) => group.images.length >= 2);
-                this.totalGroups = this.groups.length;
+                const removedGroups = prevCount - this.groups.length;
+                this.totalGroups = Math.max(0, this.totalGroups - removedGroups);
             });
         } catch {
             runInAction(() => {

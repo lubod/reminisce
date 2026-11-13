@@ -2,22 +2,25 @@ import { useEffect, useState } from "react";
 import { observer } from "mobx-react-lite";
 import { useStore } from "../stores/RootStore";
 import { logger } from "../utils/logger";
-import { Image, Video, Users, CheckCircle, FileText, Database, Activity, Settings, Brain, Cpu, HardDrive, MemoryStick, Zap, Upload, Folder, Network, Shield, TrendingUp, RefreshCw, AlertTriangle, Server, Clock, X, Shuffle, Trash2, Smartphone, ShieldAlert } from "lucide-react";
+import { Users, Cpu, Upload, Shield, TrendingUp, RefreshCw, Smartphone, Settings } from "lucide-react";
 import { DirectoryImportModal } from "./DirectoryImportModal";
 import { ServerImportModal } from "./ServerImportModal";
 import { AndroidConnectionQR } from "./AndroidConnectionQR";
 import { UserManagement } from "./UserManagement";
-import { LogViewer } from "./System/LogViewer";
-import { ErrorsViewer } from "./System/ErrorsViewer";
-import { Charts } from "./System/Charts";
-import { AiModelsViewer } from "./System/AiModelsViewer";
-import { P2PRebalanceProgress } from "./System/P2PRebalanceProgress";
+import { OverviewTab } from "./Dashboard/OverviewTab";
+import { ImportTab } from "./Dashboard/ImportTab";
+import { BackupTab } from "./Dashboard/BackupTab";
+import { SystemTab } from "./Dashboard/SystemTab";
+import { SettingsTab } from "./Dashboard/SettingsTab";
+import { VerifyBackupModal } from "./Dashboard/VerifyBackupModal";
+
+type DashboardTab = 'overview' | 'import' | 'system' | 'backup' | 'settings' | 'app' | 'users';
 
 export const Dashboard = observer(() => {
     const { statsStore, authStore, uiStore, systemStore } = useStore();
     const isAdmin = authStore.user?.role === "admin";
 
-    const [activeTab, setActiveTab] = useState<'overview' | 'import' | 'system' | 'backup' | 'settings' | 'app' | 'users'>('overview');
+    const [activeTab, setActiveTab] = useState<DashboardTab>('overview');
 
     // Local state for settings form
     const [enableAiDescriptions, setEnableAiDescriptions] = useState<boolean>(true);
@@ -26,7 +29,7 @@ export const Dashboard = observer(() => {
     const [enableFaceDetection, setEnableFaceDetection] = useState<boolean>(true);
     const [faceDetectionParallelCount, setFaceDetectionParallelCount] = useState<number>(3);
     const [enableMediaBackup, setEnableMediaBackup] = useState<boolean>(false);
-    
+
     const [showImportModal, setShowImportModal] = useState<boolean>(false);
     const [showServerImportModal, setShowServerImportModal] = useState<boolean>(false);
     const [showVerifyModal, setShowVerifyModal] = useState<boolean>(false);
@@ -38,7 +41,6 @@ export const Dashboard = observer(() => {
     }, [statsStore, isAdmin]);
 
     // Pool stats are cheap and relevant on every admin tab, so they poll globally.
-    // Polling pauses while the document is hidden and catches up on return.
     useEffect(() => {
         if (!isAdmin) return;
 
@@ -57,9 +59,7 @@ export const Dashboard = observer(() => {
     }, [statsStore, isAdmin]);
 
     // Heavy per-tab polling: logs/errors/alerts/gpu/models/pipeline/series belong
-    // to the system tab and only load while it is active; overview keeps its stat
-    // cards fresh and backup keeps mesh status fresh. Everything pauses while the
-    // document is hidden.
+    // to the system tab and only load while it is active.
     useEffect(() => {
         if (!isAdmin) return;
 
@@ -76,8 +76,6 @@ export const Dashboard = observer(() => {
             } else if (activeTab === 'overview') {
                 void statsStore.fetchSystemStats();
             } else if (activeTab === 'backup') {
-                // While a rebalance is running, the 4s fast-poll below owns these
-                // endpoints; skip here to avoid duplicate requests.
                 const reb = statsStore.p2pBackupStatus?.rebalance;
                 if (!(reb?.is_active || (reb && reb.progress_percent < 100))) {
                     void statsStore.fetchP2PBackupStatus();
@@ -119,7 +117,7 @@ export const Dashboard = observer(() => {
         }
     }, [isAdmin, activeTab, statsStore]);
 
-    // Verify modal: close on Escape (mirrors DirectoryImportModal scaffolding)
+    // Verify modal: close on Escape
     useEffect(() => {
         if (!showVerifyModal) return;
         const handleKeyDown = (e: KeyboardEvent) => {
@@ -150,12 +148,6 @@ export const Dashboard = observer(() => {
             </div>
         );
     }
-
-    const stats = statsStore.stats;
-    const poolStats = statsStore.poolStats?.main_pool;
-    const systemStats = statsStore.systemStats;
-    const p2pStatus = statsStore.p2pBackupStatus;
-    const discoveredPeers = statsStore.discoveredPeers || [];
 
     const handleUpdateSettings = async () => {
         try {
@@ -200,29 +192,9 @@ export const Dashboard = observer(() => {
         }
     };
 
-    const formatBytes = (b: number) => {
-        if (!b || b <= 0) return "0 B";
-        const units = ["B", "KB", "MB", "GB", "TB"];
-        const i = Math.min(Math.floor(Math.log(b) / Math.log(1024)), units.length - 1);
-        return `${(b / Math.pow(1024, i)).toFixed(1)} ${units[i]}`;
-    };
-
-    const statCards = [
-        { title: "Total Images", value: stats?.total_images, icon: <Image className="w-8 h-8 text-blue-500" /> },
-        { title: "Total Videos", value: stats?.total_videos, icon: <Video className="w-8 h-8 text-purple-500" /> },
-        { title: "Total Users", value: stats?.total_users, icon: <Users className="w-8 h-8 text-green-500" /> },
-        { title: "Images with Description", value: stats?.images_with_description, icon: <FileText className="w-8 h-8 text-yellow-500" /> },
-        { title: "Images with Embedding", value: stats?.images_with_embedding, icon: <Brain className="w-8 h-8 text-indigo-500" /> },
-        { title: "Starred Images", value: stats?.starred_images, icon: <Image className="w-8 h-8 text-red-500" /> },
-        { title: "Integrity Verified", value: stats?.verified_images, icon: <CheckCircle className="w-8 h-8 text-pink-500" /> },
-        { title: "Total Faces", value: stats?.total_faces, icon: <Users className="w-8 h-8 text-cyan-500" /> },
-        { title: "Total People", value: stats?.total_persons, icon: <Users className="w-8 h-8 text-orange-500" /> },
-        { title: "Disk Available", value: systemStats?.disk_available_gb !== undefined ? `${systemStats.disk_available_gb.toFixed(1)} GB` : '...', icon: <HardDrive className="w-8 h-8 text-emerald-500" /> },
-    ];
-
-    const tabClass = (tab: string) => `px-6 py-3 text-sm font-medium transition-all duration-200 border-b-2 flex items-center gap-2 ${
-        activeTab === tab 
-        ? 'border-blue-500 text-blue-400 bg-gray-800/50' 
+    const tabClass = (tab: DashboardTab) => `px-6 py-3 text-sm font-medium transition-all duration-200 border-b-2 flex items-center gap-2 ${
+        activeTab === tab
+        ? 'border-blue-500 text-blue-400 bg-gray-800/50'
         : 'border-transparent text-gray-400 hover:text-gray-200 hover:bg-gray-800/30'
     }`;
 
@@ -262,629 +234,52 @@ export const Dashboard = observer(() => {
                     </div>
                 ) : (
                     <>
-                        {/* --- Overview Tab --- */}
                         {activeTab === 'overview' && (
-                            <div className="space-y-6">
-                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                                    {statCards.map((card, index) => (
-                                        <div key={index} className="bg-gray-800 shadow-lg rounded-xl border border-gray-700 p-5 flex items-center transition-transform hover:scale-[1.02]">
-                                            <div className="p-3 bg-gray-900/50 rounded-lg">{card.icon}</div>
-                                            <div className="ml-5">
-                                                <dt className="text-xs font-medium text-gray-500 uppercase tracking-wider">{card.title}</dt>
-                                                <dd className="text-2xl font-bold text-gray-100">{card.value?.toLocaleString() ?? '...'}</dd>
-                                            </div>
-                                        </div>
-                                    ))}
-                                </div>
-                                {/* Face Detection Progress */}
-                                {stats && stats.images_face_pending > 0 && (() => {
-                                    const total = stats.total_images;
-                                    const done = total - stats.images_face_pending;
-                                    const pct = total > 0 ? Math.round((done / total) * 100) : 0;
-                                    const etaSec = Math.round(stats.images_face_pending * 0.63);
-                                    const etaStr = etaSec < 60 ? `~${etaSec}s`
-                                        : etaSec < 3600 ? `~${Math.round(etaSec / 60)}m`
-                                        : `~${(etaSec / 3600).toFixed(1)}h`;
-                                    return (
-                                        <div className="bg-gray-800 border border-yellow-700/50 rounded-xl p-5">
-                                            <div className="flex items-center justify-between mb-3">
-                                                <div className="flex items-center gap-2 text-yellow-300 font-semibold text-sm">
-                                                    <Clock className="w-4 h-4" />
-                                                    Face Detection In Progress
-                                                </div>
-                                                <span className="text-xs text-gray-400">
-                                                    {stats.images_face_pending.toLocaleString()} pending · ETA {etaStr}
-                                                </span>
-                                            </div>
-                                            <div className="w-full bg-gray-700 rounded-full h-2.5 mb-2">
-                                                <div
-                                                    className="bg-yellow-500 h-2.5 rounded-full transition-all duration-500"
-                                                    style={{ width: `${pct}%` }}
-                                                />
-                                            </div>
-                                            <div className="flex justify-between text-xs text-gray-500">
-                                                <span>{done.toLocaleString()} processed</span>
-                                                <span>{pct}%</span>
-                                                <span>{total.toLocaleString()} total</span>
-                                            </div>
-                                        </div>
-                                    );
-                                })()}
-                                {/* AI Description In Progress */}
-                                {stats && stats.images_description_pending > 0 && (() => {
-                                    const total = stats.total_images;
-                                    const done = total - stats.images_description_pending;
-                                    const pct = total > 0 ? Math.round((done / total) * 100) : 0;
-                                    const etaSec = Math.round(stats.images_description_pending * 12);
-                                    const etaStr = etaSec < 60 ? `~${etaSec}s`
-                                        : etaSec < 3600 ? `~${Math.round(etaSec / 60)}m`
-                                        : `~${(etaSec / 3600).toFixed(1)}h`;
-                                    return (
-                                        <div className="bg-gray-800 border border-blue-700/50 rounded-xl p-5">
-                                            <div className="flex items-center justify-between mb-3">
-                                                <div className="flex items-center gap-2 text-blue-300 font-semibold text-sm">
-                                                    <Brain className="w-4 h-4" />
-                                                    AI Description In Progress
-                                                </div>
-                                                <span className="text-xs text-gray-400">
-                                                    {stats.images_description_pending.toLocaleString()} pending · ETA {etaStr}
-                                                </span>
-                                            </div>
-                                            <div className="w-full bg-gray-700 rounded-full h-2.5 mb-2">
-                                                <div
-                                                    className="bg-blue-500 h-2.5 rounded-full transition-all duration-500"
-                                                    style={{ width: `${pct}%` }}
-                                                />
-                                            </div>
-                                            <div className="flex justify-between text-xs text-gray-500">
-                                                <span>{done.toLocaleString()} processed</span>
-                                                <span>{pct}%</span>
-                                                <span>{total.toLocaleString()} total</span>
-                                            </div>
-                                        </div>
-                                    );
-                                })()}
-                            </div>
+                            <OverviewTab stats={statsStore.stats} systemStats={statsStore.systemStats} />
                         )}
-
-                        {/* --- Import Tab --- */}
                         {activeTab === 'import' && (
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                <div className="bg-gray-800 shadow-lg rounded-xl p-8 border border-gray-700">
-                                    <div className="flex items-center gap-4 mb-6">
-                                        <div className="p-3 bg-blue-900/30 rounded-lg"><Upload className="w-8 h-8 text-blue-400" /></div>
-                                        <div>
-                                            <h2 className="text-xl font-bold text-gray-100">Browser Upload</h2>
-                                            <p className="text-gray-400 text-sm">Upload directly from this device.</p>
-                                        </div>
-                                    </div>
-                                    <button onClick={() => setShowImportModal(true)} className="w-full py-4 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg shadow-lg active:scale-[0.98] transition-all">
-                                        Select Files
-                                    </button>
-                                </div>
-                                <div className="bg-gray-800 shadow-lg rounded-xl p-8 border border-gray-700">
-                                    <div className="flex items-center gap-4 mb-6">
-                                        <div className="p-3 bg-indigo-900/30 rounded-lg"><Folder className="w-8 h-8 text-indigo-400" /></div>
-                                        <div>
-                                            <h2 className="text-xl font-bold text-gray-100">Server Import</h2>
-                                            <p className="text-gray-400 text-sm">Scan a folder on the server's disk.</p>
-                                        </div>
-                                    </div>
-                                    <button onClick={() => setShowServerImportModal(true)} className="w-full py-4 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg shadow-lg active:scale-[0.98] transition-all">
-                                        Choose Directory
-                                    </button>
-                                </div>
-                            </div>
+                            <ImportTab
+                                onOpenBrowserImport={() => setShowImportModal(true)}
+                                onOpenServerImport={() => setShowServerImportModal(true)}
+                            />
                         )}
-
-                        {/* --- Backup Tab --- */}
                         {activeTab === 'backup' && (
-                            <div className="bg-gray-800/80 backdrop-blur-md shadow-2xl rounded-2xl border border-gray-700 overflow-hidden">
-                                {/* Header */}
-                                <div className="px-8 py-6 border-b border-gray-700 bg-gray-800/50 flex justify-between items-center">
-                                    <div>
-                                        <h2 className="text-2xl font-bold text-gray-100 flex items-center">
-                                            <Network className="w-7 h-7 text-blue-400 mr-3" /> P2P Backup
-                                        </h2>
-                                        <p className="text-gray-500 text-sm mt-1">Distributed 3/5 Reed-Solomon Sharding</p>
-                                    </div>
-                                    <div className="flex items-center gap-3">
-                                        <button onClick={handleVerifyBackup} disabled={isVerifying} className="flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg active:scale-95 transition-all">
-                                            {isVerifying ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Shield className="w-4 h-4" />}
-                                            {isVerifying ? 'Verifying...' : 'Verify Shards'}
-                                        </button>
-                                        <button onClick={handleForceRebalance} disabled={isRebalancing} className="flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold bg-amber-600 hover:bg-amber-500 text-white shadow-lg active:scale-95 transition-all">
-                                            {isRebalancing ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Shuffle className="w-4 h-4" />}
-                                            {isRebalancing ? 'Rebalancing...' : 'Force Rebalance'}
-                                        </button>
-                                        <button onClick={() => statsStore.fetchP2PBackupStatus()} className="p-2.5 bg-gray-700 hover:bg-gray-600 rounded-xl text-gray-300">
-                                            <RefreshCw className={`w-5 h-5 ${statsStore.isP2PBackupStatsLoading ? 'animate-spin' : ''}`} />
-                                        </button>
-                                    </div>
-                                </div>
-
-                                <div className="p-8 space-y-6">
-                                    {/* Stat chips row */}
-                                    <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-                                        <div className="bg-gray-900/50 rounded-xl p-4 border border-gray-700 flex items-center gap-4">
-                                            <div className="p-2.5 bg-green-900/30 rounded-lg"><Activity className="w-5 h-5 text-green-400" /></div>
-                                            <div>
-                                                <div className="text-[10px] text-gray-500 uppercase font-bold">Active Peers</div>
-                                                <div className="text-2xl font-black text-white">{p2pStatus?.active_peers ?? 0}</div>
-                                            </div>
-                                        </div>
-                                        <div className="bg-gray-900/50 rounded-xl p-4 border border-gray-700 flex items-center gap-4">
-                                            <div className="p-2.5 bg-indigo-900/30 rounded-lg"><Database className="w-5 h-5 text-indigo-400" /></div>
-                                            <div>
-                                                <div className="text-[10px] text-gray-500 uppercase font-bold">Total Shards</div>
-                                                <div className="text-2xl font-black text-indigo-400">{p2pStatus?.total_shards_stored ?? 0}</div>
-                                            </div>
-                                        </div>
-                                        <div className="bg-gray-900/50 rounded-xl p-4 border border-gray-700">
-                                            <div className="flex justify-between items-center text-xs mb-2">
-                                                <span className="text-gray-400 flex items-center gap-1.5"><Image className="w-3.5 h-3.5 text-blue-400" /> Photos</span>
-                                                <span className="flex items-center gap-2">
-                                                    {p2pStatus && p2pStatus.pending_images > 0 && (
-                                                        <span className="text-[9px] text-amber-400 font-bold">{p2pStatus.pending_images.toLocaleString()} pending</span>
-                                                    )}
-                                                    <span className="text-white font-bold">{stats?.total_p2p_synced_images ?? 0} / {stats?.total_images ?? 0}</span>
-                                                </span>
-                                            </div>
-                                            <div className="h-2 bg-gray-800 rounded-full overflow-hidden">
-                                                <div className="h-full bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,0.5)] transition-all duration-1000" style={{ width: `${stats?.total_images ? (stats.total_p2p_synced_images / stats.total_images) * 100 : 0}%` }} />
-                                            </div>
-                                        </div>
-                                        <div className="bg-gray-900/50 rounded-xl p-4 border border-gray-700">
-                                            <div className="flex justify-between items-center text-xs mb-2">
-                                                <span className="text-gray-400 flex items-center gap-1.5"><Video className="w-3.5 h-3.5 text-purple-400" /> Videos</span>
-                                                <span className="flex items-center gap-2">
-                                                    {p2pStatus && p2pStatus.pending_videos > 0 && (
-                                                        <span className="text-[9px] text-amber-400 font-bold">{p2pStatus.pending_videos.toLocaleString()} pending</span>
-                                                    )}
-                                                    <span className="text-white font-bold">{stats?.total_p2p_synced_videos ?? 0} / {stats?.total_videos ?? 0}</span>
-                                                </span>
-                                            </div>
-                                            <div className="h-2 bg-gray-800 rounded-full overflow-hidden">
-                                                <div className="h-full bg-purple-500 shadow-[0_0_8px_rgba(168,85,247,0.5)] transition-all duration-1000" style={{ width: `${stats?.total_videos ? (stats.total_p2p_synced_videos / stats.total_videos) * 100 : 0}%` }} />
-                                            </div>
-                                        </div>
-                                    </div>
-
-                                    {/* Reconstruction health + DB backups */}
-                                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                                        <div className="lg:col-span-2 bg-gray-900/50 rounded-2xl p-6 border border-gray-700">
-                                            <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
-                                                <h3 className="text-xs font-bold text-gray-500 uppercase tracking-widest flex items-center gap-2">
-                                                    <Shield className="w-4 h-4 text-teal-400" /> Reconstruction Health
-                                                </h3>
-                                                <span className={`px-3 py-1 rounded-full text-[10px] font-bold border ${(p2pStatus?.active_peers ?? 0) >= 5 ? 'bg-green-900/30 text-green-400 border-green-500/20' : (p2pStatus?.active_peers ?? 0) >= 3 ? 'bg-yellow-900/30 text-yellow-400 border-yellow-500/20' : 'bg-red-900/30 text-red-400 border-red-500/20'}`}>
-                                                    {(p2pStatus?.active_peers ?? 0)} / 5 storage nodes
-                                                </span>
-                                            </div>
-                                            <p className="text-[10px] text-gray-500 mb-4">Needs 3 shards (nodes) to rebuild a file · 5 for full parity redundancy. Only shards on currently-reachable nodes count.</p>
-                                            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-                                                <div className="bg-gray-800/60 rounded-xl p-4 border border-emerald-500/20 text-center">
-                                                    <div className="text-2xl font-black text-emerald-400">{p2pStatus?.ok_files?.toLocaleString() ?? 0}</div>
-                                                    <div className="text-[9px] text-emerald-500/80 font-black uppercase mt-1">Full 5/5</div>
-                                                </div>
-                                                <div className="bg-gray-800/60 rounded-xl p-4 border border-yellow-500/20 text-center">
-                                                    <div className="text-2xl font-black text-yellow-400">{p2pStatus?.degraded_files?.toLocaleString() ?? 0}</div>
-                                                    <div className="text-[9px] text-yellow-500/80 font-black uppercase mt-1">Degraded 3-4/5</div>
-                                                </div>
-                                                <div className="bg-gray-800/60 rounded-xl p-4 border border-red-500/20 text-center">
-                                                    <div className="text-2xl font-black text-red-400">{p2pStatus?.failed_files?.toLocaleString() ?? 0}</div>
-                                                    <div className="text-[9px] text-red-500/80 font-black uppercase mt-1">At Risk 1-2/5</div>
-                                                </div>
-                                                <div className="bg-gray-800/60 rounded-xl p-4 border border-gray-700 text-center">
-                                                    <div className="text-2xl font-black text-gray-400">{p2pStatus?.missing_files?.toLocaleString() ?? 0}</div>
-                                                    <div className="text-[9px] text-gray-500 font-black uppercase mt-1">Offline 0/5</div>
-                                                </div>
-                                            </div>
-                                        </div>
-
-                                        <div className="bg-gray-900/50 rounded-2xl p-6 border border-gray-700">
-                                            <h3 className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-4 flex items-center gap-2">
-                                                <Database className="w-4 h-4 text-indigo-400" /> Database Backups
-                                            </h3>
-                                            {p2pStatus && p2pStatus.db_backups_count > 0 ? (
-                                                <div className="space-y-4">
-                                                    <div className="flex items-center justify-between">
-                                                        <span className="text-xs text-gray-500">Snapshots</span>
-                                                        <span className="text-xl font-black text-white">{p2pStatus.db_backups_count}</span>
-                                                    </div>
-                                                    <div className="flex items-center justify-between">
-                                                        <span className="text-xs text-gray-500">Total size</span>
-                                                        <span className="text-sm font-bold text-indigo-400">{formatBytes(p2pStatus.db_backups_total_bytes)}</span>
-                                                    </div>
-                                                    <div className="flex items-center justify-between">
-                                                        <span className="text-xs text-gray-500">Latest</span>
-                                                        <span className="text-sm font-bold text-gray-300">
-                                                            {p2pStatus.db_backups_latest_at ? new Date(p2pStatus.db_backups_latest_at).toLocaleString() : '—'}
-                                                        </span>
-                                                    </div>
-                                                    <p className="text-[10px] text-gray-600 pt-2 border-t border-gray-700/50">Rolling pg_dump snapshots distributed across the mesh via 3/5 erasure coding.</p>
-                                                </div>
-                                            ) : (
-                                                <p className="text-xs text-gray-500 italic">No database snapshots yet.</p>
-                                            )}
-                                        </div>
-                                    </div>
-
-                                    {/* Mesh Shard Distribution & Rebalance Progress */}
-                                    <P2PRebalanceProgress />
-
-                                    {/* Engine info + Peers */}
-                                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                                        {/* Engine status */}
-                                        <div className="bg-gray-900/50 rounded-2xl p-6 border border-gray-700 flex flex-col gap-5">
-                                            <div className="flex justify-between items-start">
-                                                <div>
-                                                    <h3 className="text-xs font-bold text-gray-500 uppercase tracking-widest flex items-center gap-2">
-                                                        <Server className="w-4 h-4 text-purple-400" /> P2P Engine
-                                                    </h3>
-                                                    <p className="text-lg font-bold text-white mt-1">Dynamic Mesh</p>
-                                                </div>
-                                                {p2pStatus?.health_status === 'critical'
-                                                    ? <span className="px-3 py-1 bg-red-900/30 text-red-400 text-[10px] font-bold rounded-full border border-red-500/20">AT RISK</span>
-                                                    : p2pStatus?.health_status === 'degraded'
-                                                    ? <span className="px-3 py-1 bg-yellow-900/30 text-yellow-400 text-[10px] font-bold rounded-full border border-yellow-500/20">DEGRADED</span>
-                                                    : <span className="px-3 py-1 bg-green-900/30 text-green-400 text-[10px] font-bold rounded-full border border-green-500/20">ONLINE</span>
-                                                }
-                                            </div>
-                                            <div className="pt-4 border-t border-gray-700/50 mt-auto">
-                                                <div className="text-[10px] text-gray-500 uppercase mb-2">Local Node ID</div>
-                                                <code className="text-[10px] text-blue-300 font-mono break-all bg-black/30 p-2.5 rounded-lg block">{p2pStatus?.local_peer_id || 'Generating...'}</code>
-                                            </div>
-                                        </div>
-
-                                        {/* Peers — spans 2 columns, uses 2-col internal grid */}
-                                        <div className="lg:col-span-2 bg-gray-900/50 rounded-2xl p-6 border border-gray-700">
-                                            <h3 className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-4 flex items-center gap-2">
-                                                <Activity className="w-4 h-4 text-green-400" /> Storage Nodes
-                                            </h3>
-                                            {discoveredPeers.length > 0 ? (
-                                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                                                    {discoveredPeers.map((peer) => (
-                                                        <div key={peer.peer_id} className={`border p-4 rounded-xl flex items-center justify-between group transition-colors ${peer.is_active ? 'bg-gray-800/80 border-gray-700/50 hover:border-blue-500/50' : 'bg-gray-900/40 border-gray-700/30 opacity-60'}`}>
-                                                            <div className="overflow-hidden min-w-0">
-                                                                <div className="text-[9px] text-gray-500 uppercase font-black">{peer.is_active ? 'Storage Node' : 'Offline Node'}</div>
-                                                                <code className="text-xs text-gray-300 font-mono block truncate">{peer.peer_id.substring(0, 20)}...</code>
-                                                                {peer.public_addr && (
-                                                                    <div className="text-[9px] text-gray-600 font-mono mt-0.5 truncate">{peer.public_addr}</div>
-                                                                )}
-                                                                {peer.shard_count > 0 && (
-                                                                    <div className={`text-[9px] font-bold mt-1 ${peer.is_active ? 'text-indigo-400' : 'text-yellow-600'}`}>
-                                                                        {peer.shard_count} shards{!peer.is_active && ' (pending rebalance)'}
-                                                                    </div>
-                                                                )}
-                                                            </div>
-                                                            <div className="flex flex-col items-end gap-1 ml-3 flex-shrink-0">
-                                                                <span className={`w-2.5 h-2.5 rounded-full shadow-lg ${peer.is_active ? 'bg-green-400 animate-pulse shadow-green-500/20' : 'bg-red-500 shadow-red-500/20'}`} />
-                                                                <span className="text-[9px] text-gray-500">{new Date(peer.last_seen).toLocaleTimeString()}</span>
-                                                                {!peer.is_active && (
-                                                                    <button onClick={() => handleRemoveNode(peer.peer_id, peer.shard_count)}
-                                                                        className="p-1.5 rounded-lg bg-red-900/40 hover:bg-red-600 text-red-400 hover:text-white transition-colors"
-                                                                        title="Remove offline node">
-                                                                        <Trash2 className="w-3.5 h-3.5" />
-                                                                    </button>
-                                                                )}
-                                                            </div>
-                                                        </div>
-                                                    ))}
-                                                </div>
-                                            ) : (
-                                                <div className="text-center py-12 bg-gray-800/30 rounded-2xl border border-dashed border-gray-700">
-                                                    <AlertTriangle className="w-8 h-8 text-gray-600 mx-auto mb-3" />
-                                                    <p className="text-gray-500 text-xs font-medium">Waiting for peers...</p>
-                                                </div>
-                                            )}
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
+                            <BackupTab
+                                stats={statsStore.stats}
+                                p2pStatus={statsStore.p2pBackupStatus}
+                                discoveredPeers={statsStore.discoveredPeers || []}
+                                isVerifying={isVerifying}
+                                isRebalancing={isRebalancing}
+                                isLoadingStatus={statsStore.isP2PBackupStatsLoading}
+                                onVerifyBackup={handleVerifyBackup}
+                                onForceRebalance={handleForceRebalance}
+                                onRefreshStatus={() => statsStore.fetchP2PBackupStatus()}
+                                onRemoveNode={handleRemoveNode}
+                            />
                         )}
-
-                        {/* --- System Tab --- */}
                         {activeTab === 'system' && (
-                            <div className="space-y-6">
-                                <AiModelsViewer />
-                                <div className="bg-gray-800 shadow-xl rounded-xl p-8 border border-gray-700">
-                                    <h2 className="text-xl font-bold text-gray-100 mb-6 flex items-center"><ShieldAlert className="w-6 h-6 text-amber-400 mr-3" /> Health Alerts</h2>
-                                    {systemStore.alerts.length === 0 ? (
-                                        <div className="text-gray-500 italic">No alert data yet.</div>
-                                    ) : (
-                                        <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-                                            {systemStore.alerts.map((a) => (
-                                                <div
-                                                    key={a.id}
-                                                    className={`flex items-start gap-3 rounded-lg border px-4 py-3 text-sm ${
-                                                        a.status === 'firing'
-                                                            ? a.severity === 'critical'
-                                                                ? 'bg-red-900/40 border-red-700 text-red-200'
-                                                                : 'bg-amber-900/40 border-amber-700 text-amber-200'
-                                                            : 'bg-emerald-900/30 border-emerald-800 text-emerald-200'
-                                                    }`}
-                                                >
-                                                    <span className={`mt-1.5 w-2 h-2 rounded-full shrink-0 ${a.status === 'firing' ? (a.severity === 'critical' ? 'bg-red-500' : 'bg-amber-400') : 'bg-emerald-400'}`} />
-                                                    <div className="min-w-0">
-                                                        <div className="font-semibold">{a.message}</div>
-                                                        <div className="text-xs opacity-80 truncate">{a.detail}</div>
-                                                    </div>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    )}
-                                </div>
-
-                                                                <div className="bg-gray-800 shadow-xl rounded-xl p-8 border border-gray-700">
-                                    <h2 className="text-xl font-bold text-gray-100 mb-6 flex items-center"><AlertTriangle className="w-6 h-6 text-red-400 mr-3" /> Recent Errors & Telemetry</h2>
-                                    <ErrorsViewer />
-                                </div>
-
-                                <div className="bg-gray-800 shadow-xl rounded-xl p-8 border border-gray-700">
-                                    <h2 className="text-xl font-bold text-gray-100 mb-8 flex items-center"><Activity className="w-6 h-6 text-blue-400 mr-3" /> System Resources</h2>
-                                    {systemStats ? (
-                                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8">
-                                            <div className="p-4 bg-gray-900/50 rounded-xl border border-gray-700">
-                                                <dt className="text-xs font-black text-gray-500 uppercase mb-3 flex items-center gap-2"><Cpu className="w-4 h-4 text-blue-400" /> CPU</dt>
-                                                <dd className="text-3xl font-black text-white">{systemStats.cpu_usage_percent.toFixed(1)}%</dd>
-                                                {systemStats.cpu_temp_celsius !== null && <dd className="text-[10px] text-gray-500 mt-1 font-bold">{systemStats.cpu_temp_celsius.toFixed(0)}°C</dd>}
-                                            </div>
-                                            <div className="p-4 bg-gray-900/50 rounded-xl border border-gray-700">
-                                                <dt className="text-xs font-black text-gray-500 uppercase mb-3 flex items-center gap-2"><MemoryStick className="w-4 h-4 text-purple-400" /> RAM</dt>
-                                                <dd className="text-3xl font-black text-white">{systemStats.memory_usage_percent.toFixed(1)}%</dd>
-                                                <dd className="text-[10px] text-gray-500 mt-1 font-bold">{systemStats.memory_used_gb.toFixed(1)} GB used</dd>
-                                            </div>
-                                            <div className="p-4 bg-gray-900/50 rounded-xl border border-gray-700">
-                                                <dt className="text-xs font-black text-gray-500 uppercase mb-3 flex items-center gap-2"><HardDrive className="w-4 h-4 text-green-400" /> Disk</dt>
-                                                <dd className="text-3xl font-black text-white">{systemStats.disk_usage_percent.toFixed(1)}%</dd>
-                                                <dd className="text-[10px] text-gray-500 mt-1 font-bold">{systemStats.disk_available_gb.toFixed(1)} GB free</dd>
-                                            </div>
-                                            <div className="p-4 bg-gray-900/50 rounded-xl border border-gray-700">
-                                                <dt className="text-xs font-black text-gray-500 uppercase mb-3 flex items-center gap-2"><Zap className="w-4 h-4 text-yellow-400" /> GPU</dt>
-                                                <dd className="text-3xl font-black text-white">{systemStats.gpu_usage_percent !== null ? `${systemStats.gpu_usage_percent.toFixed(1)}%` : 'N/A'}</dd>
-                                                <dd className="text-[10px] text-gray-500 mt-1 font-bold">
-                                                    {systemStats.gpu_memory_used_mb !== null && systemStats.gpu_memory_total_mb !== null
-                                                        ? `${(systemStats.gpu_memory_used_mb / 1024).toFixed(1)} / ${(systemStats.gpu_memory_total_mb / 1024).toFixed(0)} GB VRAM`
-                                                        : systemStats.gpu_info || 'No GPU detected'}
-                                                </dd>
-                                                {systemStats.gpu_temp_celsius !== null && <dd className="text-[10px] text-gray-500 mt-1 font-bold">{systemStats.gpu_temp_celsius.toFixed(0)}°C</dd>}
-                                            </div>
-                                            <div className="p-4 bg-gray-900/50 rounded-xl border border-gray-700">
-                                                <dt className="text-xs font-black text-gray-500 uppercase mb-3 flex items-center gap-2"><Clock className="w-4 h-4 text-orange-400" /> Uptime</dt>
-                                                <dd className="text-2xl font-black text-white">{Math.floor(systemStats.uptime_seconds / 3600)}h {Math.floor((systemStats.uptime_seconds % 3600) / 60)}m</dd>
-                                            </div>
-                                        </div>
-                                    ) : <div className="text-gray-500 italic">Waiting for system telemetry...</div>}
-                                </div>
-
-                                <div className="bg-gray-800 shadow-xl rounded-xl p-8 border border-gray-700">
-                                    <h2 className="text-xl font-bold text-gray-100 mb-8 flex items-center"><Database className="w-6 h-6 text-green-400 mr-3" /> Services</h2>
-                                    {(() => {
-                                        const h = statsStore.serviceHealth;
-                                        const dot = (status: string) => status === "connected"
-                                            ? <span className="inline-block w-2.5 h-2.5 rounded-full bg-green-400 mr-2" />
-                                            : <span className="inline-block w-2.5 h-2.5 rounded-full bg-red-500 mr-2" />;
-                                        return (
-                                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                                                <div className="flex items-center p-4 bg-gray-900/50 rounded-xl border border-gray-700">
-                                                    {h ? dot(h.database) : <span className="inline-block w-2.5 h-2.5 rounded-full bg-gray-500 mr-2" />}
-                                                    <span className="text-sm font-semibold text-gray-300">Main Database</span>
-                                                    <span className="ml-auto text-xs text-gray-500">{h?.database ?? '—'}</span>
-                                                </div>
-                                                <div className="flex items-center p-4 bg-gray-900/50 rounded-xl border border-gray-700">
-                                                    {h ? dot(h.geotagging_database) : <span className="inline-block w-2.5 h-2.5 rounded-full bg-gray-500 mr-2" />}
-                                                    <span className="text-sm font-semibold text-gray-300">Geotagging DB</span>
-                                                    <span className="ml-auto text-xs text-gray-500">{h?.geotagging_database ?? '—'}</span>
-                                                </div>
-                                                <div className="flex items-center p-4 bg-gray-900/50 rounded-xl border border-gray-700">
-                                                    {h ? dot(h.ai_service) : <span className="inline-block w-2.5 h-2.5 rounded-full bg-gray-500 mr-2" />}
-                                                    <span className="text-sm font-semibold text-gray-300">AI Service</span>
-                                                    <span className="ml-auto text-xs text-gray-500">{h?.ai_service ?? '—'}</span>
-                                                </div>
-                                            </div>
-                                        );
-                                    })()}
-                                </div>
-
-                                <div className="bg-gray-800 shadow-xl rounded-xl p-8 border border-gray-700">
-                                    <h2 className="text-xl font-bold text-gray-100 mb-6 flex items-center"><Database className="w-6 h-6 text-teal-400 mr-3" /> Geo Database</h2>
-                                    {statsStore.geoDbStats ? (() => {
-                                        const g = statsStore.geoDbStats;
-                                        return (
-                                            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-4">
-                                                <div className="p-4 bg-gray-900/50 rounded-xl border border-gray-700 text-center">
-                                                    <div className="text-[10px] text-gray-500 uppercase font-bold mb-1">Total</div>
-                                                    <div className="text-2xl font-black text-white">{g.total_boundaries.toLocaleString()}</div>
-                                                </div>
-                                                <div className="p-4 bg-gray-900/50 rounded-xl border border-gray-700 text-center">
-                                                    <div className="text-[10px] text-gray-500 uppercase font-bold mb-1">Countries</div>
-                                                    <div className="text-2xl font-black text-blue-400">{g.countries.toLocaleString()}</div>
-                                                </div>
-                                                <div className="p-4 bg-gray-900/50 rounded-xl border border-gray-700 text-center">
-                                                    <div className="text-[10px] text-gray-500 uppercase font-bold mb-1">States</div>
-                                                    <div className="text-2xl font-black text-purple-400">{g.states_provinces.toLocaleString()}</div>
-                                                </div>
-                                                <div className="p-4 bg-gray-900/50 rounded-xl border border-gray-700 text-center">
-                                                    <div className="text-[10px] text-gray-500 uppercase font-bold mb-1">Counties</div>
-                                                    <div className="text-2xl font-black text-indigo-400">{g.counties.toLocaleString()}</div>
-                                                </div>
-                                                <div className="p-4 bg-gray-900/50 rounded-xl border border-gray-700 text-center">
-                                                    <div className="text-[10px] text-gray-500 uppercase font-bold mb-1">Cities</div>
-                                                    <div className="text-2xl font-black text-teal-400">{g.cities.toLocaleString()}</div>
-                                                </div>
-                                                <div className="p-4 bg-gray-900/50 rounded-xl border border-gray-700 text-center">
-                                                    <div className="text-[10px] text-gray-500 uppercase font-bold mb-1">Other</div>
-                                                    <div className="text-2xl font-black text-gray-400">{g.other_boundaries.toLocaleString()}</div>
-                                                </div>
-                                                <div className="p-4 bg-gray-900/50 rounded-xl border border-gray-700 text-center">
-                                                    <div className="text-[10px] text-gray-500 uppercase font-bold mb-1">Unique Countries</div>
-                                                    <div className="text-2xl font-black text-green-400">{g.unique_countries.toLocaleString()}</div>
-                                                </div>
-                                            </div>
-                                        );
-                                    })() : <div className="text-gray-500 italic">Loading geo database stats...</div>}
-                                </div>
-
-                                <div className="bg-gray-800 shadow-xl rounded-xl p-8 border border-gray-700">
-                                    <h2 className="text-xl font-bold text-gray-100 mb-8 flex items-center"><Database className="w-6 h-6 text-indigo-400 mr-3" /> Database Pool</h2>
-                                    {poolStats ? (
-                                        <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-                                            <div className="border-l-4 border-blue-500 pl-6"><dt className="text-xs font-black text-gray-500 uppercase mb-1">Active</dt><dd className="text-3xl font-black text-white">{poolStats.size - Math.max(0, poolStats.available)} / {poolStats.max_size}</dd></div>
-                                            <div className="border-l-4 border-green-500 pl-6"><dt className="text-xs font-black text-gray-500 uppercase mb-1">Utilization</dt><dd className="text-3xl font-black text-white">{poolStats.utilization_percent.toFixed(1)}%</dd></div>
-                                            <div className="border-l-4 border-indigo-500 pl-6"><dt className="text-xs font-black text-gray-500 uppercase mb-1">Free Connections</dt><dd className="text-3xl font-black text-white">{poolStats.available}</dd></div>
-                                        </div>
-                                    ) : <div className="text-gray-500 italic">Connecting to pool metrics...</div>}
-                                </div>
-
-                                <div className="bg-gray-800 shadow-xl rounded-xl p-8 border border-gray-700">
-                                    <h2 className="text-xl font-bold text-gray-100 mb-6 flex items-center"><Zap className="w-6 h-6 text-yellow-400 mr-3" /> Pipeline Timing</h2>
-                                    {systemStore.pipeline ? (
-                                        <div className="overflow-x-auto">
-                                            <table className="w-full text-sm">
-                                                <thead>
-                                                    <tr className="text-left text-gray-500 uppercase text-xs">
-                                                        <th className="pb-2 pr-4">Worker</th>
-                                                        <th className="pb-2 pr-4">Samples</th>
-                                                        <th className="pb-2 pr-4">mean</th>
-                                                        <th className="pb-2 pr-4">p50</th>
-                                                        <th className="pb-2 pr-4">p90</th>
-                                                        <th className="pb-2 pr-4">p95</th>
-                                                        <th className="pb-2">p99</th>
-                                                    </tr>
-                                                </thead>
-                                                <tbody>
-                                                    {[...systemStore.pipeline.workers, systemStore.pipeline.db_query_ms].filter(Boolean).map((w) => (
-                                                        <tr key={w.id} className="border-b border-gray-700/60">
-                                                            <td className="py-2 pr-4 text-gray-200 font-medium">{w.name}</td>
-                                                            <td className="py-2 pr-4 text-gray-400 font-mono">{w.count.toLocaleString()}</td>
-                                                            <td className="py-2 pr-4 text-gray-200 font-mono">{fmtMs(w.mean_ms)}</td>
-                                                            <td className="py-2 pr-4 text-gray-200 font-mono">{fmtMs(w.p50_ms)}</td>
-                                                            <td className="py-2 pr-4 text-gray-200 font-mono">{fmtMs(w.p90_ms)}</td>
-                                                            <td className="py-2 pr-4 text-gray-200 font-mono">{fmtMs(w.p95_ms)}</td>
-                                                            <td className="py-2 text-amber-300 font-mono">{fmtMs(w.p99_ms)}</td>
-                                                        </tr>
-                                                    ))}
-                                                </tbody>
-                                            </table>
-                                        </div>
-                                    ) : (
-                                        <div className="text-gray-500 italic">Waiting for pipeline telemetry...</div>
-                                    )}
-                                </div>
-
-                                <div className="bg-gray-800 shadow-xl rounded-xl p-8 border border-gray-700">
-                                    <h2 className="text-xl font-bold text-gray-100 mb-6 flex items-center"><Network className="w-6 h-6 text-blue-400 mr-3" /> HTTP Traffic</h2>
-                                    {systemStore.pipeline ? (() => {
-                                        const h = systemStore.pipeline.http;
-                                        const statuses = [
-                                            { label: '2xx', value: h.status.http_2xx, cls: 'bg-green-500' },
-                                            { label: '3xx', value: h.status.http_3xx, cls: 'bg-blue-500' },
-                                            { label: '4xx', value: h.status.http_4xx, cls: 'bg-amber-500' },
-                                            { label: '5xx', value: h.status.http_5xx, cls: 'bg-red-500' },
-                                        ];
-                                        const max = Math.max(1, ...statuses.map((s) => s.value));
-                                        return (
-                                            <div className="space-y-4">
-                                                <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-                                                    <div className="border-l-4 border-blue-500 pl-4">
-                                                        <dt className="text-xs font-black text-gray-500 uppercase mb-1">Total requests</dt>
-                                                        <dd className="text-2xl font-black text-white">{h.total.toLocaleString()}</dd>
-                                                    </div>
-                                                    <div className="border-l-4 border-indigo-500 pl-4">
-                                                        <dt className="text-xs font-black text-gray-500 uppercase mb-1">Requests / sec</dt>
-                                                        <dd className="text-2xl font-black text-white">{h.per_second.toFixed(2)}</dd>
-                                                    </div>
-                                                    <div className="border-l-4 border-purple-500 pl-4">
-                                                        <dt className="text-xs font-black text-gray-500 uppercase mb-1">HTTP p95</dt>
-                                                        <dd className="text-2xl font-black text-white">{fmtMs(h.duration_ms.p95_ms)}</dd>
-                                                    </div>
-                                                    <div className="border-l-4 border-teal-500 pl-4">
-                                                        <dt className="text-xs font-black text-gray-500 uppercase mb-1">HTTP p99</dt>
-                                                        <dd className="text-2xl font-black text-white">{fmtMs(h.duration_ms.p99_ms)}</dd>
-                                                    </div>
-                                                </div>
-                                                <div className="space-y-2">
-                                                    {statuses.map((s) => (
-                                                        <div key={s.label} className="flex items-center gap-3">
-                                                            <span className="w-8 text-xs text-gray-400">{s.label}</span>
-                                                            <div className="flex-1 h-2.5 bg-gray-900/60 rounded-full overflow-hidden">
-                                                                <div className={`h-full rounded-full ${s.cls}`} style={{ width: `${(s.value / max) * 100}%` }} />
-                                                            </div>
-                                                            <span className="w-20 text-right text-xs font-mono text-gray-300">{s.value.toLocaleString()}</span>
-                                                        </div>
-                                                    ))}
-                                                </div>
-                                                <p className="text-[11px] text-gray-500">
-                                                    Duration percentiles: p50 {fmtMs(h.duration_ms.p50_ms)} · p90 {fmtMs(h.duration_ms.p90_ms)} · p95 {fmtMs(h.duration_ms.p95_ms)} · p99 {fmtMs(h.duration_ms.p99_ms)}
-                                                </p>
-                                            </div>
-                                        );
-                                    })() : (
-                                        <div className="text-gray-500 italic">Waiting for HTTP telemetry...</div>
-                                    )}
-                                </div>
-
-                                <div className="bg-gray-800 shadow-xl rounded-xl p-8 border border-gray-700">
-                                    <h2 className="text-xl font-bold text-gray-100 mb-6 flex items-center"><TrendingUp className="w-6 h-6 text-blue-400 mr-3" /> History (1D / 30D / 90D)</h2>
-                                    <Charts store={systemStore} />
-                                </div>
-
-                                <div className="bg-gray-800 shadow-xl rounded-xl p-8 border border-gray-700">
-                                    <h2 className="text-xl font-bold text-gray-100 mb-6 flex items-center"><Activity className="w-6 h-6 text-teal-400 mr-3" /> Live Logs</h2>
-                                    <LogViewer />
-                                </div>
-                            </div>
+                            <SystemTab
+                                systemStats={statsStore.systemStats}
+                                poolStats={statsStore.poolStats?.main_pool}
+                                serviceHealth={statsStore.serviceHealth}
+                                geoDbStats={statsStore.geoDbStats}
+                                systemStore={systemStore}
+                            />
                         )}
-
-                        {/* --- Settings Tab --- */}
                         {activeTab === 'settings' && (
-                            <div className="bg-gray-800 shadow-xl rounded-xl p-8 border border-gray-700">
-                                <h2 className="text-xl font-bold text-gray-100 mb-8 flex items-center"><Brain className="w-6 h-6 text-pink-400 mr-3" /> AI & Processing</h2>
-                                {statsStore.aiSettings ? (
-                                    <div className="space-y-10">
-                                        <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-                                            <label className="flex items-start cursor-pointer p-4 bg-gray-900/30 rounded-xl border border-gray-700 hover:border-blue-500/50 transition-colors">
-                                                <input type="checkbox" checked={enableAiDescriptions} onChange={(e) => setEnableAiDescriptions(e.target.checked)} className="w-6 h-6 mt-1 text-blue-600 bg-gray-700 border-gray-600 rounded focus:ring-blue-500" />
-                                                <div className="ml-4">
-                                                    <span className="text-gray-200 font-bold block">AI Captions</span>
-                                                    <p className="text-[10px] text-gray-500 mt-1 uppercase font-black">Automatic descriptions for images</p>
-                                                </div>
-                                            </label>
-                                            <label className="flex items-start cursor-pointer p-4 bg-gray-900/30 rounded-xl border border-gray-700 hover:border-purple-500/50 transition-colors">
-                                                <input type="checkbox" checked={enableEmbeddings} onChange={(e) => setEnableEmbeddings(e.target.checked)} className="w-6 h-6 mt-1 text-purple-600 bg-gray-700 border-gray-600 rounded focus:ring-purple-500" />
-                                                <div className="ml-4">
-                                                    <span className="text-gray-200 font-bold block">Semantic Index</span>
-                                                    <p className="text-[10px] text-gray-500 mt-1 uppercase font-black">Enable natural language search</p>
-                                                </div>
-                                            </label>
-                                            <label className="flex items-start cursor-pointer p-4 bg-gray-900/30 rounded-xl border border-gray-700 hover:border-orange-500/50 transition-colors">
-                                                <input type="checkbox" checked={enableFaceDetection} onChange={(e) => setEnableFaceDetection(e.target.checked)} className="w-6 h-6 mt-1 text-orange-600 bg-gray-700 border-gray-600 rounded focus:ring-orange-500" />
-                                                <div className="ml-4">
-                                                    <span className="text-gray-200 font-bold block">Face Grouping</span>
-                                                    <p className="text-[10px] text-gray-500 mt-1 uppercase font-black">Identify and cluster people</p>
-                                                </div>
-                                            </label>
-                                        </div>
-                                        <div className="flex justify-end pt-6 border-t border-gray-700">
-                                            <button onClick={handleUpdateSettings} className="px-10 py-4 bg-blue-600 hover:bg-blue-700 text-white font-black rounded-xl shadow-xl shadow-blue-500/20 transition-all active:scale-95">
-                                                SAVE PREFERENCES
-                                            </button>
-                                        </div>
-                                    </div>
-                                ) : <div className="text-gray-500 italic">Syncing settings from vault...</div>}
-                            </div>
+                            <SettingsTab
+                                loaded={!!statsStore.aiSettings}
+                                enableAiDescriptions={enableAiDescriptions}
+                                setEnableAiDescriptions={setEnableAiDescriptions}
+                                enableEmbeddings={enableEmbeddings}
+                                setEnableEmbeddings={setEnableEmbeddings}
+                                enableFaceDetection={enableFaceDetection}
+                                setEnableFaceDetection={setEnableFaceDetection}
+                                onSave={handleUpdateSettings}
+                            />
                         )}
-
-                        {/* --- App Setup Tab --- */}
-                        {activeTab === 'app' && (
-                            <AndroidConnectionQR />
-                        )}
-
-                        {/* --- Users Tab --- */}
-                        {activeTab === 'users' && (
-                            <UserManagement />
-                        )}
+                        {activeTab === 'app' && <AndroidConnectionQR />}
+                        {activeTab === 'users' && <UserManagement />}
                     </>
                 )}
             </div>
@@ -892,94 +287,14 @@ export const Dashboard = observer(() => {
             {/* Modals */}
             {showImportModal && <DirectoryImportModal onClose={() => setShowImportModal(false)} />}
             {showServerImportModal && <ServerImportModal onClose={() => setShowServerImportModal(false)} />}
-
             {showVerifyModal && (
-                <div
-                    className="fixed inset-0 bg-black/80 backdrop-blur-xl flex items-center justify-center z-50 p-4"
-                    onClick={() => setShowVerifyModal(false)}
-                >
-                    <div
-                        role="dialog"
-                        aria-modal="true"
-                        aria-labelledby="verify-modal-title"
-                        onClick={(e) => e.stopPropagation()}
-                        className="bg-gray-800 rounded-3xl border border-gray-700 shadow-2xl max-w-2xl w-full overflow-hidden"
-                    >
-                        <div className="px-8 py-6 border-b border-gray-700 flex justify-between items-center bg-gray-800/50">
-                            <h3 id="verify-modal-title" className="text-xl font-black text-gray-100 flex items-center gap-3"><Shield className="w-6 h-6 text-emerald-400" /> SHARD VERIFICATION</h3>
-                            <button onClick={() => setShowVerifyModal(false)} aria-label="Close modal" className="p-2 hover:bg-gray-700 rounded-full transition-colors"><X className="w-6 h-6 text-gray-400" /></button>
-                        </div>
-                        <div className="p-8" aria-live="polite">
-                            {isVerifying ? (
-                                <div className="flex flex-col items-center justify-center py-16">
-                                    <RefreshCw className="w-16 h-16 text-emerald-400 animate-spin mb-6" />
-                                    <p className="text-gray-100 text-2xl font-black tracking-tight">Checking Integrity...</p>
-                                    <p className="text-gray-500 mt-2 font-bold uppercase text-xs tracking-widest">Scanning network shards</p>
-                                </div>
-                            ) : statsStore.verificationResult ? (
-                                <div className="space-y-8">
-                                    <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
-                                        <div className="bg-emerald-900/20 border border-emerald-500/20 rounded-2xl p-6 text-center">
-                                            <div className="text-3xl font-black text-emerald-400">{statsStore.verificationResult.verified_files}</div>
-                                            <div className="text-[10px] text-emerald-500 font-black uppercase mt-1">Full 5/5</div>
-                                        </div>
-                                        <div className="bg-yellow-900/20 border border-yellow-500/20 rounded-2xl p-6 text-center">
-                                            <div className="text-3xl font-black text-yellow-400">{statsStore.verificationResult.degraded_files}</div>
-                                            <div className="text-[10px] text-yellow-500 font-black uppercase mt-1">Degraded 3-4/5</div>
-                                        </div>
-                                        <div className="bg-red-900/20 border border-red-500/20 rounded-2xl p-6 text-center">
-                                            <div className="text-3xl font-black text-red-400">{statsStore.verificationResult.failed_files}</div>
-                                            <div className="text-[10px] text-red-500 font-black uppercase mt-1">At Risk 1-2/5</div>
-                                        </div>
-                                        <div className="bg-gray-900/40 border border-gray-700 rounded-2xl p-6 text-center">
-                                            <div className="text-3xl font-black text-gray-400">{statsStore.verificationResult.missing_files}</div>
-                                            <div className="text-[10px] text-gray-500 font-black uppercase mt-1">Offline 0/5</div>
-                                        </div>
-                                    </div>
-                                    <div className="space-y-2 max-h-[300px] overflow-y-auto pr-2 scrollbar-thin">
-                                        {statsStore.verificationResult.files.map((file, idx) => {
-                                            const statusColor = file.status === 'ok'
-                                                ? 'text-emerald-400 border-emerald-500/20 bg-emerald-500/5'
-                                                : file.status === 'degraded'
-                                                ? 'text-yellow-400 border-yellow-500/20 bg-yellow-500/5'
-                                                : file.status === 'failed'
-                                                ? 'text-red-400 border-red-500/20 bg-red-500/5'
-                                                : 'text-gray-500 border-gray-500/20 bg-gray-500/5';
-                                            return (
-                                                <div key={idx} className="p-3 rounded-xl border bg-gray-900/50 border-gray-700/50 flex items-center justify-between gap-3 group">
-                                                    <code className="text-[10px] text-gray-500 font-mono group-hover:text-blue-400 transition-colors truncate">{file.root_hash.substring(0, 28)}...</code>
-                                                    <div className="flex items-center gap-2 shrink-0">
-                                                        <span className="text-[9px] text-gray-600 font-mono">{file.shards_available}/{file.shards_total}</span>
-                                                        <div className={`text-[10px] font-black px-2 py-0.5 rounded-full border ${statusColor}`}>
-                                                            {file.status.toUpperCase()}
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                            );
-                                        })}
-                                    </div>
-                                </div>
-                            ) : (
-                                <div className="text-center py-16">
-                                    <Shield className="w-16 h-16 text-gray-700 mx-auto mb-6" />
-                                    <p className="text-gray-400 font-bold uppercase text-xs tracking-widest">Click below to start deep scan</p>
-                                    <button onClick={handleVerifyBackup} className="mt-8 px-10 py-4 bg-emerald-600 hover:bg-emerald-500 text-white font-black rounded-2xl shadow-2xl transition-all active:scale-95">
-                                        START VERIFICATION
-                                    </button>
-                                </div>
-                            )}
-                        </div>
-                        <div className="px-8 py-6 border-t border-gray-700 bg-gray-800/50 flex justify-end">
-                            <button onClick={() => setShowVerifyModal(false)} className="px-8 py-3 bg-gray-700 hover:bg-gray-600 text-gray-200 font-bold rounded-xl transition-all">Close</button>
-                        </div>
-                    </div>
-                </div>
+                <VerifyBackupModal
+                    isVerifying={isVerifying}
+                    verificationResult={statsStore.verificationResult}
+                    onClose={() => setShowVerifyModal(false)}
+                    onStartVerification={handleVerifyBackup}
+                />
             )}
         </div>
     );
 });
-
-function fmtMs(ms: number | null | undefined): string {
-    if (ms === null || ms === undefined) return "—";
-    return ms < 1000 ? `${ms.toFixed(0)} ms` : `${(ms / 1000).toFixed(2)} s`;
-}

@@ -28,8 +28,6 @@ export const PersonGallery = observer(() => {
 
         return () => {
             window.removeEventListener('scroll', handleScroll);
-            // Cleanup thumbnails on unmount
-            personStore.cleanup();
         };
     }, [personStore, handleScroll]);
 
@@ -73,7 +71,7 @@ export const PersonGallery = observer(() => {
         <div>
             <div className="mb-6">
                 <h2 className="text-2xl font-bold text-gray-200">
-                    People ({personStore.persons.length})
+                    People ({personStore.total > 0 ? personStore.total : personStore.persons.length})
                 </h2>
                 <p className="text-sm text-gray-400 mt-1">
                     Click on a person to see all their photos
@@ -90,7 +88,7 @@ export const PersonGallery = observer(() => {
                         aria-label={`View photos of ${person.name || 'Unnamed Person'}`}
                         onClick={() => navigate(`/people/${person.id}`)}
                         onKeyDown={(e) => {
-                            if (e.key === 'Enter' || e.key === ' ') {
+                            if ((e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget) {
                                 e.preventDefault();
                                 navigate(`/people/${person.id}`);
                             }
@@ -124,7 +122,7 @@ export const PersonGallery = observer(() => {
                                         type="text"
                                         value={editName}
                                         onChange={(e) => setEditName(e.target.value)}
-                                        onKeyPress={(e) => {
+                                        onKeyDown={(e) => {
                                             if (e.key === 'Enter') {
                                                 handleSaveName(person.id);
                                             } else if (e.key === 'Escape') {
@@ -159,7 +157,7 @@ export const PersonGallery = observer(() => {
                                             e.stopPropagation();
                                             handleEditName(person.id, person.name);
                                         }}
-                                        className="p-1 opacity-0 group-hover:opacity-100 hover:bg-gray-700 rounded transition-opacity"
+                                        className="p-1 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100 hover:bg-gray-700 rounded transition-opacity"
                                         title="Edit name"
                                     >
                                         <Edit2 size={14} className="text-gray-400" />

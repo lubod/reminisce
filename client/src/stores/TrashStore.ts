@@ -53,10 +53,12 @@ export class TrashStore {
             runInAction(() => {
                 this.items = this.items.filter((item) => item.hash !== hash);
             });
-            // Directly notify MediaStore so it refreshes the library with the restored item
-            this.rootStore.mediaStore?.applyFilters();
-            // Also dispatch window event for external listeners
-            window.dispatchEvent(new CustomEvent("reminisce:media-changed"));
+            // Notify MediaStore so it refreshes the library with the restored item
+            if (this.rootStore.mediaStore) {
+                this.rootStore.mediaStore.applyFilters();
+            } else {
+                window.dispatchEvent(new CustomEvent("reminisce:media-changed"));
+            }
         } catch {
             runInAction(() => {
                 this.error = "Failed to restore item";

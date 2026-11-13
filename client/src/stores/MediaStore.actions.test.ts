@@ -600,11 +600,25 @@ describe("MediaStore map error + grouping", () => {
     });
 
     it("formatDisplayDate renders Today for the current date", () => {
-        const today = new Date().toISOString().split("T")[0];
+        const now = new Date();
+        const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
         const s = makeStore();
-        s.allMedia = [item({ created_at: `${today}T10:00:00Z` })];
+        s.allMedia = [item({ created_at: `${today}T10:00:00` })];
         s.allMediaGroupBy = "day";
         expect(s.groupedAllMedia[0].displayDate).toBe("Today");
+    });
+
+    it("formatDisplayDate parses YYYY-MM-DD in local time without day shift", () => {
+        const s = makeStore();
+        s.allMedia = [item({ created_at: "2024-06-15T12:00:00" })];
+        s.allMediaGroupBy = "day";
+        const expected = new Date(2024, 5, 15).toLocaleDateString("en-US", {
+            weekday: "long",
+            year: "numeric",
+            month: "long",
+            day: "numeric",
+        });
+        expect(s.groupedAllMedia[0].displayDate).toBe(expected);
     });
 });
 

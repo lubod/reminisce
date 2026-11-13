@@ -8,7 +8,13 @@ interface ConnectionInfo {
     node_id: string;
     local_ip?: string;
     tunnel_url?: string;
+    tailscale_url?: string;
 }
+
+const isTailscaleHost = (hostOrUrl: string): boolean => {
+    const clean = hostOrUrl.replace(/^https?:\/\//i, '').split('/')[0].split(':')[0].toLowerCase();
+    return /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d{1,3}\.\d{1,3}$/.test(clean) || clean.endsWith('.ts.net');
+};
 
 export const AndroidConnectionQR = () => {
     const [connectionInfo, setConnectionInfo] = useState<ConnectionInfo | null>(null);
@@ -37,12 +43,30 @@ export const AndroidConnectionQR = () => {
     const { protocol, port } = window.location;
     const suffix = port ? `:${port}` : '';
     const urlEntries: { label: string; url: string }[] = [];
-    if (connectionInfo?.local_ip)
-        urlEntries.push({ label: 'Local Network', url: `${protocol}//${connectionInfo.local_ip}${suffix}` });
-    if (connectionInfo?.tunnel_url)
-        urlEntries.push({ label: 'Remote (via VPS)', url: connectionInfo.tunnel_url });
-    if (urlEntries.length === 0)
-        urlEntries.push({ label: 'Server URL', url: window.location.origin });
+    const seenUrls = new Set<string>();
+    const addEntry = (label: string, url: string) => {
+        if (!seenUrls.has(url)) {
+            seenUrls.add(url);
+            urlEntries.push({ label, url });
+        }
+    };
+
+    if (connectionInfo?.local_ip) {
+        const localUrl = `${protocol}//${connectionInfo.local_ip}${suffix}`;
+        const label = isTailscaleHost(connectionInfo.local_ip) ? 'Tailscale Network' : 'Local Network';
+        addEntry(label, localUrl);
+    }
+    if (connectionInfo?.tailscale_url) {
+        const tsRaw = connectionInfo.tailscale_url.trim();
+        const tsUrl = /^https?:\/\//i.test(tsRaw) ? tsRaw : `${protocol}//${tsRaw}${suffix}`;
+        addEntry('Tailscale Network', tsUrl);
+    }
+    if (connectionInfo?.tunnel_url) {
+        addEntry('Remote (via VPS)', connectionInfo.tunnel_url);
+    }
+    if (urlEntries.length === 0) {
+        addEntry('Server URL', window.location.origin);
+    }
 
     const qrData = connectionInfo ? JSON.stringify({
         node_id: connectionInfo.node_id,

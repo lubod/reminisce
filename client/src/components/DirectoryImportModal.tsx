@@ -352,7 +352,7 @@ export const DirectoryImportModal = observer(({ onClose }: { onClose: () => void
     modalCloseRef.current = handleCancel;
 
     return (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 overscroll-contain">
             <div
                 ref={modalRef}
                 tabIndex={-1}

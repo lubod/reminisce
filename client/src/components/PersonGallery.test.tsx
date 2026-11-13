@@ -80,7 +80,7 @@ describe("PersonGallery", () => {
         await user.click(screen.getByRole("button", { name: /view photos of alice/i }));
         // Navigation target is reflected by MemoryRouter location in the real app;
         // just assert the click handler didn't throw.
-        expect(store.cleanup).not.toHaveBeenCalled();
+        expect(screen.getByText("Alice")).toBeTruthy();
     });
 
     it("renders an unnamed fallback label", () => {

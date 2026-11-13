@@ -56,6 +56,24 @@ export const UserManagement = observer(() => {
         }
     };
 
+    const runUserAction = async (
+        action: () => Promise<{ success: boolean; error?: string }>,
+        successMessage: string,
+        fallbackError: string
+    ): Promise<boolean> => {
+        try {
+            const res = await action();
+            if (res.success) {
+                uiStore.setSuccess(successMessage);
+                return true;
+            }
+            uiStore.setError(res.error || fallbackError);
+        } catch {
+            uiStore.setError(fallbackError);
+        }
+        return false;
+    };
+
     const handleToggleActive = async (user: ManagedUser) => {
         if (isSelf(user)) {
             window.alert("You cannot disable your own account.");
@@ -65,12 +83,11 @@ export const UserManagement = observer(() => {
             window.alert("You cannot disable the last active admin.");
             return;
         }
-        try {
-            await authStore.updateUser(user.id, { is_active: !user.is_active });
-            uiStore.setSuccess(user.is_active ? `Disabled "${user.username}"` : `Enabled "${user.username}"`);
-        } catch {
-            uiStore.setError("Failed to update user");
-        }
+        await runUserAction(
+            () => authStore.updateUser(user.id, { is_active: !user.is_active }),
+            user.is_active ? `Disabled "${user.username}"` : `Enabled "${user.username}"`,
+            "Failed to update user"
+        );
         load();
     };
 
@@ -83,12 +100,11 @@ export const UserManagement = observer(() => {
             window.alert("You cannot demote the last active admin.");
             return;
         }
-        try {
-            await authStore.updateUser(user.id, { role });
-            uiStore.setSuccess(`Updated role for "${user.username}"`);
-        } catch {
-            uiStore.setError("Failed to update user");
-        }
+        await runUserAction(
+            () => authStore.updateUser(user.id, { role }),
+            `Updated role for "${user.username}"`,
+            "Failed to update user"
+        );
         load();
     };
 
@@ -102,25 +118,25 @@ export const UserManagement = observer(() => {
             return;
         }
         if (!window.confirm(`Delete user "${user.username}"? This cannot be undone.`)) return;
-        try {
-            await authStore.deleteUser(user.id);
-            uiStore.setSuccess(`Deleted user "${user.username}"`);
-        } catch {
-            uiStore.setError("Failed to delete user");
-        }
+        await runUserAction(
+            () => authStore.deleteUser(user.id),
+            `Deleted user "${user.username}"`,
+            "Failed to delete user"
+        );
         load();
     };
 
     const handlePasswordReset = async (userId: string) => {
         if (resetPassword.length < 8) return;
-        try {
-            await authStore.updateUser(userId, { password: resetPassword });
-            uiStore.setSuccess("Password updated");
-        } catch {
-            uiStore.setError("Failed to update user");
+        const ok = await runUserAction(
+            () => authStore.updateUser(userId, { password: resetPassword }),
+            "Password updated",
+            "Failed to update user"
+        );
+        if (ok) {
+            setResetUserId(null);
+            setResetPassword("");
         }
-        setResetUserId(null);
-        setResetPassword("");
     };
 
     const roleColor = (role: string) => {

@@ -1,4 +1,4 @@
-import { makeAutoObservable } from "mobx";
+import { makeAutoObservable, runInAction } from "mobx";
 import type { RootStore } from "./RootStore";
 import api from "../api/axiosConfig";
 import { logger } from "../utils/logger";
@@ -41,8 +41,11 @@ export class AuthStore {
     initialize = async () => {
         try {
             const res = await api.get("/auth/setup-status");
-            this.needsSetup = res.data.needs_setup;
-            if (this.needsSetup) {
+            const needsSetup = res.data.needs_setup;
+            runInAction(() => {
+                this.needsSetup = needsSetup;
+            });
+            if (needsSetup) {
                 this.setUser(null);
                 this.setToken(null);
                 this.setImageToken(null);
@@ -50,9 +53,11 @@ export class AuthStore {
                 // Fetch currently authenticated user session (authenticated by the cookie).
                 try {
                     const meRes = await api.get("/auth/me");
-                    this.setUser(meRes.data);
-                    this.setToken(meRes.data.access_token);
-                    this.setImageToken(meRes.data.image_token);
+                    runInAction(() => {
+                        this.setUser(meRes.data);
+                        this.setToken(meRes.data.access_token);
+                        this.setImageToken(meRes.data.image_token);
+                    });
                 } catch (err) {
                     // Only a definitive 401 means the session is gone. Transient failures
                     // (network blips / 5xx) must NOT log the user out.
@@ -65,25 +70,35 @@ export class AuthStore {
                 }
             }
         } catch {
-            this.needsSetup = false;
+            runInAction(() => {
+                this.needsSetup = false;
+            });
         } finally {
-            this.initialized = true;
+            runInAction(() => {
+                this.initialized = true;
+            });
         }
     };
 
     checkSetupStatus = async () => {
         try {
             const res = await api.get("/auth/setup-status");
-            this.needsSetup = res.data.needs_setup;
+            runInAction(() => {
+                this.needsSetup = res.data.needs_setup;
+            });
         } catch {
-            this.needsSetup = false;
+            runInAction(() => {
+                this.needsSetup = false;
+            });
         }
     };
 
     setupAdmin = async (username: string, password: string) => {
         try {
             await api.post("/auth/setup", { username, password });
-            this.needsSetup = false;
+            runInAction(() => {
+                this.needsSetup = false;
+            });
             return { success: true };
         } catch (error: unknown) {
             let message = "Setup failed";
@@ -96,9 +111,11 @@ export class AuthStore {
     login = async (username: string, password: string) => {
         try {
             const response = await api.post("/auth/user-login", { username, password });
-            this.setToken(response.data.access_token);
-            this.setImageToken(response.data.image_token);
-            this.setUser(response.data.user);
+            runInAction(() => {
+                this.setToken(response.data.access_token);
+                this.setImageToken(response.data.image_token);
+                this.setUser(response.data.user);
+            });
             return { success: true };
         } catch (error: unknown) {
             let message = "An unknown error occurred";
@@ -116,9 +133,11 @@ export class AuthStore {
         } catch (e) {
             logger.error("Logout request failed", e);
         }
-        this.setToken(null);
-        this.setImageToken(null);
-        this.setUser(null);
+        runInAction(() => {
+            this.setToken(null);
+            this.setImageToken(null);
+            this.setUser(null);
+        });
     };
 
     setToken = (token: string | null) => {

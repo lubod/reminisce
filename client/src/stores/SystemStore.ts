@@ -1,4 +1,4 @@
-import { makeAutoObservable } from "mobx";
+import { makeAutoObservable, runInAction } from "mobx";
 import axios from "../api/axiosConfig";
 import { isAxiosError } from "axios";
 import { logger } from "../utils/logger";
@@ -115,7 +115,7 @@ export interface AiModelsResponse {
 
 
 export class SystemStore {
-    root: RootStore;
+    rootStore: RootStore;
 
     logs: LogLine[] = [];
     logSource = "ring";
@@ -128,89 +128,84 @@ export class SystemStore {
     series: Series[] = [];
     seriesRange: SeriesRange = "1d";
 
-    isLoading = false;
     lastError: string | null = null;
 
-    constructor(root: RootStore) {
-        this.root = root;
+    constructor(rootStore: RootStore) {
+        this.rootStore = rootStore;
         makeAutoObservable(this);
     }
 
-    async loadLogs(level = "info", limit = 300): Promise<void> {
+    private async fetchInto<T>(
+        context: string,
+        url: string,
+        apply: (data: T) => void,
+        params?: Record<string, string | number>
+    ): Promise<void> {
         try {
-            const resp = await axios.get<LogsResponse>("/admin/logs", {
-                params: { level, limit },
+            const resp = params
+                ? await axios.get<T>(url, { params })
+                : await axios.get<T>(url);
+            runInAction(() => {
+                apply(resp.data);
+                this.lastError = null;
             });
-            this.logs = resp.data.entries;
-            this.logSource = resp.data.source;
-            this.lastError = null;
         } catch (e) {
-            this.recordError("loadLogs", e);
+            this.recordError(context, e);
         }
+    }
+
+    async loadLogs(level = "info", limit = 300): Promise<void> {
+        await this.fetchInto<LogsResponse>(
+            "loadLogs",
+            "/admin/logs",
+            (data) => {
+                this.logs = data.entries;
+                this.logSource = data.source;
+            },
+            { level, limit }
+        );
     }
 
     async loadErrors(): Promise<void> {
-        try {
-            const resp = await axios.get<ErrorsResponse>("/admin/errors");
-            this.errors = resp.data.entries;
-            this.errorCounts = resp.data.count_5m;
-            this.lastError = null;
-        } catch (e) {
-            this.recordError("loadErrors", e);
-        }
+        await this.fetchInto<ErrorsResponse>("loadErrors", "/admin/errors", (data) => {
+            this.errors = data.entries;
+            this.errorCounts = data.count_5m;
+        });
     }
 
     async loadAlerts(): Promise<void> {
-        try {
-            const resp = await axios.get<AlertsResponse>("/admin/alerts");
-            this.alerts = resp.data.alerts;
-            this.lastError = null;
-        } catch (e) {
-            this.recordError("loadAlerts", e);
-        }
+        await this.fetchInto<AlertsResponse>("loadAlerts", "/admin/alerts", (data) => {
+            this.alerts = data.alerts;
+        });
     }
 
     async loadGpu(): Promise<void> {
-        try {
-            const resp = await axios.get<GpuResponse>("/admin/gpu");
-            this.gpu = resp.data;
-            this.lastError = null;
-        } catch (e) {
-            this.recordError("loadGpu", e);
-        }
+        await this.fetchInto<GpuResponse>("loadGpu", "/admin/gpu", (data) => {
+            this.gpu = data;
+        });
     }
 
-    
     async loadAiModels(): Promise<void> {
-        try {
-            const resp = await axios.get<AiModelsResponse>("/admin/ai-models");
-            this.aiModels = resp.data;
-            this.lastError = null;
-        } catch (e) {
-            this.recordError("loadAiModels", e);
-        }
+        await this.fetchInto<AiModelsResponse>("loadAiModels", "/admin/ai-models", (data) => {
+            this.aiModels = data;
+        });
     }
 
     async loadPipeline(): Promise<void> {
-        try {
-            const resp = await axios.get<PipelineResponse>("/admin/pipeline");
-            this.pipeline = resp.data;
-            this.lastError = null;
-        } catch (e) {
-            this.recordError("loadPipeline", e);
-        }
+        await this.fetchInto<PipelineResponse>("loadPipeline", "/admin/pipeline", (data) => {
+            this.pipeline = data;
+        });
     }
 
     async loadSeries(): Promise<void> {
-        try {
-            const resp = await axios.get<SeriesResponse>("/admin/series", {
-                params: { range: this.seriesRange },
-            });
-            this.series = resp.data.series;
-            this.lastError = null;
-        } catch (e) {
-            this.recordError("loadSeries", e);
-        }
+        await this.fetchInto<SeriesResponse>(
+            "loadSeries",
+            "/admin/series",
+            (data) => {
+                this.series = data.series;
+            },
+            { range: this.seriesRange }
+        );
     }
 
     setRange(range: SeriesRange): void {
@@ -228,7 +223,10 @@ export class SystemStore {
         } else {
             detail = String(e);
         }
-        this.lastError = `${context}: ${detail}`;
-        logger.warn(this.lastError);
+        const msg = `${context}: ${detail}`;
+        runInAction(() => {
+            this.lastError = msg;
+        });
+        logger.warn(msg);
     }
 }

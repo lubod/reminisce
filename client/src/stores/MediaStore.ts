@@ -155,6 +155,7 @@ export class MediaStore {
 
     private similarityDebounceTimer: ReturnType<typeof setTimeout> | null = null;
     private locationDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+    private filterReactionDisposer?: () => void;
 
     // Unified Lightbox State
     selectedMediaIndex: number | null = null;
@@ -172,7 +173,7 @@ export class MediaStore {
 
         // MobX Reaction: Automatically refresh data when filters change
         // Search query is now triggered explicitly via Enter key
-        reaction(
+        this.filterReactionDisposer = reaction(
             () => ({ ...this.filters, searchType: this.searchType }),
             () => {
                 if (this.searchMode && this.searchQuery.trim()) {
@@ -189,6 +190,19 @@ export class MediaStore {
         // broadcasts a lightweight event and we apply a silent refresh here.
         window.addEventListener("reminisce:media-changed", this.handleMediaChanged);
     }
+
+    dispose = () => {
+        this.filterReactionDisposer?.();
+        window.removeEventListener("reminisce:media-changed", this.handleMediaChanged);
+        if (this.similarityDebounceTimer) {
+            clearTimeout(this.similarityDebounceTimer);
+            this.similarityDebounceTimer = null;
+        }
+        if (this.locationDebounceTimer) {
+            clearTimeout(this.locationDebounceTimer);
+            this.locationDebounceTimer = null;
+        }
+    };
 
     private handleMediaChanged = () => {
         // Silent refresh: re-sync every view (grid/images/videos/map) with the
@@ -333,8 +347,10 @@ export class MediaStore {
         } catch (error) {
             if (seq === this.requestSeq) {
                 logger.error("Failed to load map points", error);
-                this.mapError = "Failed to load map";
-                this.isMapLoading = false;
+                runInAction(() => {
+                    this.mapError = "Failed to load map";
+                    this.isMapLoading = false;
+                });
             }
         }
     };
@@ -426,7 +442,7 @@ export class MediaStore {
             const response = await axios.get(`/search/images?${params}`);
             const itemsWithThumbnails = this.attachThumbnails(response.data.results.map((item: MediaItem) => ({
                 ...item,
-                thumbnailUrl: item.thumbnail_url ? this.getAuthenticatedUrl(item.thumbnail_url) : undefined
+                thumbnailUrl: item.thumbnail_url ?? undefined
             })));
             // More results exist iff the server reports more than we have now
             // (offset + this page's rows). Do NOT rely on "did we get a full page" —
@@ -462,7 +478,7 @@ export class MediaStore {
         items.map(item => (
             item.thumbnailUrl
                 ? item
-                : { ...item, thumbnailUrl: this.getAuthenticatedUrl(`/api/thumbnail/${item.hash}`) }
+                : { ...item, thumbnailUrl: `/api/thumbnail/${item.hash}` }
         ));
 
     fetchAllMedia = async (page: number = 1, limit: number = 50, append: boolean = false) => {
@@ -496,7 +512,7 @@ export class MediaStore {
             const response = await axios.get<ThumbnailsResponse>(`${endpoint}?${params}`);
             const withUrls = this.attachThumbnails(response.data.thumbnails.map(t => ({
                 ...t,
-                thumbnailUrl: t.thumbnail_url ? this.getAuthenticatedUrl(t.thumbnail_url) : undefined
+                thumbnailUrl: t.thumbnail_url ?? undefined
             })));
             if (seq !== this.requestSeq) return; // stale response — discard
 
@@ -537,7 +553,7 @@ export class MediaStore {
             const response = await axios.get<ThumbnailsResponse>(`/image_thumbnails?${params}`);
             const withUrls = this.attachThumbnails(response.data.thumbnails.map(t => ({
                 ...t,
-                thumbnailUrl: t.thumbnail_url ? this.getAuthenticatedUrl(t.thumbnail_url) : undefined
+                thumbnailUrl: t.thumbnail_url ?? undefined
             })));
             if (seq !== this.requestSeq) return;
 
@@ -581,9 +597,12 @@ export class MediaStore {
     resetZoom = () => { this.zoomScale = 1; this.zoomOffset = { x: 0, y: 0 }; };
 
     openMediaLightbox = async (index: number, source: 'all' | 'custom' = 'all') => {
-        this.lightboxSource = source;
-        this.selectedMediaIndex = index;
-        this.resetZoom();
+        runInAction(() => {
+            this.lightboxSource = source;
+            this.selectedMediaIndex = index;
+            this.resetZoom();
+            this.clearImageMetadata();
+        });
         await this.loadFullMedia(index);
     };
 
@@ -599,22 +618,30 @@ export class MediaStore {
 
     nextMedia = async () => {
         if (!this.isLastMedia && this.selectedMediaIndex !== null) {
-            this.selectedMediaIndex++;
-            this.resetZoom();
-            await this.loadFullMedia(this.selectedMediaIndex);
-            if (this.compareMode && this.selectedMediaIndex < this.activeLightboxItems.length - 1) {
-                await this.loadComparisonMedia(this.selectedMediaIndex + 1);
+            const nextIndex = this.selectedMediaIndex + 1;
+            runInAction(() => {
+                this.selectedMediaIndex = nextIndex;
+                this.resetZoom();
+                this.clearImageMetadata();
+            });
+            await this.loadFullMedia(nextIndex);
+            if (this.compareMode && nextIndex < this.activeLightboxItems.length - 1) {
+                await this.loadComparisonMedia(nextIndex + 1);
             }
         }
     };
 
     previousMedia = async () => {
         if (!this.isFirstMedia && this.selectedMediaIndex !== null) {
-            this.selectedMediaIndex--;
-            this.resetZoom();
-            await this.loadFullMedia(this.selectedMediaIndex);
-            if (this.compareMode && this.selectedMediaIndex < this.activeLightboxItems.length - 1) {
-                await this.loadComparisonMedia(this.selectedMediaIndex + 1);
+            const prevIndex = this.selectedMediaIndex - 1;
+            runInAction(() => {
+                this.selectedMediaIndex = prevIndex;
+                this.resetZoom();
+                this.clearImageMetadata();
+            });
+            await this.loadFullMedia(prevIndex);
+            if (this.compareMode && prevIndex < this.activeLightboxItems.length - 1) {
+                await this.loadComparisonMedia(prevIndex + 1);
             }
         }
     };
@@ -624,9 +651,7 @@ export class MediaStore {
         if (!item) return;
 
         try {
-            const url = this.getAuthenticatedUrl(
-                item.media_type === 'video' ? `/api/video/${item.hash}` : `/api/image/${item.hash}`
-            );
+            const url = item.media_type === 'video' ? `/api/video/${item.hash}` : `/api/image/${item.hash}`;
             runInAction(() => {
                 this.fullMediaUrl = url;
             });
@@ -645,9 +670,7 @@ export class MediaStore {
         const item = this.activeLightboxItems[index];
         if (!item) return;
         try {
-            const url = this.getAuthenticatedUrl(
-                item.media_type === 'video' ? `/api/video/${item.hash}` : `/api/image/${item.hash}`
-            );
+            const url = item.media_type === 'video' ? `/api/video/${item.hash}` : `/api/image/${item.hash}`;
             runInAction(() => { this.comparisonMediaUrl = url; });
         } catch (error) { logger.error("Failed to load comparison", error); }
     };
@@ -689,14 +712,12 @@ export class MediaStore {
 
                 // Cache-bust thumbnail and full image URL so view reloads with new orientation
                 const v = Date.now();
-                const authBase = this.getAuthenticatedUrl(`/api/image/${hash}`);
-                this.fullMediaUrl = `${authBase}${authBase.includes('?') ? '&' : '?'}v=${v}`;
+                this.fullMediaUrl = `/api/image/${hash}?v=${v}`;
 
                 const updateList = (list: MediaItem[]) => {
                     for (const item of list) {
                         if (item.hash === hash) {
-                            const tBase = this.getAuthenticatedUrl(`/api/thumbnail/${hash}`);
-                            item.thumbnailUrl = `${tBase}${tBase.includes('?') ? '&' : '?'}v=${v}`;
+                            item.thumbnailUrl = `/api/thumbnail/${hash}?v=${v}`;
                         }
                     }
                 };
@@ -828,11 +849,6 @@ export class MediaStore {
 
     // --- Helper Methods ---
 
-    // Media URLs are authenticated by the httpOnly session cookie (same-origin requests),
-    // so no token ever needs to appear in the URL query string (which would leak into
-    // nginx logs / history / Referer).
-    getAuthenticatedUrl = (baseUrl: string) => baseUrl;
-
     cleanupThumbnails = () => {
         runInAction(() => { this.allMedia = []; });
     };
@@ -906,7 +922,8 @@ export class MediaStore {
     }
 
     private formatDisplayDate(dateKey: string): string {
-        const date = new Date(dateKey);
+        const [y, m, d] = dateKey.split('-').map(Number);
+        const date = y && m && d ? new Date(y, m - 1, d) : new Date(dateKey);
         const now = new Date();
         const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
         if (dateKey === today) return 'Today';
@@ -980,7 +997,7 @@ export class MediaStore {
                 name: item.name,
                 created_at: item.created_at,
                 place: item.place,
-                thumbnailUrl: this.getAuthenticatedUrl(`/api/image/${item.hash}`)
+                thumbnailUrl: `/api/image/${item.hash}`
             };
         } catch (error) {
             logger.error("Failed to fetch random image for presentation", error);

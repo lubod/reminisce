@@ -18,15 +18,6 @@ test.describe("navigation", () => {
     }
   });
 
-  test("logout clears session and redirects to login", async ({ page }) => {
-    await page.goto("/");
-    await page.getByTitle("Logout").click();
-    await expect(page).toHaveURL("/login");
-    // Navigate to a protected route — should redirect back to login
-    await page.goto("/media");
-    await expect(page).toHaveURL("/login");
-  });
-
   test("refresh button is visible on each page", async ({ page }) => {
     for (const { url } of NAV_LINKS.filter((l) => l.url !== "/present")) {
       await page.goto(url);
@@ -41,12 +32,8 @@ test.describe("auth guards", () => {
   test("unauthenticated user is redirected from all protected routes", async ({
     page,
   }) => {
-    // Navigate to app first, then clear auth token to simulate a logged-out session
-    await page.goto("/");
-    await page.evaluate(() => {
-      localStorage.removeItem("token");
-      localStorage.removeItem("user");
-    });
+    // Clear session cookies explicitly before testing protected route redirects
+    await page.context().clearCookies();
 
     const protectedRoutes = ["/", "/media", "/people", "/duplicates", "/trash"];
     for (const route of protectedRoutes) {

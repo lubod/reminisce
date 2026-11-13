@@ -20,13 +20,19 @@ echo "Generating self-signed SSL certificate for development..."
 echo "Valid for $DAYS_VALID days"
 
 # Generate private key and certificate
-# Including common LAN IP patterns in SAN to reduce browser friction
+# Including common LAN IP patterns and Tailscale MagicDNS wildcard in SAN to reduce browser friction
+SAN="DNS:localhost,DNS:reminisce.local,DNS:*.ts.net,IP:127.0.0.1,IP:192.168.1.197,IP:192.168.1.1,IP:10.0.0.1"
+if [ -n "${EXTRA_SAN_IPS:-}" ]; then
+    SAN="${SAN},${EXTRA_SAN_IPS}"
+    echo "Including extra SANs: ${EXTRA_SAN_IPS}"
+fi
+
 openssl req -x509 -nodes -days $DAYS_VALID \
     -newkey rsa:4096 \
     -keyout "$KEY_FILE" \
     -out "$CERT_FILE" \
     -subj "/C=US/ST=State/L=City/O=Reminisce/CN=reminisce.local" \
-    -addext "subjectAltName=DNS:localhost,DNS:reminisce.local,IP:127.0.0.1,IP:192.168.1.197,IP:192.168.1.1,IP:10.0.0.1"
+    -addext "subjectAltName=${SAN}"
 
 # Set proper permissions
 chmod 600 "$KEY_FILE"

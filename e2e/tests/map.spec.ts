@@ -20,8 +20,21 @@ test.describe("map view", () => {
     test("map toggle is disabled while searching", async ({ page }) => {
         await page.goto("/media");
         const toggle = page.getByRole("button", { name: /map/i });
-        // Not trivially guaranteed to be disabled without a search; at minimum the
-        // page loads and the toggle exists (a regression smoke).
-        await expect(toggle).toBeVisible({ timeout: 10000 });
+        await expect(toggle).toBeEnabled({ timeout: 10000 });
+
+        const filtersToggle = page.getByRole("button", { name: /filters & search/i });
+        await filtersToggle.click();
+        const searchInput = page.getByPlaceholder("Search collection...");
+        await expect(searchInput).toBeVisible();
+
+        await searchInput.fill("sunset");
+        await Promise.all([
+            page.waitForResponse((r) => r.url().includes("/api/search")),
+            searchInput.press("Enter"),
+        ]);
+        await expect(toggle).toBeDisabled();
+
+        await page.getByText("Reset Filters").click();
+        await expect(toggle).toBeEnabled();
     });
 });

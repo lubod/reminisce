@@ -18,6 +18,12 @@ export const PersonDetail = observer(() => {
     const sentinelRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
+        if (personStore.persons.length === 0) {
+            void personStore.fetchPersons(true);
+        }
+    }, [personStore]);
+
+    useEffect(() => {
         const sentinel = sentinelRef.current;
         if (!sentinel) return;
         const observer = new IntersectionObserver(
@@ -241,7 +247,7 @@ export const PersonDetail = observer(() => {
                                     <button
                                         onClick={(e) => handleSetCover(e, image.face_id)}
                                         disabled={settingCoverId === image.face_id}
-                                        className="absolute top-2 left-2 opacity-0 group-hover:opacity-100 bg-black/60 hover:bg-yellow-600 text-white rounded-full p-1 transition-all"
+                                        className="absolute top-2 left-2 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100 bg-black/60 hover:bg-yellow-600 text-white rounded-full p-1 transition-all"
                                         title="Set as cover photo"
                                     >
                                         {settingCoverId === image.face_id

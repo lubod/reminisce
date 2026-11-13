@@ -34,7 +34,7 @@ function toSvg(series: Series, minT: number, maxT: number, minV: number, maxV: n
     return series.points.map((p) => `${x(p.t).toFixed(1)},${y(p.v).toFixed(1)}`).join(" ");
 }
 
-function ChartCard({ spec, store }: { spec: ChartSpec; store: SystemStore }) {
+const ChartCard = observer(function ChartCard({ spec, store }: { spec: ChartSpec; store: SystemStore }) {
     // Hover tooltip: track the time under the cursor and the nearest value per series.
     const [hoverT, setHoverT] = useState<number | null>(null);
 
@@ -67,14 +67,16 @@ function ChartCard({ spec, store }: { spec: ChartSpec; store: SystemStore }) {
     const xOf = (t: number) => PAD_X + ((t - minT) / (maxT - minT || 1)) * (W - PAD_X * 2);
     const timeOfX = (x: number) => minT + ((x - PAD_X) / (W - PAD_X * 2)) * (maxT - minT);
 
-    const hoveredSeries = present
-        .map((s) => {
-            // nearest point in time
-            let best = s.points[0];
-            for (const p of s.points) if (Math.abs(p.t - hoverT!) < Math.abs(best.t - hoverT!)) best = p;
-            return { s, p: best };
-        })
-        .sort((a, b) => (a.p.t - b.p.t) as number);
+    const hoveredSeries = hoverT === null
+        ? []
+        : present
+              .map((s) => {
+                  // nearest point in time
+                  let best = s.points[0];
+                  for (const p of s.points) if (Math.abs(p.t - hoverT) < Math.abs(best.t - hoverT)) best = p;
+                  return { s, p: best };
+              })
+              .sort((a, b) => (a.p.t - b.p.t) as number);
 
     const fmtTime = (t: number) =>
         new Date(t * 1000).toLocaleString(undefined, {
@@ -191,7 +193,7 @@ function ChartCard({ spec, store }: { spec: ChartSpec; store: SystemStore }) {
             </div>
         </div>
     );
-}
+});
 
 function shortName(name: string): string {
     const map: Record<string, string> = {

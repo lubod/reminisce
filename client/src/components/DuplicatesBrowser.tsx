@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { observer } from "mobx-react-lite";
 import { useStore } from "../stores/RootStore";
 import { RefreshCw, Trash2, Copy, ScanSearch, Loader2, ChevronDown } from "lucide-react";
@@ -8,6 +8,14 @@ export const DuplicatesBrowser = observer(() => {
     const { duplicatesStore, authStore } = useStore();
     const isAdmin = authStore.user?.role === "admin";
     const [lightboxState, setLightboxState] = useState<{ groupIdx: number; imageIdx: number } | null>(null);
+    const lastFetchedThresholdRef = useRef<number>(duplicatesStore.threshold);
+
+    const commitThreshold = () => {
+        if (lastFetchedThresholdRef.current !== duplicatesStore.threshold) {
+            lastFetchedThresholdRef.current = duplicatesStore.threshold;
+            void duplicatesStore.fetchDuplicates();
+        }
+    };
 
     useEffect(() => {
         duplicatesStore.fetchDuplicates();
@@ -126,10 +134,12 @@ export const DuplicatesBrowser = observer(() => {
                 <div className="flex items-center gap-4">
                     {/* Threshold slider */}
                     <div className="flex items-center gap-3">
-                        <label className="text-xs text-gray-400 whitespace-nowrap">
+                        <label htmlFor="duplicates-similarity-slider" className="text-xs text-gray-400 whitespace-nowrap">
                             Min similarity: {(duplicatesStore.threshold * 100).toFixed(0)}%
                         </label>
                         <input
+                            id="duplicates-similarity-slider"
+                            aria-label="Minimum similarity"
                             type="range"
                             min="80"
                             max="100"
@@ -138,13 +148,19 @@ export const DuplicatesBrowser = observer(() => {
                             onChange={(e) =>
                                 duplicatesStore.setThreshold(parseInt(e.target.value) / 100)
                             }
+                            onMouseUp={commitThreshold}
+                            onTouchEnd={commitThreshold}
+                            onKeyUp={commitThreshold}
                             className="w-28 h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
                         />
                     </div>
 
                     {/* Refresh button */}
                     <button
-                        onClick={() => duplicatesStore.fetchDuplicates()}
+                        onClick={() => {
+                            lastFetchedThresholdRef.current = duplicatesStore.threshold;
+                            void duplicatesStore.fetchDuplicates();
+                        }}
                         disabled={duplicatesStore.isLoading}
                         className="flex items-center gap-2 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-700 disabled:text-gray-500 text-white text-sm rounded-md transition-colors"
                     >

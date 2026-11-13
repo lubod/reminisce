@@ -280,14 +280,4 @@ describe("PersonStore", () => {
         expect(store.imagesHasMore).toBe(false);
         revoke.mockRestore();
     });
-
-    it("getAuthenticatedUrl passes URLs through unmodified", () => {
-        const { store } = makeStore();
-        expect(store.getAuthenticatedUrl("/api/face/1/thumbnail")).toBe("/api/face/1/thumbnail");
-    });
-
-    it("cleanup is a no-op", () => {
-        const { store } = makeStore();
-        expect(() => store.cleanup()).not.toThrow();
-    });
 });

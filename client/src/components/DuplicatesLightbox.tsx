@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ZoomIn, ZoomOut, Maximize2, ArrowLeftRight, X, Trash2, ChevronLeft, ChevronRight, ChevronUp, ChevronDown, Star } from "lucide-react";
 import type { DuplicateGroup, DuplicateImage } from "../stores/DuplicatesStore";
+import { useZoomPan } from "../hooks/useZoomPan";
 
 interface Props {
     group: DuplicateGroup;
@@ -15,12 +16,10 @@ interface Props {
 export function DuplicatesLightbox({ group, initialIdx, isAdmin, onClose, onDelete, onPrev, onNext }: Props) {
     const [leftIdx, setLeftIdx] = useState(initialIdx);
     const [rightIdx, setRightIdx] = useState(initialIdx === 0 ? 1 : 0);
-    const [transform, setTransform] = useState({ scale: 1, tx: 0, ty: 0 });
-    const [dragging, setDragging] = useState(false);
-    const [dragStart, setDragStart] = useState({ x: 0, y: 0, tx: 0, ty: 0 });
 
     const leftRef = useRef<HTMLDivElement>(null);
     const rightRef = useRef<HTMLDivElement>(null);
+    const zoomContainerRefs = useMemo(() => [leftRef, rightRef], []);
 
     // Authenticated by the httpOnly session cookie — no token in the URL.
     const getAuthUrl = (hash: string) => `/api/image/${hash}`;
@@ -44,40 +43,32 @@ export function DuplicatesLightbox({ group, initialIdx, isAdmin, onClose, onDele
     if (clampedLeft !== leftIdx) setLeftIdx(clampedLeft);
     if (clampedRight !== rightIdx) setRightIdx(clampedRight);
 
-    // Reset zoom when displayed images change (render-phase adjustment keyed on the pair).
     const leftHash = group.images[leftIdx]?.hash;
     const rightHash = group.images[rightIdx]?.hash;
-    const prevPair = useRef<{ l?: string; r?: string }>({ l: undefined, r: undefined });
-    if (prevPair.current.l !== leftHash || prevPair.current.r !== rightHash) {
-        prevPair.current = { l: leftHash, r: rightHash };
-        setTransform({ scale: 1, tx: 0, ty: 0 });
-    }
 
-    // Non-passive wheel zoom (synced)
+    const {
+        scale,
+        x: tx,
+        y: ty,
+        isDragging: dragging,
+        zoomIn,
+        zoomOut,
+        reset: resetZoom,
+        onMouseDown: handleMouseDown,
+        onMouseMove: handleMouseMove,
+        onMouseUp: handleMouseUp,
+    } = useZoomPan(zoomContainerRefs, group.images.length >= 2, {
+        minScale: 0.5,
+        maxScale: 16,
+        wheelInFactor: 1.15,
+        buttonStepFactor: 1.25,
+        onlyPanWhenZoomed: false,
+        zoomAtCursor: true,
+    });
+
     useEffect(() => {
-        const makeHandler = (el: HTMLDivElement) => (e: WheelEvent) => {
-            e.preventDefault();
-            const rect = el.getBoundingClientRect();
-            const cx = e.clientX - rect.left;
-            const cy = e.clientY - rect.top;
-            const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
-            setTransform((prev) => {
-                const s = Math.min(Math.max(prev.scale * factor, 0.5), 16);
-                const r = s / prev.scale;
-                return { scale: s, tx: cx - (cx - prev.tx) * r, ty: cy - (cy - prev.ty) * r };
-            });
-        };
-        const lEl = leftRef.current!;
-        const rEl = rightRef.current!;
-        const lh = makeHandler(lEl);
-        const rh = makeHandler(rEl);
-        lEl.addEventListener("wheel", lh, { passive: false });
-        rEl.addEventListener("wheel", rh, { passive: false });
-        return () => {
-            lEl.removeEventListener("wheel", lh);
-            rEl.removeEventListener("wheel", rh);
-        };
-    }, []);
+        resetZoom();
+    }, [leftHash, rightHash, resetZoom]);
 
     // Cycle the left panel through images in the group; swap panels when hitting the right panel image
     const navigateImage = useCallback((dir: 1 | -1) => {
@@ -103,23 +94,6 @@ export function DuplicatesLightbox({ group, initialIdx, isAdmin, onClose, onDele
         window.addEventListener("keydown", handler);
         return () => window.removeEventListener("keydown", handler);
     }, [onClose, onPrev, onNext, navigateImage]);
-
-    const handleMouseDown = (e: React.MouseEvent) => {
-        if (e.button !== 0) return;
-        setDragging(true);
-        setDragStart({ x: e.clientX, y: e.clientY, tx: transform.tx, ty: transform.ty });
-    };
-
-    const handleMouseMove = (e: React.MouseEvent) => {
-        if (!dragging) return;
-        setTransform((prev) => ({
-            ...prev,
-            tx: dragStart.tx + (e.clientX - dragStart.x),
-            ty: dragStart.ty + (e.clientY - dragStart.y),
-        }));
-    };
-
-    const handleMouseUp = () => setDragging(false);
 
     const handleThumbClick = (idx: number) => {
         if (idx === leftIdx) return;
@@ -176,13 +150,16 @@ export function DuplicatesLightbox({ group, initialIdx, isAdmin, onClose, onDele
     if (!leftImg || !rightImg) return null;
 
     const imgTransformStyle = {
-        transform: `translate(${transform.tx}px, ${transform.ty}px) scale(${transform.scale})`,
+        transform: `translate(${tx}px, ${ty}px) scale(${scale})`,
         transformOrigin: "0 0" as const,
     };
 
     return (
         <div
-            className="fixed inset-0 z-50 flex flex-col bg-black"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Compare duplicate images"
+            className="fixed inset-0 z-50 flex flex-col bg-black overscroll-contain"
             onMouseMove={handleMouseMove}
             onMouseUp={handleMouseUp}
             onMouseLeave={handleMouseUp}
@@ -201,6 +178,7 @@ export function DuplicatesLightbox({ group, initialIdx, isAdmin, onClose, onDele
                             disabled={!onPrev}
                             className="p-1 text-gray-400 hover:text-white hover:bg-gray-700 disabled:opacity-30 disabled:cursor-default rounded"
                             title="Previous group (↑)"
+                            aria-label="Previous group"
                         >
                             <ChevronUp size={15} />
                         </button>
@@ -209,6 +187,7 @@ export function DuplicatesLightbox({ group, initialIdx, isAdmin, onClose, onDele
                             disabled={!onNext}
                             className="p-1 text-gray-400 hover:text-white hover:bg-gray-700 disabled:opacity-30 disabled:cursor-default rounded"
                             title="Next group (↓)"
+                            aria-label="Next group"
                         >
                             <ChevronDown size={15} />
                         </button>
@@ -216,23 +195,26 @@ export function DuplicatesLightbox({ group, initialIdx, isAdmin, onClose, onDele
                 </div>
                 <div className="flex items-center gap-1">
                     <button
-                        onClick={() => setTransform((p) => ({ ...p, scale: Math.min(p.scale * 1.25, 16) }))}
+                        onClick={zoomIn}
                         className="p-1.5 text-gray-300 hover:text-white hover:bg-gray-700 rounded"
                         title="Zoom in"
+                        aria-label="Zoom in"
                     >
                         <ZoomIn size={16} />
                     </button>
                     <button
-                        onClick={() => setTransform((p) => ({ ...p, scale: Math.max(p.scale / 1.25, 0.5) }))}
+                        onClick={zoomOut}
                         className="p-1.5 text-gray-300 hover:text-white hover:bg-gray-700 rounded"
                         title="Zoom out"
+                        aria-label="Zoom out"
                     >
                         <ZoomOut size={16} />
                     </button>
                     <button
-                        onClick={() => setTransform({ scale: 1, tx: 0, ty: 0 })}
+                        onClick={resetZoom}
                         className="p-1.5 text-gray-300 hover:text-white hover:bg-gray-700 rounded"
                         title="Reset zoom (1:1)"
+                        aria-label="Reset zoom"
                     >
                         <Maximize2 size={16} />
                     </button>
@@ -240,6 +222,7 @@ export function DuplicatesLightbox({ group, initialIdx, isAdmin, onClose, onDele
                         onClick={() => { setLeftIdx(rightIdx); setRightIdx(leftIdx); }}
                         className="p-1.5 text-gray-300 hover:text-white hover:bg-gray-700 rounded"
                         title="Swap panels"
+                        aria-label="Swap panels"
                     >
                         <ArrowLeftRight size={16} />
                     </button>
@@ -275,6 +258,7 @@ export function DuplicatesLightbox({ group, initialIdx, isAdmin, onClose, onDele
                         onClick={onClose}
                         className="p-1.5 text-gray-300 hover:text-white hover:bg-gray-700 rounded"
                         title="Close"
+                        aria-label="Close comparison viewer"
                     >
                         <X size={16} />
                     </button>
@@ -292,6 +276,7 @@ export function DuplicatesLightbox({ group, initialIdx, isAdmin, onClose, onDele
                     onMouseDown={(e) => e.stopPropagation()}
                     className="absolute left-2 top-1/2 -translate-y-1/2 z-20 p-2 bg-black/60 hover:bg-black/90 text-white rounded-full transition-colors"
                     title="Previous image (←)"
+                    aria-label="Previous image"
                 >
                     <ChevronLeft size={24} />
                 </button>
@@ -301,6 +286,7 @@ export function DuplicatesLightbox({ group, initialIdx, isAdmin, onClose, onDele
                     onMouseDown={(e) => e.stopPropagation()}
                     className="absolute right-2 top-1/2 -translate-y-1/2 z-20 p-2 bg-black/60 hover:bg-black/90 text-white rounded-full transition-colors"
                     title="Next image (→)"
+                    aria-label="Next image"
                 >
                     <ChevronRight size={24} />
                 </button>
@@ -420,8 +406,9 @@ export function DuplicatesLightbox({ group, initialIdx, isAdmin, onClose, onDele
                         const isLeft = idx === leftIdx;
                         const isRight = idx === rightIdx;
                         return (
-                            <div
+                            <button
                                 key={`${img.hash}-${idx}`}
+                                type="button"
                                 onClick={() => handleThumbClick(idx)}
                                 className={`relative flex-shrink-0 w-16 h-16 rounded overflow-hidden border-2 cursor-pointer transition-colors ${
                                     isLeft
@@ -431,6 +418,7 @@ export function DuplicatesLightbox({ group, initialIdx, isAdmin, onClose, onDele
                                           : "border-gray-600 hover:border-gray-400"
                                 }`}
                                 title={img.name}
+                                aria-label={`Select ${img.name} for comparison`}
                             >
                                 <img
                                     src={getThumbSrc(img.thumbnail_url)}
@@ -447,7 +435,7 @@ export function DuplicatesLightbox({ group, initialIdx, isAdmin, onClose, onDele
                                         R
                                     </div>
                                 )}
-                            </div>
+                            </button>
                         );
                     })}
                 </div>

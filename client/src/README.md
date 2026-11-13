@@ -13,7 +13,7 @@ main.tsx ──▶ telemetry.ts (OpenTelemetry initialization)
                                └── /*     ──▶ ProtectedRoute ──▶ Layout & Dashboard
 ```
 
-1. **Bootstrap**: `main.tsx` initializes OpenTelemetry logging/tracing before rendering `App.tsx`.
+1. **Bootstrap**: `main.tsx` conditionally dynamic-imports `telemetry.ts` only when `VITE_ENABLE_OTEL === 'true'` (keeping default production bundles slim) before rendering `App.tsx`.
 2. **State Context**: `App.tsx` wraps the UI tree in `StoreContext.Provider` supplying the `RootStore` instance accessible via `useStore()`.
 3. **Authentication**: `authStore.initialize()` validates the backend session. Because the session is an `HttpOnly` cookie (not a `localStorage` JWT), re-authentication on page reload goes through the cookie-authenticated `GET /auth/me`.
 4. **Routing**: `ProtectedRoute` gates authenticated routes, rendering `Layout.tsx` with sidebar navigation.
@@ -30,7 +30,8 @@ main.tsx ──▶ telemetry.ts (OpenTelemetry initialization)
 
 ## Subdirectories
 - [api/](file:///Users/ldr/work/reminisce/client/src/api): Axios HTTP client instance and request/response interceptors.
-- [components/](file:///Users/ldr/work/reminisce/client/src/components): React UI components grouped by feature area.
+- [components/](file:///Users/ldr/work/reminisce/client/src/components): React UI components grouped by feature area (`Dashboard/`, `Lightbox/`, `System/`).
+- [hooks/](file:///Users/ldr/work/reminisce/client/src/hooks): Shared React hooks (e.g. `useZoomPan.ts`).
 - [stores/](file:///Users/ldr/work/reminisce/client/src/stores): MobX reactive state stores and `RootStore`.
 - [types/](file:///Users/ldr/work/reminisce/client/src/types): Shared TypeScript interfaces for API DTOs and state objects.
 - [utils/](file:///Users/ldr/work/reminisce/client/src/utils): Helper utilities and loggers.

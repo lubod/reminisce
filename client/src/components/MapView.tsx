@@ -27,25 +27,37 @@ interface MapFeature {
     };
 }
 
+const clusterIconCache = new Map<number, L.DivIcon>();
+const pointIconCache = new Map<string, L.DivIcon>();
+
 function clusterIcon(count: number): L.DivIcon {
-    return L.divIcon({
+    const cached = clusterIconCache.get(count);
+    if (cached) return cached;
+    const icon = L.divIcon({
         className: "",
         html: `<div style="width:40px;height:40px;border-radius:50%;background:#7c3aed;color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.45)">${count}</div>`,
         iconSize: [40, 40],
         iconAnchor: [20, 20],
     });
+    if (clusterIconCache.size < 1000) clusterIconCache.set(count, icon);
+    return icon;
 }
 
 function pointIcon(p: PointProps): L.DivIcon {
+    const key = `${p.hash}_${p.has_thumbnail ? "1" : "0"}`;
+    const cached = pointIconCache.get(key);
+    if (cached) return cached;
     const inner = p.has_thumbnail
-        ? `<img src="/api/thumbnail/${p.hash}" style="width:36px;height:36px;border-radius:9px;object-fit:cover;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.5)" onerror="this.style.visibility='hidden'"/>`
+        ? `<div style="width:36px;height:36px;border-radius:9px;background:#2563eb url('/api/thumbnail/${encodeURIComponent(p.hash)}') center/cover no-repeat;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.5)"></div>`
         : `<div style="width:14px;height:14px;border-radius:50%;background:#2563eb;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.5)"></div>`;
-    return L.divIcon({
+    const icon = L.divIcon({
         className: "",
         html: inner,
         iconSize: [36, 36],
         iconAnchor: [18, 18],
     });
+    if (pointIconCache.size < 2000) pointIconCache.set(key, icon);
+    return icon;
 }
 
 function ClusterLayer({ points, onOpen }: { points: PointProps[]; onOpen: (hash: string) => void }) {
@@ -143,17 +155,21 @@ function ClusterLayer({ points, onOpen }: { points: PointProps[]; onOpen: (hash:
 export const MapView = observer(() => {
     const { mediaStore } = useStore();
 
-    const points: PointProps[] = (mediaStore.mapPoints ?? []).map((p: MapPoint) => ({
-        hash: p.hash,
-        lon: p.lon,
-        lat: p.lat,
-        place: p.place,
-        created_at: p.created_at,
-        starred: p.starred,
-        has_thumbnail: p.has_thumbnail,
-    }));
+    const points: PointProps[] = useMemo(
+        () =>
+            (mediaStore.mapPoints ?? []).map((p: MapPoint) => ({
+                hash: p.hash,
+                lon: p.lon,
+                lat: p.lat,
+                place: p.place,
+                created_at: p.created_at,
+                starred: p.starred,
+                has_thumbnail: p.has_thumbnail,
+            })),
+        [mediaStore.mapPoints]
+    );
 
-    const openPhoto = (hash: string) => mediaStore.openMapPhoto(hash);
+    const openPhoto = useCallback((hash: string) => mediaStore.openMapPhoto(hash), [mediaStore]);
 
     return (
         <div className="relative h-[70vh] w-full rounded-xl overflow-hidden border border-gray-700">

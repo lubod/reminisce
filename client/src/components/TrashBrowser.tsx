@@ -69,7 +69,7 @@ export const TrashBrowser = observer(() => {
                             onError={(e) => { e.currentTarget.style.visibility = "hidden"; }}
                         />
                         {/* Hover overlay */}
-                        <div className="absolute inset-0 bg-black/70 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-between p-2">
+                        <div className="absolute inset-0 bg-black/70 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity flex flex-col justify-between p-2">
                             <div>
                                 <p className="text-xs text-gray-200 truncate font-medium" title={item.name}>
                                     {item.name}

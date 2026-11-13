@@ -10,17 +10,18 @@ State management layer implementing reactive state stores powered by MobX and Mo
   - Async state mutations following `await` MUST be wrapped in `runInAction(() => { ... })` to satisfy MobX strict mode rules.
 - **Error Routing**: Domain stores capture API errors and push global notification banners via `rootStore.uiStore.setError(...)` (or set component-visible error states).
 
-## Store Inventory (9 Stores)
+## Store Inventory (10 Stores)
 
 | Store | Role |
 |-------|------|
 | [RootStore.ts](file:///Users/ldr/work/reminisce/client/src/stores/RootStore.ts) | Central container instantiating and wiring all sub-stores |
 | [AuthStore.ts](file:///Users/ldr/work/reminisce/client/src/stores/AuthStore.ts) | Session state (HttpOnly cookie), current user identity, authentication status |
-| [MediaStore.ts](file:///Users/ldr/work/reminisce/client/src/stores/MediaStore.ts) | Media gallery grid state, pagination, filtering, search criteria, selection |
+| [MediaStore.ts](file:///Users/ldr/work/reminisce/client/src/stores/MediaStore.ts) | Media gallery grid state, pagination, filtering, search criteria, selection, `dispose()` reaction cleanup |
 | [PersonStore.ts](file:///Users/ldr/work/reminisce/client/src/stores/PersonStore.ts) | Face recognition clusters, person naming, and face assignment |
 | [LabelStore.ts](file:///Users/ldr/work/reminisce/client/src/stores/LabelStore.ts) | Tagging system, custom labels, and label assignment |
 | [DuplicatesStore.ts](file:///Users/ldr/work/reminisce/client/src/stores/DuplicatesStore.ts) | Near-duplicate image pairs, similarity scores, and review resolution |
 | [StatsStore.ts](file:///Users/ldr/work/reminisce/client/src/stores/StatsStore.ts) | Dashboard metrics, hardware storage stats, and database telemetry |
+| [SystemStore.ts](file:///Users/ldr/work/reminisce/client/src/stores/SystemStore.ts) | Logs, alerts, errors, GPU status, DB pool stats, and AI service diagnostics |
 | [TrashStore.ts](file:///Users/ldr/work/reminisce/client/src/stores/TrashStore.ts) | Soft-deleted media items and restoration |
 | [UIStore.ts](file:///Users/ldr/work/reminisce/client/src/stores/UIStore.ts) | Global UI state (loading/error/success flags, full-screen mode) |
 

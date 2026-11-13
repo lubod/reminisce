@@ -32,9 +32,12 @@ test.describe("media browser", () => {
   test("typing in search and submitting triggers search", async ({ page }) => {
     const input = page.getByPlaceholder("Search collection...");
     await input.fill("sunset");
-    await input.press("Enter");
-    // Wait for results or no-results — page should not crash
-    await page.waitForTimeout(1000);
+    const [response] = await Promise.all([
+      page.waitForResponse((r) => r.url().includes("/api/search")),
+      input.press("Enter"),
+    ]);
+    expect(response.ok()).toBeTruthy();
+    await expect(page.getByText(/Showing .* result/i)).toBeVisible();
     await expect(page.locator("body")).not.toContainText("Error");
   });
 
@@ -56,8 +59,11 @@ test.describe("media browser", () => {
   test("starred filter button is present and toggles", async ({ page }) => {
     const starBtn = page.getByRole("button", { name: "Starred" });
     await expect(starBtn).toBeVisible();
+    await expect(starBtn).toHaveAttribute("aria-pressed", "false");
     await starBtn.click();
+    await expect(starBtn).toHaveAttribute("aria-pressed", "true");
     await starBtn.click();
+    await expect(starBtn).toHaveAttribute("aria-pressed", "false");
   });
 
   test("reset filters link is present", async ({ page }) => {
@@ -69,41 +75,43 @@ test.describe("media lightbox", () => {
   test("clicking a thumbnail opens lightbox and ESC closes it", async ({ page }) => {
     await page.goto("/media");
 
-    const thumbnails = page.locator("img[alt]").filter({ hasNot: page.locator("[data-navbar]") });
+    const cards = page.getByRole("button", { name: /^Open (image|video)/i });
     try {
-      await expect(thumbnails.first()).toBeVisible({ timeout: 5000 });
+      await expect(cards.first()).toBeVisible({ timeout: 5000 });
     } catch {
       test.skip();
       return;
     }
 
-    await thumbnails.first().click();
-    // Lightbox is open — nav bar should still be visible
-    await expect(page.getByTitle("Logout")).toBeVisible();
+    await cards.first().click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toBeVisible();
     await page.keyboard.press("Escape");
-    // Back to grid — filters toggle should be visible
+    await expect(dialog).not.toBeVisible();
     await expect(page.getByRole("button", { name: /filters & search/i })).toBeVisible();
   });
 
   test("lightbox keyboard navigation works", async ({ page }) => {
     await page.goto("/media");
 
-    const thumbnails = page.locator("img[alt]");
+    const cards = page.getByRole("button", { name: /^Open (image|video)/i });
     try {
-      await expect(thumbnails.nth(1)).toBeVisible({ timeout: 5000 });
+      await expect(cards.nth(1)).toBeVisible({ timeout: 5000 });
     } catch {
       test.skip();
       return;
     }
 
-    await thumbnails.first().click();
-    await page.waitForTimeout(300);
+    await cards.first().click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toBeVisible();
     await page.keyboard.press("ArrowRight");
-    await page.waitForTimeout(200);
+    await expect(dialog).toBeVisible();
     await page.keyboard.press("ArrowLeft");
-    await page.waitForTimeout(200);
+    await expect(dialog).toBeVisible();
     await page.keyboard.press("Escape");
 
+    await expect(dialog).not.toBeVisible();
     await expect(page.getByRole("button", { name: /filters & search/i })).toBeVisible();
   });
 });

@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { observer } from "mobx-react-lite";
 import { useStore } from "../stores/RootStore";
 import {
@@ -18,6 +18,7 @@ import type { Label } from "../stores/LabelStore";
 import { LightboxViewport } from "./Lightbox/LightboxViewport";
 import { LightboxSidebar } from "./Lightbox/LightboxSidebar";
 import { LightboxEnhancePanel } from "./Lightbox/LightboxEnhancePanel";
+import { useZoomPan } from "../hooks/useZoomPan";
 
 export const MediaLightbox = observer(() => {
     const { mediaStore, labelStore, authStore } = useStore();
@@ -38,12 +39,32 @@ export const MediaLightbox = observer(() => {
     const [isRotating, setIsRotating] = useState(false);
     const [isUpdatingPlace, setIsUpdatingPlace] = useState(false);
 
-    // Drag-to-pan state
-    const isDragging = useRef(false);
-    const lastMousePos = useRef({ x: 0, y: 0 });
+    // Zoom/pan viewport ref
     const viewportRef = useRef<HTMLDivElement>(null);
+    const zoomContainerRefs = useMemo(() => [viewportRef], []);
 
     const isOpen = mediaStore.selectedMediaIndex !== null;
+
+    const { isDragging, onMouseDown: handleMouseDown, onMouseMove: handleMouseMove, onMouseUp: handleMouseUp } = useZoomPan(
+        zoomContainerRefs,
+        isOpen,
+        {
+            minScale: 1,
+            maxScale: 10,
+            wheelInFactor: 1.1,
+            onlyPanWhenZoomed: true,
+            zoomAtCursor: false,
+            controlled: {
+                scale: mediaStore.zoomScale,
+                x: mediaStore.zoomOffset.x,
+                y: mediaStore.zoomOffset.y,
+                onUpdate: ({ scale, x, y }) => {
+                    mediaStore.setZoomScale(scale);
+                    mediaStore.setZoomOffset(x, y);
+                },
+            },
+        }
+    );
 
     const selectedMedia = mediaStore.selectedMediaIndex !== null
         ? mediaStore.activeLightboxItems[mediaStore.selectedMediaIndex]
@@ -88,6 +109,7 @@ export const MediaLightbox = observer(() => {
 
     // Keyboard navigation
     useEffect(() => {
+        if (!isOpen) return;
         const handleKeyDown = (e: KeyboardEvent) => {
             const target = e.target as HTMLElement;
             if (
@@ -126,41 +148,7 @@ export const MediaLightbox = observer(() => {
 
         window.addEventListener("keydown", handleKeyDown);
         return () => window.removeEventListener("keydown", handleKeyDown);
-    }, [mediaStore, isAdmin, handleDelete, handleRotate, selectedMedia?.media_type]);
-
-    // Non-passive wheel zoom (native listener via ref, mirrors DuplicatesLightbox)
-    useEffect(() => {
-        if (!isOpen) return;
-        const el = viewportRef.current;
-        if (!el) return;
-        const handleWheel = (e: WheelEvent) => {
-            e.preventDefault();
-            const delta = e.deltaY > 0 ? 0.9 : 1.1;
-            mediaStore.setZoomScale(mediaStore.zoomScale * delta);
-        };
-        el.addEventListener("wheel", handleWheel, { passive: false });
-        return () => el.removeEventListener("wheel", handleWheel);
-    }, [isOpen, mediaStore]);
-
-    const handleMouseDown = (e: React.MouseEvent) => {
-        if (mediaStore.zoomScale > 1) {
-            isDragging.current = true;
-            lastMousePos.current = { x: e.clientX, y: e.clientY };
-        }
-    };
-
-    const handleMouseMove = (e: React.MouseEvent) => {
-        if (isDragging.current) {
-            const dx = e.clientX - lastMousePos.current.x;
-            const dy = e.clientY - lastMousePos.current.y;
-            mediaStore.setZoomOffset(mediaStore.zoomOffset.x + dx, mediaStore.zoomOffset.y + dy);
-            lastMousePos.current = { x: e.clientX, y: e.clientY };
-        }
-    };
-
-    const handleMouseUp = () => {
-        isDragging.current = false;
-    };
+    }, [isOpen, mediaStore, isAdmin, handleDelete, handleRotate, selectedMedia?.media_type]);
 
     // Load metadata when description or exif tab is selected
     useEffect(() => {
@@ -171,9 +159,8 @@ export const MediaLightbox = observer(() => {
         }
     }, [activeTab, selectedMedia, mediaStore]);
 
-    // Reset enhanced view & clear metadata when changing media
+    // Reset enhanced view when changing media
     useEffect(() => {
-        mediaStore.clearImageMetadata();
         setShowNewLabelInput(false);
         setNewLabelName("");
         setMediaLabels([]);
@@ -186,7 +173,7 @@ export const MediaLightbox = observer(() => {
             if (prev) URL.revokeObjectURL(prev);
             return null;
         });
-    }, [mediaStore.selectedMediaIndex, mediaStore]);
+    }, [mediaStore.selectedMediaIndex]);
 
     // Cleanup object URL on unmount
     useEffect(() => {
@@ -317,12 +304,15 @@ export const MediaLightbox = observer(() => {
     const zoomStyle = {
         transform: `scale(${mediaStore.zoomScale}) translate(${mediaStore.zoomOffset.x / mediaStore.zoomScale}px, ${mediaStore.zoomOffset.y / mediaStore.zoomScale}px)`,
         cursor: mediaStore.zoomScale > 1 ? "grab" : "default",
-        transition: isDragging.current ? "none" : "transform 0.1s ease-out",
+        transition: isDragging ? "none" : "transform 0.1s ease-out",
     };
 
     return (
         <div
-            className="fixed inset-0 z-50 bg-black bg-opacity-95 flex items-center justify-center"
+            role="dialog"
+            aria-modal="true"
+            aria-label={selectedMedia.name || "Media viewer"}
+            className="fixed inset-0 z-50 bg-black bg-opacity-95 flex items-center justify-center overscroll-contain"
             onClick={() => mediaStore.closeMediaLightbox()}
         >
             {/* Toolbar */}
@@ -334,6 +324,7 @@ export const MediaLightbox = observer(() => {
                         setShowInfo(!showInfo);
                     }}
                     title="Toggle Information (I)"
+                    aria-label="Toggle Information"
                 >
                     <Info size={24} className="text-white" />
                 </button>
@@ -344,6 +335,7 @@ export const MediaLightbox = observer(() => {
                         mediaStore.toggleCompareMode();
                     }}
                     title="Toggle Compare Mode (C)"
+                    aria-label="Toggle Compare Mode"
                 >
                     <Columns2 size={24} className="text-white" />
                 </button>
@@ -355,6 +347,7 @@ export const MediaLightbox = observer(() => {
                             setShowEnhancePanel(!showEnhancePanel);
                         }}
                         title="AI Photo Enhancement"
+                        aria-label="AI Photo Enhancement"
                     >
                         <Wand2 size={24} />
                     </button>
@@ -394,6 +387,7 @@ export const MediaLightbox = observer(() => {
                         void mediaStore.toggleStarMedia(selectedMedia.hash, selectedMedia.device_id);
                     }}
                     title="Star / Unstar"
+                    aria-label={selectedMedia.starred ? "Unstar media" : "Star media"}
                 >
                     <Star
                         size={24}
@@ -406,6 +400,7 @@ export const MediaLightbox = observer(() => {
                     className="p-2 bg-black bg-opacity-50 rounded hover:bg-opacity-70 text-white"
                     onClick={(e) => e.stopPropagation()}
                     title="Download Original"
+                    aria-label="Download Original"
                 >
                     <Download size={24} />
                 </a>
@@ -417,6 +412,7 @@ export const MediaLightbox = observer(() => {
                             void handleDelete();
                         }}
                         title="Delete (D)"
+                        aria-label="Delete media"
                     >
                         <Trash2 size={24} />
                     </button>
@@ -428,6 +424,7 @@ export const MediaLightbox = observer(() => {
                         mediaStore.closeMediaLightbox();
                     }}
                     title="Close (ESC)"
+                    aria-label="Close media viewer"
                 >
                     <X size={24} />
                 </button>
@@ -457,6 +454,7 @@ export const MediaLightbox = observer(() => {
                         e.stopPropagation();
                         mediaStore.previousMedia();
                     }}
+                    aria-label="Previous media"
                 >
                     &#8249;
                 </button>
@@ -470,6 +468,7 @@ export const MediaLightbox = observer(() => {
                         e.stopPropagation();
                         mediaStore.nextMedia();
                     }}
+                    aria-label="Next media"
                 >
                     &#8250;
                 </button>

@@ -19,28 +19,36 @@ test.describe("trash", () => {
   });
 
   test("deleted item can be restored", async ({ page }) => {
-    // Soft-delete an image via API so trash has an item
-    const token = await page.evaluate(() => localStorage.getItem("token"));
-    const headers = token ? { Authorization: `Bearer ${token}` } : {};
-    const res = await page.request.get("/api/image_thumbnails?limit=1", { headers });
-    if (!res.ok()) { test.skip(); return; }
+    // Session auth uses an HttpOnly cookie shared automatically by page.request
+    const res = await page.request.get("/api/image_thumbnails?limit=1");
+    if (!res.ok()) {
+      test.skip();
+      return;
+    }
     const data = await res.json();
-    if (!data?.items?.length) { test.skip(); return; }
+    const hash: string | undefined = data?.thumbnails?.[0]?.hash;
+    if (!hash) {
+      test.skip();
+      return;
+    }
 
-    const hash = data.items[0].hash;
-    await page.request.post(`/api/image/${hash}/delete`, { headers });
+    const delRes = await page.request.post(`/api/image/${hash}/delete`);
+    expect(delRes.ok()).toBeTruthy();
 
     await page.reload();
 
-    const thumbnail = page.locator("img").first();
-    await expect(thumbnail).toBeVisible();
-    await thumbnail.hover();
+    const targetImg = page.locator(`img[src*="${hash}"]`);
+    await expect(targetImg).toBeVisible();
+    await targetImg.hover();
 
-    const restoreBtn = page.getByRole("button", { name: /restore/i });
+    const restoreBtn = page.getByRole("button", { name: /restore/i }).first();
     await expect(restoreBtn).toBeVisible();
-    await restoreBtn.click();
+    await Promise.all([
+      page.waitForResponse((r) => r.url().includes(`/api/image/${hash}/restore`) && r.ok()),
+      restoreBtn.click(),
+    ]);
 
     // Item disappears from trash
-    await expect(page.locator(`img[src*="${hash}"]`)).not.toBeVisible();
+    await expect(targetImg).not.toBeVisible();
   });
 });

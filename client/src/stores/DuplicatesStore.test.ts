@@ -124,6 +124,17 @@ describe("DuplicatesStore", () => {
         await s.deleteImage("d");
         expect(s.error).toBe("Failed to delete image");
     });
+
+    it("deleteImage decrements totalGroups without clobbering unloaded pages", async () => {
+        mocks.routes["/duplicates"] = () => ({ data: { groups: [group(["a", "b"]), group(["c", "d", "e"])], total_groups: 5, page: 1, limit: 2 } });
+        const s = makeStore();
+        await s.fetchDuplicates();
+        expect(s.totalGroups).toBe(5);
+
+        await s.deleteImage("a");
+        expect(s.groups).toHaveLength(1);
+        expect(s.totalGroups).toBe(4);
+    });
 });
 
 describe("DuplicatesStore worker status + scan", () => {

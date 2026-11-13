@@ -34,15 +34,11 @@ export const OrientationCheck = observer(() => {
         setSelected(index);
         const item = images[index];
         if (!item) return;
-        if (fullUrl?.startsWith('blob:')) URL.revokeObjectURL(fullUrl);
-        const url = mediaStore.getAuthenticatedUrl(
-            item.media_type === "video" ? `/api/video/${item.hash}` : `/api/image/${item.hash}`
-        );
+        const url = item.media_type === "video" ? `/api/video/${item.hash}` : `/api/image/${item.hash}`;
         setFullUrl(url);
     };
 
     const closeFull = () => {
-        if (fullUrl?.startsWith('blob:')) URL.revokeObjectURL(fullUrl);
         setFullUrl(null);
         setSelected(null);
     };
@@ -84,9 +80,7 @@ export const OrientationCheck = observer(() => {
         const nextIndex = Math.min(selected, remaining.length - 1);
         setSelected(nextIndex);
         const nextItem = remaining[nextIndex];
-        setFullUrl(mediaStore.getAuthenticatedUrl(
-            nextItem.media_type === "video" ? `/api/video/${nextItem.hash}` : `/api/image/${nextItem.hash}`
-        ));
+        setFullUrl(nextItem.media_type === "video" ? `/api/video/${nextItem.hash}` : `/api/image/${nextItem.hash}`);
     };
 
     return (
@@ -133,7 +127,7 @@ export const OrientationCheck = observer(() => {
                                             mediaStore.deleteMedia(item.hash).then(() => mediaStore.fetchNoExifImages(1, 50, false));
                                         }
                                     }}
-                                    className="absolute top-2 right-2 p-1.5 rounded-full bg-black/50 opacity-0 group-hover:opacity-100 hover:bg-red-900/80 transition-opacity"
+                                    className="absolute top-2 right-2 p-1.5 rounded-full bg-black/50 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100 hover:bg-red-900/80 transition-opacity"
                                     title="Delete"
                                 >
                                     <Trash2 size={14} className="text-red-400" />
@@ -152,7 +146,12 @@ export const OrientationCheck = observer(() => {
             </div>
 
             {selected !== null && images[selected] && (
-                <div className="fixed inset-0 z-50 bg-black/90 flex flex-col" onClick={() => {}}>
+                <div
+                    role="dialog"
+                    aria-modal="true"
+                    aria-label="Image orientation viewer"
+                    className="fixed inset-0 z-50 bg-black/90 flex flex-col overscroll-contain"
+                >
                     <div className="flex items-center justify-between p-3 bg-black/80">
                         <span className="text-sm text-gray-300 truncate flex-1">
                             {selected + 1} / {images.length} — {images[selected]?.name}
@@ -162,12 +161,11 @@ export const OrientationCheck = observer(() => {
                                 const item = images[selected];
                                 if (!item) return;
                                 await mediaStore.updateImageOrientation(item.hash, "ccw");
-                                const v = Date.now();
-                                const base = mediaStore.getAuthenticatedUrl(`/api/image/${item.hash}`);
-                                setFullUrl(`${base}${base.includes('?') ? '&' : '?'}v=${v}`);
+                                setFullUrl(`/api/image/${item.hash}?v=${Date.now()}`);
                             }}
                             className="p-2 rounded-md hover:bg-gray-700 text-gray-300 mr-1"
                             title="Rotate 90° CCW"
+                            aria-label="Rotate 90° CCW"
                         >
                             <RotateCcw size={20} />
                         </button>
@@ -176,26 +174,25 @@ export const OrientationCheck = observer(() => {
                                 const item = images[selected];
                                 if (!item) return;
                                 await mediaStore.updateImageOrientation(item.hash, "cw");
-                                const v = Date.now();
-                                const base = mediaStore.getAuthenticatedUrl(`/api/image/${item.hash}`);
-                                setFullUrl(`${base}${base.includes('?') ? '&' : '?'}v=${v}`);
+                                setFullUrl(`/api/image/${item.hash}?v=${Date.now()}`);
                             }}
                             className="p-2 rounded-md hover:bg-gray-700 text-gray-300 mr-1"
                             title="Rotate 90° CW"
+                            aria-label="Rotate 90° CW"
                         >
                             <RotateCw size={20} />
                         </button>
                         {isAdmin && (
-                            <button onClick={handleDelete} className="p-2 rounded-md hover:bg-red-900/60 text-red-400 mr-1" title="Delete">
+                            <button onClick={handleDelete} className="p-2 rounded-md hover:bg-red-900/60 text-red-400 mr-1" title="Delete" aria-label="Delete image">
                                 <Trash2 size={20} />
                             </button>
                         )}
-                        <button onClick={closeFull} className="p-2 rounded-md hover:bg-gray-700 text-gray-300" title="Close (Esc)">
+                        <button onClick={closeFull} className="p-2 rounded-md hover:bg-gray-700 text-gray-300" title="Close (Esc)" aria-label="Close viewer">
                             <X size={24} />
                         </button>
                     </div>
                     <div className="flex items-center justify-center flex-1 min-h-0 relative">
-                        <button onClick={() => nav(-1)} className="absolute left-3 p-2 rounded-full bg-black/50 hover:bg-black/80 text-white" title="Previous">
+                        <button onClick={() => nav(-1)} className="absolute left-3 p-2 rounded-full bg-black/50 hover:bg-black/80 text-white" title="Previous" aria-label="Previous image">
                             <ChevronLeft size={28} />
                         </button>
                         <div className="max-h-full max-w-full flex items-center justify-center p-4">
