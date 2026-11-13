@@ -25,6 +25,7 @@ import androidx.media3.ui.PlayerView
 import com.davemorrissey.labs.subscaleview.ImageSource
 import com.davemorrissey.labs.subscaleview.SubsamplingScaleImageView
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.Request
@@ -38,13 +39,14 @@ import java.io.File
 import java.io.FileOutputStream
 import kotlin.math.abs
 
-@UnstableApi
+@androidx.annotation.OptIn(markerClass = [UnstableApi::class])
 class RemoteMediaDetailActivity : AppCompatActivity() {
 
     companion object {
         private const val TAG = "RemoteMediaDetailActivity"
         const val EXTRA_HASH = "IMAGE_HASH"
         const val EXTRA_POSITION = "POSITION"
+        private const val STATE_POSITION = "state_position"
     }
 
     private lateinit var imagePreview: SubsamplingScaleImageView
@@ -74,6 +76,7 @@ class RemoteMediaDetailActivity : AppCompatActivity() {
     private var compareTempFileRight: File? = null
     private var isCompareMode: Boolean = false
     private var currentPosition: Int = 0
+    private var currentMediaJob: Job? = null
     private val hashes get() = MediaSessionHolder.hashes
     private val imageInfos get() = MediaSessionHolder.imageInfos
 
@@ -106,7 +109,11 @@ class RemoteMediaDetailActivity : AppCompatActivity() {
         nextButton = findViewById(R.id.nextButton)
         counterText = findViewById(R.id.counterText)
 
-        currentPosition = intent.getIntExtra(EXTRA_POSITION, 0)
+        currentPosition = savedInstanceState?.getInt(STATE_POSITION)
+            ?: intent.getIntExtra(EXTRA_POSITION, 0)
+        if (hashes.isNotEmpty() && currentPosition >= hashes.size) {
+            currentPosition = hashes.size - 1
+        }
 
         backButton.setOnClickListener { finish() }
         compareButton.setOnClickListener { toggleCompareMode() }
@@ -226,6 +233,8 @@ class RemoteMediaDetailActivity : AppCompatActivity() {
     }
 
     private fun loadMedia(hash: String, mediaType: String) {
+        currentMediaJob?.cancel()
+        currentMediaJob = null
         loadingSpinner.visibility = View.VISIBLE
         releasePlayer()
 
@@ -246,10 +255,13 @@ class RemoteMediaDetailActivity : AppCompatActivity() {
     }
 
     private fun playVideo(mediaUrl: String) {
-        lifecycleScope.launch {
+        currentMediaJob = lifecycleScope.launch {
             val token = withContext(Dispatchers.IO) {
                 AuthHelper.getValidToken(this@RemoteMediaDetailActivity)
-            } ?: return@launch
+            } ?: run {
+                loadingSpinner.visibility = View.GONE
+                return@launch
+            }
 
             val okHttpClient = AuthenticatedHttpClient.getClientWithTimeouts(this@RemoteMediaDetailActivity, 30, 300)
             val dataSourceFactory = OkHttpDataSource.Factory(okHttpClient)
@@ -277,7 +289,7 @@ class RemoteMediaDetailActivity : AppCompatActivity() {
     }
 
     private fun downloadImage(mediaUrl: String) {
-        lifecycleScope.launch {
+        currentMediaJob = lifecycleScope.launch {
             try {
                 val token = withContext(Dispatchers.IO) {
                     AuthHelper.getValidToken(this@RemoteMediaDetailActivity)
@@ -288,34 +300,45 @@ class RemoteMediaDetailActivity : AppCompatActivity() {
                 }
 
                 val tempFile = withContext(Dispatchers.IO) {
-                    val client = AuthenticatedHttpClient.getClient(this@RemoteMediaDetailActivity)
-                    val request = Request.Builder()
-                        .url(mediaUrl)
-                        .addHeader("Authorization", "Bearer $token")
-                        .build()
-                    val response = AuthHelper.executeWithTokenRefresh(this@RemoteMediaDetailActivity, client, request)
-                    if (!response.isSuccessful) return@withContext null
-                    val file = File.createTempFile("rmd_", ".jpg", cacheDir)
-                    try {
-                        response.body?.byteStream()?.use { input ->
-                            FileOutputStream(file).use { output -> input.copyTo(output) }
-                        }
-                        file
-                    } catch (e: Exception) {
-                        file.delete()
-                        throw e
-                    }
+                    downloadImageToCache(mediaUrl, token, "rmd_")
                 }
 
-                currentTempFile?.delete()
-                currentTempFile = tempFile
-                if (tempFile != null) {
-                    imagePreview.setImage(ImageSource.uri(tempFile.absolutePath))
+                if (tempFile != null && (isFinishing || isDestroyed)) {
+                    tempFile.delete()
+                } else {
+                    currentTempFile?.delete()
+                    currentTempFile = tempFile
+                    if (tempFile != null) {
+                        imagePreview.setImage(ImageSource.uri(tempFile.absolutePath))
+                    }
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Log.e(TAG, "Error downloading image", e)
             } finally {
                 loadingSpinner.visibility = View.GONE
+            }
+        }
+    }
+
+    private fun downloadImageToCache(mediaUrl: String, token: String, prefix: String): File? {
+        val client = AuthenticatedHttpClient.getClient(this@RemoteMediaDetailActivity)
+        val request = Request.Builder()
+            .url(mediaUrl)
+            .addHeader("Authorization", "Bearer $token")
+            .build()
+        return AuthHelper.executeWithTokenRefresh(this@RemoteMediaDetailActivity, client, request).use { response ->
+            if (!response.isSuccessful) return null
+            val file = File.createTempFile(prefix, ".jpg", cacheDir)
+            try {
+                response.body?.byteStream()?.use { input ->
+                    FileOutputStream(file).use { output -> input.copyTo(output) }
+                }
+                file
+            } catch (e: Exception) {
+                file.delete()
+                throw e
             }
         }
     }
@@ -402,26 +425,10 @@ class RemoteMediaDetailActivity : AppCompatActivity() {
                 } ?: return@launch
 
                 val tempFile = withContext(Dispatchers.IO) {
-                    val client = AuthenticatedHttpClient.getClient(this@RemoteMediaDetailActivity)
-                    val request = Request.Builder()
-                        .url(mediaUrl)
-                        .addHeader("Authorization", "Bearer $token")
-                        .build()
-                    val response = AuthHelper.executeWithTokenRefresh(this@RemoteMediaDetailActivity, client, request)
-                    if (!response.isSuccessful) return@withContext null
-                    val file = File.createTempFile("cmp_${if (isLeft) "L" else "R"}_", ".jpg", cacheDir)
-                    try {
-                        response.body?.byteStream()?.use { input ->
-                            FileOutputStream(file).use { output -> input.copyTo(output) }
-                        }
-                        file
-                    } catch (e: Exception) {
-                        file.delete()
-                        throw e
-                    }
+                    downloadImageToCache(mediaUrl, token, "cmp_${if (isLeft) "L" else "R"}_")
                 }
 
-                if (tempFile != null) {
+                if (tempFile != null && !isFinishing && !isDestroyed) {
                     if (isLeft) {
                         compareTempFileLeft?.delete()
                         compareTempFileLeft = tempFile
@@ -513,12 +520,25 @@ class RemoteMediaDetailActivity : AppCompatActivity() {
         exoPlayerRight?.pause()
     }
 
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putInt(STATE_POSITION, currentPosition)
+    }
+
     override fun onDestroy() {
         super.onDestroy()
+        currentMediaJob?.cancel()
+        currentMediaJob = null
         releasePlayer()
         releaseComparePlayers()
         currentTempFile?.delete()
         currentTempFile = null
-        MediaSessionHolder.clear()
+        compareTempFileLeft?.delete()
+        compareTempFileLeft = null
+        compareTempFileRight?.delete()
+        compareTempFileRight = null
+        if (isFinishing && !isChangingConfigurations) {
+            MediaSessionHolder.clearMediaSession()
+        }
     }
 }

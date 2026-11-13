@@ -30,6 +30,65 @@ class RemoteMediaRepository(private val context: Context) {
     companion object {
         private const val TAG = "RemoteMediaRepository"
         private const val PAGE_LIMIT = 50
+
+        internal fun parseThumbnailResponse(json: String): ThumbnailResponse {
+            val jsonObject = JSONObject(json)
+            val thumbnailsArray = jsonObject.getJSONArray("thumbnails")
+            val thumbnails = mutableListOf<ThumbnailInfo>()
+
+            for (i in 0 until thumbnailsArray.length()) {
+                val item = thumbnailsArray.getJSONObject(i)
+                thumbnails.add(
+                    ThumbnailInfo(
+                        hash = item.getString("hash"),
+                        created_at = item.getString("created_at"),
+                        place = item.optString("place").takeIf { it.isNotEmpty() && it != "null" },
+                        mediaType = item.optString("media_type", "image"),
+                        name = item.optString("name", ""),
+                        starred = item.optBoolean("starred", false),
+                        device_id = item.optString("device_id").takeIf { it.isNotEmpty() && it != "null" }
+                    )
+                )
+            }
+
+            return ThumbnailResponse(
+                thumbnails = thumbnails,
+                total = jsonObject.getInt("total"),
+                page = jsonObject.getInt("page"),
+                limit = jsonObject.getInt("limit")
+            )
+        }
+
+        internal fun parseSearchResponse(json: String): ThumbnailResponse {
+            val jsonObject = JSONObject(json)
+            val resultsArray = jsonObject.optJSONArray("results") ?: JSONArray()
+            val thumbnails = mutableListOf<ThumbnailInfo>()
+
+            for (i in 0 until resultsArray.length()) {
+                val item = resultsArray.getJSONObject(i)
+                thumbnails.add(
+                    ThumbnailInfo(
+                        hash = item.getString("hash"),
+                        created_at = item.optString("created_at", ""),
+                        place = item.optString("place").takeIf { it.isNotEmpty() && it != "null" },
+                        mediaType = item.optString("media_type", "image"),
+                        name = item.optString("name", ""),
+                        starred = item.optBoolean("starred", false),
+                        device_id = item.optString("device_id").takeIf { it.isNotEmpty() && it != "null" },
+                        similarity = item.optDouble("similarity", 0.0).toFloat()
+                    )
+                )
+            }
+
+            val total = jsonObject.optInt("total", thumbnails.size)
+            // Search responses use offset-based pagination; page field defaults to 1
+            return ThumbnailResponse(
+                thumbnails = thumbnails,
+                total = total,
+                page = 1,
+                limit = thumbnails.size
+            )
+        }
     }
 
     suspend fun fetchRemoteThumbnails(
@@ -334,65 +393,6 @@ class RemoteMediaRepository(private val context: Context) {
             Log.e(TAG, "Error searching places", e)
             Result.failure(e)
         }
-    }
-
-    private fun parseThumbnailResponse(json: String): ThumbnailResponse {
-        val jsonObject = JSONObject(json)
-        val thumbnailsArray = jsonObject.getJSONArray("thumbnails")
-        val thumbnails = mutableListOf<ThumbnailInfo>()
-
-        for (i in 0 until thumbnailsArray.length()) {
-            val item = thumbnailsArray.getJSONObject(i)
-            thumbnails.add(
-                ThumbnailInfo(
-                    hash = item.getString("hash"),
-                    created_at = item.getString("created_at"),
-                    place = item.optString("place").takeIf { it.isNotEmpty() && it != "null" },
-                    mediaType = item.optString("media_type", "image"),
-                    name = item.optString("name", ""),
-                    starred = item.optBoolean("starred", false),
-                    device_id = item.optString("device_id").takeIf { it.isNotEmpty() && it != "null" }
-                )
-            )
-        }
-
-        return ThumbnailResponse(
-            thumbnails = thumbnails,
-            total = jsonObject.getInt("total"),
-            page = jsonObject.getInt("page"),
-            limit = jsonObject.getInt("limit")
-        )
-    }
-
-    private fun parseSearchResponse(json: String): ThumbnailResponse {
-        val jsonObject = JSONObject(json)
-        val resultsArray = jsonObject.optJSONArray("results") ?: JSONArray()
-        val thumbnails = mutableListOf<ThumbnailInfo>()
-
-        for (i in 0 until resultsArray.length()) {
-            val item = resultsArray.getJSONObject(i)
-            thumbnails.add(
-                ThumbnailInfo(
-                    hash = item.getString("hash"),
-                    created_at = item.optString("created_at", ""),
-                    place = item.optString("place").takeIf { it.isNotEmpty() && it != "null" },
-                    mediaType = item.optString("media_type", "image"),
-                    name = item.optString("name", ""),
-                    starred = item.optBoolean("starred", false),
-                    device_id = item.optString("device_id").takeIf { it.isNotEmpty() && it != "null" },
-                    similarity = item.optDouble("similarity", 0.0).toFloat()
-                )
-            )
-        }
-
-        val total = jsonObject.optInt("total", thumbnails.size)
-        // Search responses use offset-based pagination; page field defaults to 1
-        return ThumbnailResponse(
-            thumbnails = thumbnails,
-            total = total,
-            page = 1,
-            limit = thumbnails.size
-        )
     }
 
     private fun formatDate(timestamp: Long): String =

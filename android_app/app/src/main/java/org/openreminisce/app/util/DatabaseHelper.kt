@@ -66,21 +66,22 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
         // Incremental migrations preserve cached file hashes across schema version updates.
         // Fall back to table recreation only if migrating from unhandled/ancient versions.
         var currentVersion = oldVersion
-                if (oldVersion < 2) {
+        if (currentVersion < 2) {
             db?.execSQL("""
-                CREATE TABLE IF NOT EXISTS backed_up_files (
-                    file_id TEXT PRIMARY KEY,
-                    hash TEXT,
-                    uploaded_at INTEGER
+                CREATE TABLE IF NOT EXISTS $TABLE_BACKED_UP_FILES (
+                    $COLUMN_FILE_ID TEXT PRIMARY KEY,
+                    $COLUMN_HASH TEXT,
+                    $COLUMN_UPLOADED_AT INTEGER
                 )
             """.trimIndent())
+            currentVersion = 2
         }
-
 
         if (currentVersion < newVersion) {
             // Unhandled version migration fallback
             db?.execSQL("DROP TABLE IF EXISTS $TABLE_FILE_HASHES")
             db?.execSQL("DROP TABLE IF EXISTS $TABLE_BACKUP_INFO")
+            db?.execSQL("DROP TABLE IF EXISTS $TABLE_BACKED_UP_FILES")
             onCreate(db)
         }
     }

@@ -21,7 +21,6 @@ import okhttp3.Callback
 import okhttp3.Request
 import okhttp3.Response
 import java.io.IOException
-import android.graphics.Bitmap
 import java.io.File
 import java.io.FileOutputStream
 import com.davemorrissey.labs.subscaleview.SubsamplingScaleImageView
@@ -33,7 +32,6 @@ import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.ui.PlayerView
-import com.bumptech.glide.Glide
 import androidx.media3.datasource.DefaultDataSource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -65,6 +63,10 @@ class ImagePreviewActivity : AppCompatActivity() {
     private var currentFileName: String? = null // Store filename from Content-Disposition header
     private var isLocationExpanded: Boolean = false // Track if location text is expanded
     private var fullLocationText: String? = null // Store full location text
+    @Volatile
+    private var currentTempFile: File? = null
+    @Volatile
+    private var activeDownloadCall: Call? = null
 
     @UnstableApi
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -333,6 +335,10 @@ class ImagePreviewActivity : AppCompatActivity() {
     private fun loadImage(imageHash: String) {
         loadingSpinner.visibility = View.VISIBLE
 
+        // Cancel any in-flight remote download before starting the next item
+        activeDownloadCall?.cancel()
+        activeDownloadCall = null
+
         // Clear previous filename
         currentFileName = null
 
@@ -496,39 +502,19 @@ class ImagePreviewActivity : AppCompatActivity() {
                 playerView.visibility = View.GONE
                 imagePreview.visibility = View.VISIBLE
 
-                // Load local image using Glide and save to temp file for SubsamplingScaleImageView
-                Glide.with(this)
-                    .asBitmap()
-                    .load(uri)
-                    .into(object : com.bumptech.glide.request.target.CustomTarget<Bitmap>() {
-                        override fun onResourceReady(
-                            resource: Bitmap,
-                            transition: com.bumptech.glide.request.transition.Transition<in Bitmap>?
-                        ) {
-                            try {
-                                // Save bitmap to temp file
-                                val tempFile = File.createTempFile("local_image_", ".jpg", cacheDir)
-                                FileOutputStream(tempFile).use { out ->
-                                    resource.compress(Bitmap.CompressFormat.JPEG, 100, out)
-                                }
+                // SubsamplingScaleImageView streams tiles directly from content:// / file:// URIs
+                // without loading an unscaled full Bitmap into memory or re-encoding a JPEG copy.
+                imagePreview.setOnImageEventListener(object : SubsamplingScaleImageView.DefaultOnImageEventListener() {
+                    override fun onReady() {
+                        loadingSpinner.visibility = View.GONE
+                    }
 
-                                // Load into SubsamplingScaleImageView
-                                imagePreview.setImage(ImageSource.uri(Uri.fromFile(tempFile)))
-                                loadingSpinner.visibility = View.GONE
-                            } catch (e: Exception) {
-                                Log.e("ImagePreview", "Error saving local image to temp file", e)
-                                loadingSpinner.visibility = View.GONE
-                            }
-                        }
-
-                        override fun onLoadCleared(placeholder: android.graphics.drawable.Drawable?) {
-                            // Clean up if needed
-                        }
-
-                        override fun onLoadFailed(errorDrawable: android.graphics.drawable.Drawable?) {
-                            loadingSpinner.visibility = View.GONE
-                        }
-                    })
+                    override fun onImageLoadError(e: Exception?) {
+                        loadingSpinner.visibility = View.GONE
+                        Log.e("ImagePreview", "Error loading local image URI: $uri", e)
+                    }
+                })
+                imagePreview.setImage(ImageSource.uri(uri))
             }
 
             // Update navigation button states
@@ -714,6 +700,7 @@ class ImagePreviewActivity : AppCompatActivity() {
     }
 
     private fun downloadImageAndSetToView(mediaUrl: String, token: String, deviceId: String) {
+        activeDownloadCall?.cancel()
         val client = org.openreminisce.app.util.AuthenticatedHttpClient.getClient(this)
 
         val request = Request.Builder()
@@ -721,60 +708,77 @@ class ImagePreviewActivity : AppCompatActivity() {
             .addHeader("Authorization", "Bearer $token")
             .build()
 
-        client.newCall(request).enqueue(object : Callback {
+        val call = client.newCall(request)
+        activeDownloadCall = call
+        call.enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
+                if (call.isCanceled()) return
                 runOnUiThread {
-                    loadingSpinner.visibility = View.GONE
+                    if (!isFinishing && !isDestroyed) {
+                        loadingSpinner.visibility = View.GONE
+                    }
                     Log.e("ImagePreview", "Failed to download image", e)
                 }
             }
 
             override fun onResponse(call: Call, response: Response) {
-                if (!response.isSuccessful) {
-                    runOnUiThread {
-                        loadingSpinner.visibility = View.GONE
-                    }
-                    return
-                }
-
-                try {
-                    // Extract filename from Content-Disposition header
-                    val contentDisposition = response.header("Content-Disposition")
-                    if (contentDisposition != null) {
-                        // Parse Content-Disposition header: attachment; filename="IMG_20231231.jpg"
-                        val filenameMatch = Regex("""filename="?([^"]+)"?""").find(contentDisposition)
-                        if (filenameMatch != null) {
-                            val fullPath = filenameMatch.groupValues[1]
-                            // Extract only the filename, removing any path components
-                            currentFileName = File(fullPath).name
-                            Log.d("ImagePreview", "Extracted filename from header: $currentFileName")
-                        }
-                    }
-
-                    // Save the response body to a temporary file
-                    val responseBody = response.body
-                    if (responseBody != null) {
-                        val tempFile = File.createTempFile("image_", ".jpg", cacheDir)
-                        val outputStream = java.io.FileOutputStream(tempFile)
-                        responseBody.byteStream().copyTo(outputStream)
-                        outputStream.close()
-
+                response.use { res ->
+                    if (!res.isSuccessful) {
                         runOnUiThread {
-                            // Set the image from the temporary file
-                            imagePreview.setImage(ImageSource.uri(tempFile.absolutePath))
-                            loadingSpinner.visibility = View.GONE
-                            // Update info display with filename
-                            updateImageInfo()
+                            if (!isFinishing && !isDestroyed) {
+                                loadingSpinner.visibility = View.GONE
+                            }
                         }
-                    } else {
-                        runOnUiThread {
-                            loadingSpinner.visibility = View.GONE
-                        }
+                        return
                     }
-                } catch (e: Exception) {
-                    runOnUiThread {
-                        loadingSpinner.visibility = View.GONE
-                        Log.e("ImagePreview", "Error handling image response", e)
+
+                    var tempFile: File? = null
+                    try {
+                        val contentDisposition = res.header("Content-Disposition")
+                        if (contentDisposition != null) {
+                            val filenameMatch = Regex("""filename="?([^"]+)"?""").find(contentDisposition)
+                            if (filenameMatch != null) {
+                                val fullPath = filenameMatch.groupValues[1]
+                                currentFileName = File(fullPath).name
+                                Log.d("ImagePreview", "Extracted filename from header: $currentFileName")
+                            }
+                        }
+
+                        val responseBody = res.body
+                        if (responseBody != null) {
+                            tempFile = File.createTempFile("image_", ".jpg", cacheDir)
+                            responseBody.byteStream().use { input ->
+                                FileOutputStream(tempFile).use { output -> input.copyTo(output) }
+                            }
+
+                            val readyFile = tempFile
+                            runOnUiThread {
+                                if (isFinishing || isDestroyed || call.isCanceled()) {
+                                    readyFile.delete()
+                                    return@runOnUiThread
+                                }
+                                currentTempFile?.delete()
+                                currentTempFile = readyFile
+                                imagePreview.setOnImageEventListener(null)
+                                imagePreview.setImage(ImageSource.uri(readyFile.absolutePath))
+                                loadingSpinner.visibility = View.GONE
+                                updateImageInfo()
+                            }
+                        } else {
+                            runOnUiThread {
+                                if (!isFinishing && !isDestroyed) {
+                                    loadingSpinner.visibility = View.GONE
+                                }
+                            }
+                        }
+                    } catch (e: Exception) {
+                        tempFile?.delete()
+                        runOnUiThread {
+                            if (!isFinishing && !isDestroyed) {
+                                loadingSpinner.visibility = View.GONE
+                            }
+                            Log.e("ImagePreview", "Error handling image response", e)
+                        }
                     }
                 }
             }
@@ -794,7 +798,10 @@ class ImagePreviewActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        // Release player resources
+        activeDownloadCall?.cancel()
+        activeDownloadCall = null
+        currentTempFile?.delete()
+        currentTempFile = null
         releasePlayer()
     }
 }

@@ -1,6 +1,5 @@
 package org.openreminisce.app
 
-import org.openreminisce.app.util.applyKeepScreenOn
 import android.content.Intent
 import android.os.Bundle
 import android.util.Log
@@ -8,25 +7,21 @@ import android.view.Menu
 import android.view.MenuItem
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
 import androidx.viewpager2.adapter.FragmentStateAdapter
 import androidx.viewpager2.widget.ViewPager2
 import androidx.work.WorkManager
 import org.openreminisce.app.fragments.LocalMediaFragment
 import org.openreminisce.app.fragments.RemoteMediaFragmentNative
-import org.openreminisce.app.service.BackupService
-import org.openreminisce.app.util.BackupProgressDialogHelper
+import org.openreminisce.app.service.BackupController
+import org.openreminisce.app.util.AuthHelper
 import org.openreminisce.app.util.DatabaseHelper
 import org.openreminisce.app.util.LogCollector
 import org.openreminisce.app.util.PreferenceHelper
 import org.openreminisce.app.util.SecureStorageHelper
-import org.openreminisce.app.util.maybePromptBatteryOptimization
+import org.openreminisce.app.util.ThumbnailAuthInterceptor
 import android.widget.TextView
 import android.widget.Toast
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 class MainActivity : AppCompatActivity() {
     companion object {
@@ -39,43 +34,11 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tabRemoteUnderline: android.view.View
     private lateinit var viewPager: ViewPager2
     private lateinit var databaseHelper: DatabaseHelper
-    private lateinit var progressDialogHelper: BackupProgressDialogHelper
-    private var isBackingUp = false
-
-    private fun isBackupRunning(): Boolean {
-        // In-session state only. The persisted backup_running_until
-        // window is NOT consulted: Android auto-backup restores it on
-        // reinstall, which used to block every start with a bare toast.
-        // Duplicate protection comes from the instance flag plus the
-        // REPLACE policy on the unique WorkManager job.
-        return isBackingUp
-    }
-
-    private val backupStatusReceiver = object : android.content.BroadcastReceiver() {
-        override fun onReceive(context: android.content.Context?, intent: android.content.Intent?) {
-            Log.d(TAG, "Received broadcast: ${intent?.action}")
-            if (intent?.action == "org.openreminisce.app.BACKUP_STATUS") {
-                val status = intent.getStringExtra("status")
-
-                if (status == "completed" || status == "failed" || status == "cancelled") {
-                    isBackingUp = false
-                    applyKeepScreenOn(false)
-                }
-
-                if (status == "completed") {
-                    handleBackupCompleted(intent)
-                } else if (status == "failed" || status == "cancelled") {
-                    handleBackupFailedOrCancelled(status)
-                }
-            } else if (intent?.action == "org.openreminisce.app.BACKUP_PROGRESS") {
-                handleBackupProgress(intent)
-            }
-        }
-    }
+    private lateinit var backupController: BackupController
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        
+
         setContentView(R.layout.activity_main)
 
         setSupportActionBar(findViewById<androidx.appcompat.widget.Toolbar>(R.id.toolbar))
@@ -88,7 +51,8 @@ class MainActivity : AppCompatActivity() {
         viewPager = findViewById(R.id.viewPager)
 
         databaseHelper = DatabaseHelper(this)
-        progressDialogHelper = BackupProgressDialogHelper(this)
+        backupController = BackupController(this, databaseHelper)
+        backupController.attach()
 
         setupViewPager()
 
@@ -100,12 +64,6 @@ class MainActivity : AppCompatActivity() {
                 invalidateOptionsMenu()
             }
         })
-
-        // Register broadcast receiver for backup status and progress updates
-        val filter = android.content.IntentFilter("org.openreminisce.app.BACKUP_STATUS")
-        filter.addAction("org.openreminisce.app.BACKUP_PROGRESS")
-
-        ContextCompat.registerReceiver(this, backupStatusReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
 
         // Handle back button press to handle WebView navigation if in remote tab?
         // Actually navigation is handled inside fragments or separate activities if pushed.
@@ -159,195 +117,23 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun startQuickBackup() {
-        try {
-        if (isBackupRunning()) {
-            Log.d(TAG, "Quick backup ignored — backup already running")
-            android.widget.Toast.makeText(this, "Upload already running", android.widget.Toast.LENGTH_SHORT).show()
-            return
-        }
+    private fun startQuickBackup() = backupController.startQuickBackup()
 
-        maybePromptBatteryOptimization()
+    private fun startFullBackup() = backupController.startFullBackup()
 
-        isBackingUp = true
-
-
-        applyKeepScreenOn(true)
-        // Clear any previous cancel flag
-        val prefs = getSharedPreferences("BackupState", MODE_PRIVATE)
-        prefs.edit().putBoolean("cancel_backup", false).apply()
-
-        // Use the earlier of image/video timestamps so quick backup doesn't miss anything
-        val imageTs = databaseHelper.getLastImageBackupTimestamp()
-        val videoTs = databaseHelper.getLastVideoBackupTimestamp()
-        val lastBackupTimestamp = listOfNotNull(imageTs, videoTs).minOrNull()
-
-        val timestampText = if (lastBackupTimestamp != null && lastBackupTimestamp > 0) {
-            val date = Date(lastBackupTimestamp * 1000)
-            val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
-            "since last full upload " + dateFormat.format(date)
-        } else {
-            "since the beginning"
-        }
-
-        // Show progress dialog
-        progressDialogHelper.show(
-            getString(R.string.starting_backup),
-            isQuickBackup = true,
-            quickBackupTimestampText = timestampText
-        ) {
-            stopBackup()
-        }
-
-        // Start backup service with intent
-        val intent = Intent(this, BackupService::class.java).apply {
-            putExtra("quick_backup", true)
-        }
-        startService(intent)
-        } catch (t: Throwable) {
-            android.util.Log.e(TAG, "startQuickBackup crashed", t)
-            org.openreminisce.app.util.LogCollector.e(TAG, "startQuickBackup CRASHED: ${t.javaClass.name}: ${t.message}")
-            for (el in t.stackTrace.take(15)) {
-                org.openreminisce.app.util.LogCollector.e(TAG, "    at ${el.className}.${el.methodName}(${el.fileName}:${el.lineNumber})")
-            }
-            android.widget.Toast.makeText(this, "Backup failed to start: ${t.message}", android.widget.Toast.LENGTH_LONG).show()
-            isBackingUp = false
-            applyKeepScreenOn(false)
-        }
-    }
-
-    private fun startFullBackup() {
-        try {
-        if (isBackupRunning()) {
-            Log.d(TAG, "Full backup ignored — backup already running")
-            android.widget.Toast.makeText(this, "Upload already running", android.widget.Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        maybePromptBatteryOptimization()
-
-        isBackingUp = true
-
-
-        applyKeepScreenOn(true)
-        // Clear any previous cancel flag
-        val prefs = getSharedPreferences("BackupState", MODE_PRIVATE)
-        prefs.edit().putBoolean("cancel_backup", false).apply()
-
-        // Show progress dialog
-        progressDialogHelper.show(
-            "Full upload...",
-            isQuickBackup = false
-        ) {
-            stopBackup()
-        }
-
-        // Start backup service with intent
-        val intent = Intent(this, BackupService::class.java).apply {
-            putExtra("quick_backup", false)
-        }
-        startService(intent)
-        } catch (t: Throwable) {
-            android.util.Log.e(TAG, "startFullBackup crashed", t)
-            org.openreminisce.app.util.LogCollector.e(TAG, "startFullBackup CRASHED: ${t.javaClass.name}: ${t.message}")
-            for (el in t.stackTrace.take(15)) {
-                org.openreminisce.app.util.LogCollector.e(TAG, "    at ${el.className}.${el.methodName}(${el.fileName}:${el.lineNumber})")
-            }
-            android.widget.Toast.makeText(this, "Backup failed to start: ${t.message}", android.widget.Toast.LENGTH_LONG).show()
-            isBackingUp = false
-            applyKeepScreenOn(false)
-        }
-    }
-
-    private fun stopBackup() {
-        Log.d(TAG, "stopBackup() called")
-
-        // Set cancellation flag
-        val prefs = getSharedPreferences("BackupState", MODE_PRIVATE)
-        prefs.edit().apply {
-            putBoolean("cancel_backup", true)
-            remove("backup_type")
-            remove("is_quick_backup")
-            remove("backup_running_until")
-            apply()
-        }
-
-        val workManager = WorkManager.getInstance(this)
-        workManager.cancelAllWork()
-
-        val serviceIntent = Intent(this, BackupService::class.java)
-        stopService(serviceIntent)
-
-        isBackingUp = false
-
-        applyKeepScreenOn(false)
-        progressDialogHelper.dismiss()
-    }
-
-    private fun handleBackupCompleted(intent: Intent) {
-        val successfullyBackedUp = intent.getIntExtra("successfullyBackedUp", 0)
-        val totalProcessed = intent.getIntExtra("totalProcessed", 0)
-        val skippedExisting = intent.getIntExtra("skippedExisting", 0)
-        val failedCount = intent.getIntExtra("failedCount", 0)
-        val type = intent.getStringExtra("type") ?: "full"
-
-        // Receiver callbacks always arrive on the main thread — no UI hop needed
-        progressDialogHelper.showCompletion(
-            successfullyBackedUp = successfullyBackedUp,
-            totalProcessed = totalProcessed,
-            skippedExisting = skippedExisting,
-            failedCount = failedCount,
-            backupType = "all",
-            isQuickBackup = type == "quick"
-        ) {
-            // No specific action on dismiss needed for general MainActivity context
-        }
-    }
-
-    private fun handleBackupFailedOrCancelled(status: String?) {
-        progressDialogHelper.showFailure(status ?: "failed") {
-            // Nothing special needed on dismiss
-        }
-    }
-
-    private fun handleBackupProgress(intent: Intent) {
-        val overallProgress = intent.getFloatExtra("overallProgress", 0f)
-        val currentAction = intent.getStringExtra("currentAction") ?: "unknown"
-        val currentFile = intent.getStringExtra("currentFile") ?: "unknown"
-        val fileIndex = intent.getIntExtra("fileIndex", 0)
-        val totalFiles = intent.getIntExtra("totalFiles", 0)
-        val backedUpCount = intent.getIntExtra("backedUpCount", 0)
-        val skippedCount = intent.getIntExtra("skippedCount", 0)
-        val failedCount = intent.getIntExtra("failedCount", 0)
-        val fileProgress = intent.getFloatExtra("fileProgress", 0f)
-        val fileUploadProgress = intent.getFloatExtra("fileUploadProgress", 0f)
-
-        // Receiver callbacks always arrive on the main thread — no UI hop needed
-        progressDialogHelper.updateProgress(
-            overallProgress = overallProgress,
-            currentAction = currentAction,
-            currentFile = currentFile,
-            fileIndex = fileIndex,
-            totalFiles = totalFiles,
-            backedUpCount = backedUpCount,
-            skippedCount = skippedCount,
-            failedCount = failedCount,
-            fileProgress = fileProgress,
-            fileUploadProgress = fileUploadProgress
-        )
-    }
+    private fun stopBackup() = backupController.stopBackup()
 
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
         menuInflater.inflate(R.menu.main_menu, menu)
-        
+
         // Remove the toggle gallery item as it is replaced by tabs
         menu.findItem(R.id.action_toggle_gallery)?.isVisible = false
-        
+
         return true
     }
 
     override fun onPrepareOptionsMenu(menu: Menu): Boolean {
-        menu.findItem(R.id.action_stop_backup)?.isVisible = isBackingUp
+        menu.findItem(R.id.action_stop_backup)?.isVisible = backupController.isBackingUp
         return super.onPrepareOptionsMenu(menu)
     }
 
@@ -403,9 +189,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun shareLogs() {
-        // Fetch fresh Rust logs first
-        LogCollector.fetchRustLogs()
-
         val logs = LogCollector.getLogs()
         if (logs.isEmpty()) {
             Toast.makeText(this, getString(R.string.no_logs_to_share), Toast.LENGTH_SHORT).show()
@@ -437,24 +220,33 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun logout() {
-        // Cancel any running backup work and stop the backup service
+        val baseUrl = PreferenceHelper.getServerUrl(this)
+        val refreshToken = SecureStorageHelper.getRefreshToken(this)
+
+        // Cancel running unique backup work without nuking WorkManager database globally
         try {
-            WorkManager.getInstance(this).cancelAllWork()
+            WorkManager.getInstance(this).cancelUniqueWork(BackupController.UNIQUE_BACKUP_WORK_NAME)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to cancel work during logout", e)
         }
-        stopService(Intent(this, BackupService::class.java))
 
-        // Clear the persisted running flag so a stale window doesn't block future backups
         getSharedPreferences("BackupState", MODE_PRIVATE)
             .edit()
+            .remove("pending_work_id")
             .remove("backup_running_until")
             .apply()
 
-        applyKeepScreenOn(false)
-
-        // Clear all credentials and tokens
+        // Clear all local credentials synchronously before navigating to LoginActivity,
+        // and revoke the refresh token on the server asynchronously.
         SecureStorageHelper.clearCredentials(this)
+        ThumbnailAuthInterceptor.clearCachedToken()
+
+        if (!refreshToken.isNullOrEmpty() && baseUrl.isNotEmpty()) {
+            val appCtx = applicationContext
+            Thread {
+                AuthHelper.revokeRefreshTokenOnServer(appCtx, baseUrl, refreshToken)
+            }.start()
+        }
 
         // Navigate to LoginActivity
         val intent = Intent(this, LoginActivity::class.java)
@@ -464,13 +256,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
-        applyKeepScreenOn(false)
+        backupController.onDestroy()
         super.onDestroy()
-        try {
-            unregisterReceiver(backupStatusReceiver)
-        } catch (e: Exception) {
-            // Receiver was not registered or already unregistered
-        }
-        progressDialogHelper.dismiss()
     }
 }

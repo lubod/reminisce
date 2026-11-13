@@ -1,11 +1,5 @@
 # ProGuard Rules for Reminisce Android App
 
-# Keep data models used by Gson serialization/deserialization
--keepclassmembers class * {
-    @com.google.gson.annotations.SerializedName <fields>;
-}
--keep class org.openreminisce.app.model.** { *; }
-
 # OkHttp
 -keepattributes Signature
 -keepattributes AnnotationDefault
@@ -42,8 +36,8 @@
 -keep class androidx.media3.ui.** { *; }
 -dontwarn androidx.media3.**
 
-# BouncyCastle (for BLAKE3 hashing)
--keep class org.bouncycastle.** { *; }
+# BouncyCastle (targeted keep for BLAKE3 hashing)
+-keep class org.bouncycastle.crypto.digests.Blake3Digest { *; }
 -dontwarn org.bouncycastle.**
 
 # AndroidX Security / Crypto

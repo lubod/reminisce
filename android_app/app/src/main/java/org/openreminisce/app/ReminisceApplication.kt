@@ -3,8 +3,6 @@ package org.openreminisce.app
 import android.app.Application
 import android.util.Log
 import androidx.appcompat.app.AppCompatDelegate
-import androidx.work.Configuration
-import androidx.work.WorkManager
 import com.bumptech.glide.Glide
 import com.bumptech.glide.integration.okhttp3.OkHttpUrlLoader
 import com.bumptech.glide.load.model.GlideUrl
@@ -47,57 +45,22 @@ class ReminisceApplication : Application() {
             previous?.uncaughtException(thread, throwable)
         }
 
-        // Set dark theme as default
-        AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES)
+        // Apply persisted theme preference (dark mode by default)
+        val isDarkTheme = SecureStorageHelper.getThemePreference(this)
+        AppCompatDelegate.setDefaultNightMode(
+            if (isDarkTheme) AppCompatDelegate.MODE_NIGHT_YES else AppCompatDelegate.MODE_NIGHT_NO
+        )
 
         // Migrate old preferences if needed
         migratePreferences()
 
-        // Cancel all backup work BEFORE initializing WorkManager
-        // This prevents WorkManager from auto-restarting interrupted work
-        cleanupBackupWork()
-
-        // Now manually initialize WorkManager
-        initializeWorkManager()
+        // Clear any legacy running-window hint left by older versions while preserving WorkManager state.
+        getSharedPreferences("BackupState", MODE_PRIVATE).edit()
+            .remove("backup_running_until")
+            .apply()
 
         // Register the dynamic OkHttpClient with Glide
         registerAuthClientWithGlide()
-    }
-
-    private fun cleanupBackupWork() {
-        try {
-            Log.d("ReminisceApplication", "Starting cleanup of backup work...")
-
-            // Initialize WorkManager with a minimal configuration just to clean up
-            val config = Configuration.Builder()
-                .setMinimumLoggingLevel(Log.DEBUG)
-                .build()
-            WorkManager.initialize(this, config)
-            Log.d("ReminisceApplication", "WorkManager initialized for cleanup")
-
-            val workManager = WorkManager.getInstance(this)
-
-            // Cancel ALL work (not just by tag) to ensure nothing auto-restarts
-            // Nothing survives a cold start by design; also drop any
-            // running-window flag that Android auto-backup restored.
-            getSharedPreferences("BackupState", MODE_PRIVATE).edit()
-                .remove("backup_running_until").apply()
-            workManager.cancelAllWork()
-            Log.d("ReminisceApplication", "Cancelled ALL work on app start")
-
-            // Prune finished work
-            workManager.pruneWork()
-            Log.d("ReminisceApplication", "Pruned all finished work on app start")
-
-            Log.d("ReminisceApplication", "Cleanup completed successfully")
-        } catch (e: Exception) {
-            Log.e("ReminisceApplication", "Error cleaning up backup work", e)
-        }
-    }
-
-    private fun initializeWorkManager() {
-        // WorkManager is already initialized in cleanupBackupWork()
-        Log.d("ReminisceApplication", "WorkManager initialized")
     }
 
     private fun migratePreferences() {

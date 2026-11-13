@@ -63,17 +63,37 @@ class ProgressRequestBody private constructor(
             )
         }
 
+        private val EXTENSION_MIME_TYPES = mapOf(
+            "jpg" to "image/jpeg",
+            "jpeg" to "image/jpeg",
+            "png" to "image/png",
+            "gif" to "image/gif",
+            "webp" to "image/webp",
+            "heic" to "image/heic",
+            "heif" to "image/heif",
+            "avif" to "image/avif",
+            "bmp" to "image/bmp",
+            "tif" to "image/tiff",
+            "tiff" to "image/tiff",
+            "dng" to "image/x-adobe-dng",
+            "mp4" to "video/mp4",
+            "m4v" to "video/mp4",
+            "mov" to "video/quicktime",
+            "avi" to "video/x-msvideo",
+            "mkv" to "video/x-matroska",
+            "webm" to "video/webm",
+            "3gp" to "video/3gpp",
+            "mts" to "video/mp2t",
+            "m2ts" to "video/mp2t"
+        )
+
         fun guessMimeType(path: String): String {
-            return when {
-                path.endsWith(".jpg", true) || path.endsWith(".jpeg", true) -> "image/jpeg"
-                path.endsWith(".png", true) -> "image/png"
-                path.endsWith(".gif", true) -> "image/gif"
-                path.endsWith(".mp4", true) -> "video/mp4"
-                path.endsWith(".mov", true) -> "video/quicktime"
-                path.endsWith(".avi", true) -> "video/x-msvideo"
-                path.endsWith(".mkv", true) -> "video/x-matroska"
-                else -> "application/octet-stream"
+            val dotIndex = path.lastIndexOf('.')
+            if (dotIndex < 0 || dotIndex == path.length - 1) {
+                return "application/octet-stream"
             }
+            val ext = path.substring(dotIndex + 1).lowercase()
+            return EXTENSION_MIME_TYPES[ext] ?: "application/octet-stream"
         }
     }
 

@@ -6,26 +6,38 @@ import org.openreminisce.app.LoginActivity
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
+import okio.ByteString.Companion.decodeBase64
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
-import javax.net.ssl.*
-import java.security.cert.X509Certificate
 
+internal interface TokenPairStore {
+    fun getAccessToken(): String?
+    fun setAccessToken(token: String)
+    fun getRefreshToken(): String?
+    fun setRefreshToken(token: String)
+    fun clearCredentials()
+}
 
+private class SecureTokenPairStore(private val context: Context) : TokenPairStore {
+    override fun getAccessToken(): String? = SecureStorageHelper.getAccessToken(context)
+    override fun setAccessToken(token: String) = SecureStorageHelper.setAccessToken(context, token)
+    override fun getRefreshToken(): String? = SecureStorageHelper.getRefreshToken(context)
+    override fun setRefreshToken(token: String) = SecureStorageHelper.setRefreshToken(context, token)
+    override fun clearCredentials() = SecureStorageHelper.clearCredentials(context)
+}
 
 class AuthHelper {
     companion object {
         private const val TAG = "AuthHelper"
-
-
+        private val refreshLock = Any()
 
         /**
          * Check whether the server needs first-run admin setup.
-         * Endpoint: GET /auth/setup-status
+         * Endpoint: GET /api/auth/setup-status
          */
-        fun checkSetupStatus(baseUrl: String): Boolean {
+        fun checkSetupStatus(context: Context, baseUrl: String): Boolean {
             return try {
-                val client = createHttpClient(baseUrl).newBuilder()
+                val client = createHttpClient(context, baseUrl).newBuilder()
                     .connectTimeout(10, TimeUnit.SECONDS)
                     .readTimeout(10, TimeUnit.SECONDS)
                     .build()
@@ -33,11 +45,12 @@ class AuthHelper {
                     .url("${baseUrl.trimEnd('/')}/api/auth/setup-status")
                     .get()
                     .build()
-                val response = client.newCall(request).execute()
-                if (response.isSuccessful) {
-                    val body = response.body?.string() ?: "{}"
-                    JSONObject(body).optBoolean("needs_setup", false)
-                } else false
+                client.newCall(request).execute().use { response ->
+                    if (response.isSuccessful) {
+                        val body = response.body?.string() ?: "{}"
+                        JSONObject(body).optBoolean("needs_setup", false)
+                    } else false
+                }
             } catch (e: Exception) {
                 LogCollector.w(TAG, "checkSetupStatus failed: ${e.message}")
                 false
@@ -46,12 +59,12 @@ class AuthHelper {
 
         /**
          * Create the first admin account during initial setup.
-         * Endpoint: POST /auth/setup
+         * Endpoint: POST /api/auth/setup
          * Returns null on success, or an error message string.
          */
-        fun setupAdmin(username: String, password: String, baseUrl: String): String? {
+        fun setupAdmin(context: Context, username: String, password: String, baseUrl: String): String? {
             return try {
-                val client = createHttpClient(baseUrl).newBuilder()
+                val client = createHttpClient(context, baseUrl).newBuilder()
                     .connectTimeout(10, TimeUnit.SECONDS)
                     .readTimeout(10, TimeUnit.SECONDS)
                     .build()
@@ -65,11 +78,16 @@ class AuthHelper {
                     .post(body)
                     .addHeader("Content-Type", "application/json")
                     .build()
-                val response = client.newCall(request).execute()
-                if (response.isSuccessful) null
-                else {
-                    val errBody = response.body?.string() ?: ""
-                    JSONObject(errBody).optString("message", "Setup failed (${response.code})")
+                client.newCall(request).execute().use { response ->
+                    if (response.isSuccessful) null
+                    else {
+                        val errBody = response.body?.string() ?: ""
+                        try {
+                            JSONObject(errBody).optString("message", "Setup failed (${response.code})")
+                        } catch (_: Exception) {
+                            "Setup failed (${response.code})"
+                        }
+                    }
                 }
             } catch (e: Exception) {
                 LogCollector.e(TAG, "setupAdmin failed: ${e.message}")
@@ -79,12 +97,12 @@ class AuthHelper {
 
         /**
          * Register a new user with username, email, and password.
-         * Endpoint: POST /auth/register
+         * Endpoint: POST /api/auth/register
          */
-        fun registerUser(username: String, email: String, password: String, baseUrl: String): Boolean {
+        fun registerUser(context: Context, username: String, email: String, password: String, baseUrl: String): Boolean {
             LogCollector.d(TAG, "Registering user at $baseUrl/api/auth/register")
 
-            val client = createHttpClient(baseUrl)
+            val client = createHttpClient(context, baseUrl)
 
             val json = JSONObject().apply {
                 put("username", username)
@@ -96,25 +114,23 @@ class AuthHelper {
             val body = json.toRequestBody(mediaType)
 
             val request = Request.Builder()
-                .url("$baseUrl/api/auth/register")
+                .url("${baseUrl.trimEnd('/')}/api/auth/register")
                 .post(body)
                 .addHeader("Content-Type", "application/json")
                 .build()
 
             return try {
                 LogCollector.d(TAG, "Sending registration request...")
-                val response = client.newCall(request).execute()
-
-                LogCollector.d(TAG, "Registration response received. Code: ${response.code}")
-
-                if (response.isSuccessful) {
-                    val responseBody = response.body?.string()
-                    LogCollector.d(TAG, "Registration successful") // body redacted (may contain account data)
-                    true
-                } else {
-                    val errorBody = response.body?.string()
-                    LogCollector.e(TAG, "Registration failed: ${response.code} - $errorBody")
-                    false
+                client.newCall(request).execute().use { response ->
+                    LogCollector.d(TAG, "Registration response received. Code: ${response.code}")
+                    if (response.isSuccessful) {
+                        LogCollector.d(TAG, "Registration successful") // body redacted (may contain account data)
+                        true
+                    } else {
+                        val errorBody = response.body?.string()
+                        LogCollector.e(TAG, "Registration failed: ${response.code} - $errorBody")
+                        false
+                    }
                 }
             } catch (e: Exception) {
                 LogCollector.e(TAG, "Error during registration", e)
@@ -123,7 +139,7 @@ class AuthHelper {
         }
 
         /**
-         * Login with username and password credentials via HTTP.
+         * Login with username and password credentials via HTTP and store access + refresh tokens.
          */
         fun loginWithCredentials(context: Context, username: String, password: String, baseUrl: String): Boolean {
             LogCollector.i(TAG, "Login attempt at $baseUrl") // username redacted
@@ -133,7 +149,7 @@ class AuthHelper {
                 return false
             }
 
-            val client = createHttpClient(baseUrl).newBuilder()
+            val client = createHttpClient(context, baseUrl).newBuilder()
                 .connectTimeout(10, TimeUnit.SECONDS)
                 .readTimeout(10, TimeUnit.SECONDS)
                 .build()
@@ -141,6 +157,7 @@ class AuthHelper {
             val json = JSONObject().apply {
                 put("username", username)
                 put("password", password)
+                put("device_id", getDeviceId(context))
             }.toString()
 
             val body = json.toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
@@ -151,22 +168,27 @@ class AuthHelper {
                 .build()
 
             return try {
-                val response = client.newCall(request).execute()
-                LogCollector.i(TAG, "Login response: ${response.code}")
-
-                if (response.isSuccessful) {
-                    val token = JSONObject(response.body?.string() ?: "").optString("access_token")
-                    if (token.isNotEmpty()) {
-                        SecureStorageHelper.setAccessToken(context, token)
-                        ThumbnailAuthInterceptor.clearCachedToken()
-                        true
+                client.newCall(request).execute().use { response ->
+                    LogCollector.i(TAG, "Login response: ${response.code}")
+                    if (response.isSuccessful) {
+                        val responseJson = JSONObject(response.body?.string() ?: "{}")
+                        val token = responseJson.optString("access_token")
+                        val refreshToken = responseJson.optString("refresh_token")
+                        if (token.isNotEmpty()) {
+                            SecureStorageHelper.setAccessToken(context, token)
+                            if (refreshToken.isNotEmpty()) {
+                                SecureStorageHelper.setRefreshToken(context, refreshToken)
+                            }
+                            ThumbnailAuthInterceptor.clearCachedToken()
+                            true
+                        } else {
+                            LogCollector.e(TAG, "Login response missing access_token")
+                            false
+                        }
                     } else {
-                        LogCollector.e(TAG, "Login response missing access_token")
+                        LogCollector.w(TAG, "Login failed: ${response.code}")
                         false
                     }
-                } else {
-                    LogCollector.w(TAG, "Login failed: ${response.code}")
-                    false
                 }
             } catch (e: Exception) {
                 LogCollector.e(TAG, "Login request failed: ${e.message}")
@@ -174,118 +196,190 @@ class AuthHelper {
             }
         }
 
-        private fun createHttpClient(baseUrl: String): OkHttpClient {
-            val useInsecure = NetworkHelper.isPrivateOrLocalAddress(baseUrl)
-            LogCollector.d(TAG, "HTTP client: ${if (useInsecure) "insecure" else "secure"} for $baseUrl")
-
+        private fun createHttpClient(context: Context, baseUrl: String): OkHttpClient {
             val builder = OkHttpClient.Builder()
                 .connectTimeout(30, TimeUnit.SECONDS)
                 .readTimeout(30, TimeUnit.SECONDS)
 
-            NetworkHelper.configureInsecureSsl(builder, baseUrl)
+            NetworkHelper.configureSsl(builder, baseUrl, context)
 
             return builder.build()
         }
 
         /**
-         * Get valid token - tries to use stored token if valid, otherwise re-authenticates.
-         * Supports both new credential-based and legacy API secret authentication.
+         * Returns a currently valid access token, or rotates the session using the stored refresh token.
          */
         fun getValidToken(context: Context): String? {
-            LogCollector.d(TAG, "Checking for valid token...")
-
-            // Check if the stored token is valid first
             val storedToken = SecureStorageHelper.getAccessToken(context)
-            LogCollector.d(TAG, "Retrieved stored token, length: ${storedToken?.length ?: 0}")
-
-            if (storedToken != null && isTokenValid(storedToken)) {
-                LogCollector.d(TAG, "Stored token is still valid")
+            if (!storedToken.isNullOrEmpty() && isTokenValid(storedToken)) {
                 return storedToken
             }
 
-            LogCollector.d(TAG, "Stored token is invalid or doesn't exist, attempting to login")
-
-            // Try new credential-based authentication first
-            val username = SecureStorageHelper.getUsername(context)
-            val password = SecureStorageHelper.getPassword(context)
-
-            if (!username.isNullOrEmpty() && !password.isNullOrEmpty()) {
-                val baseUrl = PreferenceHelper.getServerUrl(context)
-                LogCollector.d(TAG, "Using credential-based authentication")
-
-                if (loginWithCredentials(context, username, password, baseUrl)) {
-                    LogCollector.d(TAG, "Login successful, retrieving new token")
-                    return SecureStorageHelper.getAccessToken(context)
-                } else {
-                    LogCollector.e(TAG, "Credential-based login failed")
-                }
-            } else {
-                LogCollector.e(TAG, "No credentials available for authentication")
-            }
-
-            LogCollector.d(TAG, "Returning null (no valid token)")
-            return null
+            return refreshAuthToken(context, failedAccessToken = storedToken)
         }
 
         /**
-         * Force re-authentication to refresh the token.
+         * Refreshes the access token using POST /api/auth/refresh (serialized via refreshLock so
+         * rotating refresh tokens are never consumed twice by concurrent requests).
          */
-        fun refreshAuthToken(context: Context): String? {
-            LogCollector.d(TAG, "Force refreshing auth token...")
-
-            val username = SecureStorageHelper.getUsername(context)
-            val password = SecureStorageHelper.getPassword(context)
-
-            if (!username.isNullOrEmpty() && !password.isNullOrEmpty()) {
-                val baseUrl = PreferenceHelper.getServerUrl(context)
-                LogCollector.d(TAG, "Using credential-based authentication for refresh")
-
-                if (loginWithCredentials(context, username, password, baseUrl)) {
-                    LogCollector.d(TAG, "Credential-based refresh successful")
-                    return SecureStorageHelper.getAccessToken(context)
-                } else {
-                    LogCollector.e(TAG, "Credential-based refresh failed")
-                }
-            } else {
-                LogCollector.e(TAG, "No credentials available for refresh")
+        fun refreshAuthToken(context: Context, failedAccessToken: String? = null): String? {
+            val baseUrl = PreferenceHelper.getServerUrl(context)
+            if (baseUrl.isEmpty()) {
+                return null
             }
 
-            LogCollector.d(TAG, "Returning null (failed to refresh token)")
-            return null
+            val client = createHttpClient(context, baseUrl).newBuilder()
+                .connectTimeout(10, TimeUnit.SECONDS)
+                .readTimeout(10, TimeUnit.SECONDS)
+                .build()
+
+            return performTokenRefresh(
+                client = client,
+                baseUrl = baseUrl,
+                deviceId = getDeviceId(context),
+                tokenStore = SecureTokenPairStore(context),
+                failedAccessToken = failedAccessToken,
+                onTokenRefreshed = { ThumbnailAuthInterceptor.clearCachedToken() }
+            )
+        }
+
+        internal fun performTokenRefresh(
+            client: OkHttpClient,
+            baseUrl: String,
+            deviceId: String,
+            tokenStore: TokenPairStore,
+            failedAccessToken: String? = null,
+            onTokenRefreshed: () -> Unit = {}
+        ): String? {
+            synchronized(refreshLock) {
+                // If another thread already rotated the token since our check/401, reuse it.
+                val currentToken = tokenStore.getAccessToken()
+                if (!currentToken.isNullOrEmpty() &&
+                    currentToken != failedAccessToken &&
+                    isTokenValid(currentToken)
+                ) {
+                    return currentToken
+                }
+
+                val refreshToken = tokenStore.getRefreshToken()
+                if (refreshToken.isNullOrEmpty() || baseUrl.isEmpty()) {
+                    return null
+                }
+
+                val json = JSONObject().apply {
+                    put("refresh_token", refreshToken)
+                    put("device_id", deviceId)
+                }.toString()
+
+                val body = json.toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
+                val request = Request.Builder()
+                    .url("${baseUrl.trimEnd('/')}/api/auth/refresh")
+                    .post(body)
+                    .addHeader("Content-Type", "application/json")
+                    .build()
+
+                return try {
+                    client.newCall(request).execute().use { response ->
+                        when {
+                            response.isSuccessful -> {
+                                val responseJson = JSONObject(response.body?.string() ?: "{}")
+                                val newToken = responseJson.optString("access_token")
+                                val newRefreshToken = responseJson.optString("refresh_token")
+                                if (newToken.isNotEmpty()) {
+                                    tokenStore.setAccessToken(newToken)
+                                    if (newRefreshToken.isNotEmpty()) {
+                                        tokenStore.setRefreshToken(newRefreshToken)
+                                    }
+                                    onTokenRefreshed()
+                                    newToken
+                                } else {
+                                    null
+                                }
+                            }
+                            response.code == 401 || response.code == 403 -> {
+                                // Refresh token was rejected/revoked/expired; clear session cleanly.
+                                tokenStore.clearCredentials()
+                                onTokenRefreshed()
+                                null
+                            }
+                            else -> {
+                                // Server 5xx or transient error; preserve tokens for subsequent retry.
+                                null
+                            }
+                        }
+                    }
+                } catch (_: Exception) {
+                    // Network/TLS exception; preserve tokens so caller can retry or surface cert prompt.
+                    null
+                }
+            }
+        }
+
+        /**
+         * Revokes the current refresh token on the server (best-effort) and clears local credentials.
+         */
+        fun logoutFromServer(context: Context) {
+            val refreshToken = SecureStorageHelper.getRefreshToken(context)
+            val baseUrl = PreferenceHelper.getServerUrl(context)
+            SecureStorageHelper.clearCredentials(context)
+            ThumbnailAuthInterceptor.clearCachedToken()
+            if (!refreshToken.isNullOrEmpty() && baseUrl.isNotEmpty()) {
+                revokeRefreshTokenOnServer(context.applicationContext, baseUrl, refreshToken)
+            }
+        }
+
+        fun revokeRefreshTokenOnServer(context: Context, baseUrl: String, refreshToken: String) {
+            if (refreshToken.isEmpty() || baseUrl.isEmpty()) return
+            try {
+                val client = createHttpClient(context, baseUrl).newBuilder()
+                    .connectTimeout(5, TimeUnit.SECONDS)
+                    .readTimeout(5, TimeUnit.SECONDS)
+                    .build()
+                val json = JSONObject().apply {
+                    put("refresh_token", refreshToken)
+                }.toString()
+                val body = json.toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
+                val request = Request.Builder()
+                    .url("${baseUrl.trimEnd('/')}/api/auth/logout")
+                    .post(body)
+                    .addHeader("Content-Type", "application/json")
+                    .build()
+                client.newCall(request).execute().close()
+            } catch (e: Exception) {
+                LogCollector.w(TAG, "Failed to revoke refresh token on server: ${e.message}")
+            }
+        }
+
+        fun decodeJwtExpiryMs(token: String): Long {
+            val parts = token.split(".")
+            if (parts.size != 3 || parts[1].isEmpty()) {
+                return 0L
+            }
+            return try {
+                val base64 = buildString {
+                    append(parts[1].replace('-', '+').replace('_', '/'))
+                    while (length % 4 != 0) append('=')
+                }
+                val payloadBytes = base64.decodeBase64()?.toByteArray() ?: return 0L
+                val json = JSONObject(String(payloadBytes, Charsets.UTF_8))
+                val expSeconds = json.optLong("exp", 0L)
+                if (expSeconds <= 0L) 0L else expSeconds * 1000L
+            } catch (_: Exception) {
+                0L
+            }
         }
 
         fun isTokenValid(token: String): Boolean {
-            // Simplified JWT validation - check if token has 3 parts and is not expired
-            val parts = token.split(".")
-            if (parts.size != 3) {
+            val expMs = decodeJwtExpiryMs(token)
+            if (expMs <= 0L) {
                 return false
             }
-            
-            try {
-                // Decode payload (second part of JWT). JWTs use unpadded base64url — without
-                // NO_PADDING, tokens whose payload length isn't a multiple of 4 fail to decode
-                // and would be (incorrectly) treated as invalid.
-                val payload = String(android.util.Base64.decode(parts[1], android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING))
-                val json = JSONObject(payload)
-                
-                val exp = json.optLong("exp", 0)
-                if (exp == 0L) {
-                    return false
-                }
-                
-                val now = System.currentTimeMillis() / 1000
-                return exp > now
-            } catch (e: Exception) {
-                LogCollector.e(TAG, "Error validating token", e)
-                return false
-            }
+            return expMs > System.currentTimeMillis()
         }
-        
+
         /**
          * Discover the home server URL from the relay.
          * Calls GET /api/peers/home-server with the current JWT token.
-         * On success, saves the home_local_url to preferences.
-         * Fails silently (logs warning) — must not block login.
          */
         fun discoverHomeServer(context: Context, relayUrl: String) {
             try {
@@ -295,7 +389,7 @@ class AuthHelper {
                     return
                 }
 
-                val client = createHttpClient(relayUrl)
+                val client = createHttpClient(context, relayUrl)
                 val url = "${relayUrl.trimEnd('/')}/api/peers/home-server"
 
                 val request = Request.Builder()
@@ -304,29 +398,29 @@ class AuthHelper {
                     .addHeader("Authorization", "Bearer $token")
                     .build()
 
-                val response = client.newCall(request).execute()
+                client.newCall(request).execute().use { response ->
+                    if (response.isSuccessful) {
+                        val body = response.body?.string()
+                        val json = JSONObject(body ?: "{}")
+                        val homeServerUrl = json.optString("home_server_url", "")
 
-                if (response.isSuccessful) {
-                    val body = response.body?.string()
-                    val json = JSONObject(body ?: "{}")
-                    val homeServerUrl = json.optString("home_server_url", "")
-
-                    if (homeServerUrl.isNotEmpty()) {
-                        LogCollector.i(TAG, "Discovered home server: $homeServerUrl")
+                        if (homeServerUrl.isNotEmpty()) {
+                            LogCollector.i(TAG, "Discovered home server: $homeServerUrl")
+                        } else {
+                            LogCollector.w(TAG, "discoverHomeServer: empty home_server_url in response")
+                        }
                     } else {
-                        LogCollector.w(TAG, "discoverHomeServer: empty home_server_url in response")
+                        LogCollector.w(TAG, "discoverHomeServer: ${response.code}")
                     }
-                } else {
-                    LogCollector.w(TAG, "discoverHomeServer: ${response.code}")
                 }
             } catch (e: Exception) {
                 LogCollector.w(TAG, "discoverHomeServer failed: ${e.message}")
             }
         }
 
-        fun pingServer(baseUrl: String): Boolean {
+        fun pingServer(context: Context, baseUrl: String): Boolean {
             return try {
-                val client = createHttpClient(baseUrl).newBuilder()
+                val client = createHttpClient(context, baseUrl).newBuilder()
                     .connectTimeout(5, TimeUnit.SECONDS)
                     .readTimeout(5, TimeUnit.SECONDS)
                     .build()
@@ -346,12 +440,8 @@ class AuthHelper {
                 "Authorization" to "Bearer ${token ?: ""}"
             )
         }
-        
-
 
         fun getDeviceId(context: Context): String {
-            // In a real implementation, this would return a unique device identifier
-            // For now, returning a placeholder
             return android.provider.Settings.Secure.getString(
                 context.contentResolver,
                 android.provider.Settings.Secure.ANDROID_ID
@@ -360,39 +450,35 @@ class AuthHelper {
 
         /**
          * Executes an HTTP request with automatic token refresh on 401 responses.
-         * This eliminates duplicated token refresh logic across the codebase.
-         *
-         * @param context Application context
-         * @param client OkHttpClient to use for the request
-         * @param request The request to execute
-         * @return Response from the server (either original or retry after token refresh)
          */
         fun executeWithTokenRefresh(
             context: Context,
             client: OkHttpClient,
-            request: Request
+            request: Request,
+            onCallCreated: ((Call) -> Unit)? = null
         ): Response {
-            var response = client.newCall(request).execute()
+            val call = client.newCall(request)
+            onCallCreated?.invoke(call)
+            var response = call.execute()
 
-            // Check if the response is a 401, which means the token has expired
             if (response.code == 401) {
-                LogCollector.e(TAG, "Received 401, attempting to refresh token...")
-
-                // Try to refresh the auth token
-                val newToken = refreshAuthToken(context)
+                LogCollector.w(TAG, "Received 401, attempting to refresh token...")
+                val failedToken = request.header("Authorization")?.removePrefix("Bearer ")?.trim()
+                val newToken = refreshAuthToken(context, failedAccessToken = failedToken)
 
                 if (!newToken.isNullOrEmpty()) {
                     LogCollector.d(TAG, "Successfully refreshed token, retrying request...")
+                    response.close()
 
-                    // Create a new request with the fresh token
                     val retryRequest = request.newBuilder()
                         .header("Authorization", "Bearer $newToken")
                         .build()
 
-                    // Execute the retry request
-                    response = client.newCall(retryRequest).execute()
+                    val retryCall = client.newCall(retryRequest)
+                    onCallCreated?.invoke(retryCall)
+                    response = retryCall.execute()
                     LogCollector.d(TAG, "Retry request completed. Code: ${response.code}")
-                } else {
+                } else if (SecureStorageHelper.getRefreshToken(context).isNullOrEmpty()) {
                     LogCollector.e(TAG, "Failed to refresh token (session expired), redirecting to login")
                     redirectToLogin(context)
                 }
@@ -404,6 +490,7 @@ class AuthHelper {
         fun redirectToLogin(context: Context) {
             try {
                 SecureStorageHelper.clearCredentials(context)
+                ThumbnailAuthInterceptor.clearCachedToken()
                 val intent = Intent(context, LoginActivity::class.java).apply {
                     flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
                     putExtra("session_expired", true)

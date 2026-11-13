@@ -1,29 +1,25 @@
 package org.openreminisce.app
 
-import org.openreminisce.app.util.applyKeepScreenOn
 import android.annotation.SuppressLint
-import android.content.Intent
 import android.net.http.SslError
 import android.os.Bundle
 import android.util.Log
 import android.view.MenuItem
 import android.view.View
 import android.webkit.*
-import android.widget.Button
 import android.widget.ProgressBar
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
-import androidx.work.WorkManager
-import org.openreminisce.app.service.BackupService
+import org.json.JSONObject
+import org.openreminisce.app.service.BackupController
 import org.openreminisce.app.util.AuthHelper
-import org.openreminisce.app.util.BackupProgressDialogHelper
+import org.openreminisce.app.util.AuthenticatedHttpClient
+import org.openreminisce.app.util.CertificateMismatchException
 import org.openreminisce.app.util.DatabaseHelper
 import org.openreminisce.app.util.NetworkHelper
 import org.openreminisce.app.util.PreferenceHelper
-import org.openreminisce.app.util.maybePromptBatteryOptimization
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
+import org.openreminisce.app.util.SecureStorageHelper
+import org.openreminisce.app.util.TofuPinningSupport
 
 class WebGalleryActivity : AppCompatActivity() {
     companion object {
@@ -33,40 +29,11 @@ class WebGalleryActivity : AppCompatActivity() {
     private lateinit var webView: WebView
     private lateinit var progressBar: ProgressBar
     private lateinit var databaseHelper: DatabaseHelper
-    private lateinit var progressDialogHelper: BackupProgressDialogHelper
+    private lateinit var backupController: BackupController
+    @Volatile
     private var authToken: String? = null
-    private var isBackingUp = false
-
-    private fun isBackupRunning(): Boolean {
-        // In-session state only. The persisted backup_running_until
-        // window is NOT consulted: Android auto-backup restores it on
-        // reinstall, which used to block every start with a bare toast.
-        // Duplicate protection comes from the instance flag plus the
-        // REPLACE policy on the unique WorkManager job.
-        return isBackingUp
-    }
-
-    private val backupStatusReceiver = object : android.content.BroadcastReceiver() {
-        override fun onReceive(context: android.content.Context?, intent: android.content.Intent?) {
-            Log.d(TAG, "Received broadcast: ${intent?.action}")
-            if (intent?.action == "org.openreminisce.app.BACKUP_STATUS") {
-                val status = intent.getStringExtra("status")
-
-                if (status == "completed" || status == "failed" || status == "cancelled") {
-                    isBackingUp = false
-                    applyKeepScreenOn(false)
-                }
-
-                if (status == "completed") {
-                    handleBackupCompleted(intent)
-                } else if (status == "failed" || status == "cancelled") {
-                    handleBackupFailedOrCancelled(status)
-                }
-            } else if (intent?.action == "org.openreminisce.app.BACKUP_PROGRESS") {
-                handleBackupProgress(intent)
-            }
-        }
-    }
+    @Volatile
+    private var currentPageUrl: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -80,13 +47,8 @@ class WebGalleryActivity : AppCompatActivity() {
         progressBar = findViewById(R.id.webProgressBar)
 
         databaseHelper = DatabaseHelper(this)
-        progressDialogHelper = BackupProgressDialogHelper(this)
-
-        // Register broadcast receiver for backup status and progress updates
-        val filter = android.content.IntentFilter("org.openreminisce.app.BACKUP_STATUS")
-        filter.addAction("org.openreminisce.app.BACKUP_PROGRESS")
-
-        androidx.core.content.ContextCompat.registerReceiver(this, backupStatusReceiver, filter, androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
+        backupController = BackupController(this, databaseHelper)
+        backupController.attach()
 
         // Handle back button press for WebView navigation
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
@@ -104,177 +66,9 @@ class WebGalleryActivity : AppCompatActivity() {
         loadGallery()
     }
 
-    private fun startQuickBackup() {
-        try {
-        if (isBackupRunning()) {
-            Log.d(TAG, "Quick backup ignored — backup already running")
-            android.widget.Toast.makeText(this, "Upload already running", android.widget.Toast.LENGTH_SHORT).show()
-            return
-        }
+    private fun startQuickBackup() = backupController.startQuickBackup()
 
-        maybePromptBatteryOptimization()
-
-        isBackingUp = true
-
-        applyKeepScreenOn(true)
-        // Clear any previous cancel flag
-        val prefs = getSharedPreferences("BackupState", MODE_PRIVATE)
-        prefs.edit().putBoolean("cancel_backup", false).apply()
-
-        // Get the last backup timestamp
-        val lastBackupTimestamp = databaseHelper.getLastImageBackupTimestamp()
-
-        val timestampText = if (lastBackupTimestamp != null && lastBackupTimestamp > 0) {
-            val date = Date(lastBackupTimestamp * 1000)
-            val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
-            "since last full upload " + dateFormat.format(date)
-        } else {
-            "since the beginning"
-        }
-
-        // Show progress dialog
-        progressDialogHelper.show(
-            getString(R.string.starting_backup),
-            isQuickBackup = true,
-            quickBackupTimestampText = timestampText
-        ) {
-            stopBackup()
-        }
-
-        val intent = Intent(this, BackupService::class.java).apply {
-            putExtra("quick_backup", true)
-        }
-        startService(intent)
-        } catch (t: Throwable) {
-            android.util.Log.e(TAG, "startQuickBackup crashed", t)
-            org.openreminisce.app.util.LogCollector.e(TAG, "startQuickBackup CRASHED: ${t.javaClass.name}: ${t.message}")
-            for (el in t.stackTrace.take(15)) {
-                org.openreminisce.app.util.LogCollector.e(TAG, "    at ${el.className}.${el.methodName}(${el.fileName}:${el.lineNumber})")
-            }
-            android.widget.Toast.makeText(this, "Backup failed to start: ${t.message}", android.widget.Toast.LENGTH_LONG).show()
-            isBackingUp = false
-            applyKeepScreenOn(false)
-        }
-    }
-
-    private fun startFullBackup() {
-        try {
-        if (isBackupRunning()) {
-            Log.d(TAG, "Full backup ignored — backup already running")
-            android.widget.Toast.makeText(this, "Upload already running", android.widget.Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        maybePromptBatteryOptimization()
-
-        isBackingUp = true
-
-        applyKeepScreenOn(true)
-        // Clear any previous cancel flag
-        val prefs = getSharedPreferences("BackupState", MODE_PRIVATE)
-        prefs.edit().putBoolean("cancel_backup", false).apply()
-
-        // Show progress dialog
-        progressDialogHelper.show(
-            "Full upload...",
-            isQuickBackup = false
-        ) {
-            stopBackup()
-        }
-
-        val intent = Intent(this, BackupService::class.java).apply {
-            putExtra("quick_backup", false)
-        }
-        startService(intent)
-        } catch (t: Throwable) {
-            android.util.Log.e(TAG, "startFullBackup crashed", t)
-            org.openreminisce.app.util.LogCollector.e(TAG, "startFullBackup CRASHED: ${t.javaClass.name}: ${t.message}")
-            for (el in t.stackTrace.take(15)) {
-                org.openreminisce.app.util.LogCollector.e(TAG, "    at ${el.className}.${el.methodName}(${el.fileName}:${el.lineNumber})")
-            }
-            android.widget.Toast.makeText(this, "Backup failed to start: ${t.message}", android.widget.Toast.LENGTH_LONG).show()
-            isBackingUp = false
-            applyKeepScreenOn(false)
-        }
-    }
-
-    private fun stopBackup() {
-        Log.d(TAG, "stopBackup() called")
-
-        // Set cancellation flag
-        val prefs = getSharedPreferences("BackupState", MODE_PRIVATE)
-        prefs.edit().apply {
-            putBoolean("cancel_backup", true)
-            remove("backup_type")
-            remove("is_quick_backup")
-            remove("backup_running_until")
-            apply()
-        }
-
-        val workManager = WorkManager.getInstance(this)
-        workManager.cancelAllWork()
-
-        val serviceIntent = Intent(this, BackupService::class.java)
-        stopService(serviceIntent)
-
-        isBackingUp = false
-
-        applyKeepScreenOn(false)
-        progressDialogHelper.dismiss()
-    }
-
-    private fun handleBackupCompleted(intent: Intent) {
-        val successfullyBackedUp = intent.getIntExtra("successfullyBackedUp", 0)
-        val totalProcessed = intent.getIntExtra("totalProcessed", 0)
-        val skippedExisting = intent.getIntExtra("skippedExisting", 0)
-        val failedCount = intent.getIntExtra("failedCount", 0)
-        val type = intent.getStringExtra("type") ?: "full"
-
-        // Receiver callbacks always arrive on the main thread — no UI hop needed
-        progressDialogHelper.showCompletion(
-            successfullyBackedUp = successfullyBackedUp,
-            totalProcessed = totalProcessed,
-            skippedExisting = skippedExisting,
-            failedCount = failedCount,
-            backupType = "all",
-            isQuickBackup = type == "quick"
-        ) {
-            // On dismiss - nothing special needed for WebGalleryActivity
-        }
-    }
-
-    private fun handleBackupFailedOrCancelled(status: String?) {
-        progressDialogHelper.showFailure(status ?: "failed") {
-            // On dismiss - nothing special needed
-        }
-    }
-
-    private fun handleBackupProgress(intent: Intent) {
-        val overallProgress = intent.getFloatExtra("overallProgress", 0f)
-        val currentAction = intent.getStringExtra("currentAction") ?: "unknown"
-        val currentFile = intent.getStringExtra("currentFile") ?: "unknown"
-        val fileIndex = intent.getIntExtra("fileIndex", 0)
-        val totalFiles = intent.getIntExtra("totalFiles", 0)
-        val backedUpCount = intent.getIntExtra("backedUpCount", 0)
-        val skippedCount = intent.getIntExtra("skippedCount", 0)
-        val failedCount = intent.getIntExtra("failedCount", 0)
-        val fileProgress = intent.getFloatExtra("fileProgress", 0f)
-        val fileUploadProgress = intent.getFloatExtra("fileUploadProgress", 0f)
-
-        // Receiver callbacks always arrive on the main thread — no UI hop needed
-        progressDialogHelper.updateProgress(
-            overallProgress = overallProgress,
-            currentAction = currentAction,
-            currentFile = currentFile,
-            fileIndex = fileIndex,
-            totalFiles = totalFiles,
-            backedUpCount = backedUpCount,
-            skippedCount = skippedCount,
-            failedCount = failedCount,
-            fileProgress = fileProgress,
-            fileUploadProgress = fileUploadProgress
-        )
-    }
+    private fun startFullBackup() = backupController.startFullBackup()
 
     @SuppressLint("SetJavaScriptEnabled")
     private fun setupWebView() {
@@ -331,12 +125,14 @@ class WebGalleryActivity : AppCompatActivity() {
 
             override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
                 super.onPageStarted(view, url, favicon)
+                currentPageUrl = url
                 Log.d(TAG, "Page started loading: $url")
                 progressBar.visibility = View.VISIBLE
             }
 
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
+                currentPageUrl = url
                 Log.d(TAG, "Page finished loading: $url")
                 progressBar.visibility = View.GONE
 
@@ -392,13 +188,54 @@ class WebGalleryActivity : AppCompatActivity() {
                 handler: SslErrorHandler?,
                 error: SslError?
             ) {
-                val url = error?.url ?: view?.url ?: ""
-                if (NetworkHelper.isPrivateOrLocalAddress(url)) {
-                    Log.w(TAG, "SSL error: ${error?.primaryError} on private/local network, proceeding for local development/LAN")
-                    handler?.proceed()
-                } else {
-                    Log.e(TAG, "SSL error: ${error?.primaryError} on public domain! Aborting connection!")
+                val url = error?.url ?: currentPageUrl ?: ""
+                if (!NetworkHelper.isPrivateOrLocalAddress(url)) {
+                    Log.e(TAG, "SSL error ${error?.primaryError} on public domain: cancelling")
                     handler?.cancel()
+                    return
+                }
+
+                val x509 = TofuPinningSupport.extractX509Certificate(error?.certificate)
+                val hostPort = TofuPinningSupport.hostPortKey(url)
+                if (x509 == null || hostPort == null) {
+                    Log.e(TAG, "Unable to inspect leaf certificate for $url; cancelling")
+                    handler?.cancel()
+                    return
+                }
+
+                val actualSha256 = TofuPinningSupport.certificateSha256Hex(x509)
+                val pinnedSha256 = SecureStorageHelper.getCertPin(this@WebGalleryActivity, hostPort)
+                when {
+                    pinnedSha256 == null -> {
+                        // First time connecting to this private/local self-signed cert: TOFU pin.
+                        SecureStorageHelper.setCertPin(this@WebGalleryActivity, hostPort, actualSha256)
+                        handler?.proceed()
+                    }
+                    pinnedSha256.equals(actualSha256, ignoreCase = true) -> {
+                        handler?.proceed()
+                    }
+                    else -> {
+                        Log.w(TAG, "TLS certificate mismatch in WebView for $hostPort")
+                        if (isFinishing || isDestroyed) {
+                            handler?.cancel()
+                            return
+                        }
+                        val mismatch = CertificateMismatchException(
+                            hostPort = hostPort,
+                            expectedSha256 = pinnedSha256,
+                            actualSha256 = actualSha256
+                        )
+                        TofuPinningSupport.showMismatchDialog(
+                            activity = this@WebGalleryActivity,
+                            mismatch = mismatch,
+                            onTrustNewCertificate = {
+                                SecureStorageHelper.setCertPin(this@WebGalleryActivity, hostPort, actualSha256)
+                                AuthenticatedHttpClient.invalidateClient()
+                                handler?.proceed()
+                            },
+                            onCancel = { handler?.cancel() }
+                        )
+                    }
                 }
             }
 
@@ -483,6 +320,7 @@ class WebGalleryActivity : AppCompatActivity() {
     }
 
     private fun loadErrorPage(message: String) {
+        currentPageUrl = null
         val errorHtml = """
             <!DOCTYPE html>
             <html>
@@ -524,25 +362,27 @@ class WebGalleryActivity : AppCompatActivity() {
         // origin. A redirect, compromised gallery page, or injected iframe must
         // never receive the JWT (previously it was written to localStorage on
         // every onPageFinished regardless of origin).
-        val currentUrl = webView.url
+        val currentUrl = currentPageUrl
         val configuredUrl = PreferenceHelper.getServerUrl(this)
         if (currentUrl == null || !sameOrigin(currentUrl, configuredUrl)) {
             Log.w(TAG, "Skipping auth token injection: origin mismatch (url=$currentUrl server=$configuredUrl)")
             return
         }
-        // Inject the auth token into localStorage so the React app can use it
+        // Inject the auth token into localStorage using JSONObject.quote for safe JS string escaping
         authToken?.let { token ->
             val deviceId = AuthHelper.getDeviceId(this)
+            val quotedToken = JSONObject.quote(token)
+            val quotedDeviceId = JSONObject.quote(deviceId)
             val javascript = """
                 (function() {
                     try {
-                        localStorage.setItem('authToken', '$token');
-                        localStorage.setItem('deviceId', '$deviceId');
+                        localStorage.setItem('authToken', $quotedToken);
+                        localStorage.setItem('deviceId', $quotedDeviceId);
                         console.log('Auth token injected successfully');
 
                         // Dispatch a custom event to notify the React app
                         window.dispatchEvent(new CustomEvent('authTokenReady', {
-                            detail: { token: '$token', deviceId: '$deviceId' }
+                            detail: { token: $quotedToken, deviceId: $quotedDeviceId }
                         }));
                     } catch (e) {
                         console.error('Failed to inject auth token:', e);
@@ -568,13 +408,13 @@ class WebGalleryActivity : AppCompatActivity() {
                 true
             }
             R.id.action_quick_backup -> {
-                if (!isBackingUp) {
+                if (!backupController.isBackingUp) {
                     startQuickBackup()
                 }
                 true
             }
             R.id.action_full_backup -> {
-                if (!isBackingUp) {
+                if (!backupController.isBackingUp) {
                     startFullBackup()
                 }
                 true
@@ -584,29 +424,23 @@ class WebGalleryActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
-        applyKeepScreenOn(false)
+        backupController.onDestroy()
         super.onDestroy()
-        try {
-            unregisterReceiver(backupStatusReceiver)
-        } catch (e: Exception) {
-            // Receiver was not registered or already unregistered
-        }
-        progressDialogHelper.dismiss()
         webView.destroy()
     }
 
     // JavaScript interface for communication between WebView and Android
     inner class WebAppInterface {
         private fun isTrustedOrigin(): Boolean {
-            val currentUrl = webView.url ?: return false
+            val url = currentPageUrl ?: return false
             val configuredUrl = PreferenceHelper.getServerUrl(this@WebGalleryActivity)
-            return sameOrigin(currentUrl, configuredUrl)
+            return sameOrigin(url, configuredUrl)
         }
 
         @JavascriptInterface
         fun getAuthToken(): String {
             if (!isTrustedOrigin()) {
-                Log.w(TAG, "Blocked getAuthToken from untrusted origin: ${webView.url}")
+                Log.w(TAG, "Blocked getAuthToken from untrusted origin: $currentPageUrl")
                 return ""
             }
             return authToken ?: ""
@@ -614,13 +448,17 @@ class WebGalleryActivity : AppCompatActivity() {
 
         @JavascriptInterface
         fun getDeviceId(): String {
+            if (!isTrustedOrigin()) {
+                Log.w(TAG, "Blocked getDeviceId from untrusted origin: $currentPageUrl")
+                return ""
+            }
             return AuthHelper.getDeviceId(this@WebGalleryActivity)
         }
 
         @JavascriptInterface
         fun getServerUrl(): String {
             if (!isTrustedOrigin()) {
-                Log.w(TAG, "Blocked getServerUrl from untrusted origin: ${webView.url}")
+                Log.w(TAG, "Blocked getServerUrl from untrusted origin: $currentPageUrl")
                 return ""
             }
             return PreferenceHelper.getServerUrl(this@WebGalleryActivity)
@@ -629,11 +467,15 @@ class WebGalleryActivity : AppCompatActivity() {
         @JavascriptInterface
         fun refreshToken(): String {
             if (!isTrustedOrigin()) {
-                Log.w(TAG, "Blocked refreshToken from untrusted origin: ${webView.url}")
+                Log.w(TAG, "Blocked refreshToken from untrusted origin: $currentPageUrl")
                 return ""
             }
             return try {
-                AuthHelper.getValidToken(this@WebGalleryActivity) ?: ""
+                val refreshed = AuthHelper.getValidToken(this@WebGalleryActivity) ?: ""
+                if (refreshed.isNotEmpty()) {
+                    authToken = refreshed
+                }
+                refreshed
             } catch (e: Exception) {
                 Log.e(TAG, "Error refreshing token", e)
                 ""

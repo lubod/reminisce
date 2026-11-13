@@ -3,22 +3,27 @@ package org.openreminisce.app.util
 import org.openreminisce.app.model.ImageInfo
 
 /**
- * In-memory holder for large media lists that cannot safely be passed through
- * Android's Intent Binder (~1 MB transaction limit).
- *
- * Populate before calling startActivity(), read in the target Activity's onCreate().
+ * Holds temporary list/position state when launching a detail viewer so large lists do not exceed
+ * Android Binder transaction limits. Delta mutations (stars/deletes) are consumed by the caller
+ * fragment on resume even if the detail viewer clears its browsing list on finish.
  */
 object MediaSessionHolder {
     var hashes: List<String> = emptyList()
     var imageInfos: List<ImageInfo> = emptyList()
-    /** Starred state changes from RemoteMediaDetailActivity, keyed by hash. */
+
+    /** Hashes whose starred state was changed in RemoteMediaDetailActivity: hash -> new isStarred */
     var starredUpdates: MutableMap<String, Boolean> = mutableMapOf()
-    /** Hashes deleted in RemoteMediaDetailActivity, to be removed from the grid on return. */
+
+    /** Hashes deleted in RemoteMediaDetailActivity */
     var deletedHashes: MutableSet<String> = mutableSetOf()
 
-    fun clear() {
+    fun clearMediaSession() {
         hashes = emptyList()
         imageInfos = emptyList()
+    }
+
+    fun clear() {
+        clearMediaSession()
         starredUpdates.clear()
         deletedHashes.clear()
     }

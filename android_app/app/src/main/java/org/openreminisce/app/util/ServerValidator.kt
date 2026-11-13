@@ -47,7 +47,7 @@ object ServerValidator {
                 .build()
 
             // Build ping request
-            val pingUrl = "$serverUrl/api/ping"
+            val pingUrl = "${serverUrl.trimEnd('/')}/api/ping"
             Log.d(TAG, "Pinging server at: $pingUrl")
 
             val request = Request.Builder()
@@ -55,26 +55,25 @@ object ServerValidator {
                 .get()
                 .build()
 
-            // Execute request
-            val response = client.newCall(request).execute()
+            return client.newCall(request).execute().use { response ->
+                Log.d(TAG, "Ping response code: ${response.code}")
 
-            Log.d(TAG, "Ping response code: ${response.code}")
-
-            return when {
-                response.isSuccessful -> {
-                    val body = response.body?.string() ?: ""
-                    Log.d(TAG, "Ping successful. Response: $body")
-                    PingResult.Success("Server is reachable (${response.code})")
-                }
-                response.code == 404 -> {
-                    // Server is reachable but /ping endpoint doesn't exist
-                    // This is acceptable - server is online
-                    Log.d(TAG, "Server is reachable but /ping endpoint not found (404)")
-                    PingResult.Success("Server is reachable")
-                }
-                else -> {
-                    Log.w(TAG, "Ping failed with status code: ${response.code}")
-                    PingResult.Error("Server returned status ${response.code}")
+                when {
+                    response.isSuccessful -> {
+                        val body = response.body?.string() ?: ""
+                        Log.d(TAG, "Ping successful. Response: $body")
+                        PingResult.Success("Server is reachable (${response.code})")
+                    }
+                    response.code == 404 -> {
+                        // Server is reachable but /ping endpoint doesn't exist
+                        // This is acceptable - server is online
+                        Log.d(TAG, "Server is reachable but /ping endpoint not found (404)")
+                        PingResult.Success("Server is reachable")
+                    }
+                    else -> {
+                        Log.w(TAG, "Ping failed with status code: ${response.code}")
+                        PingResult.Error("Server returned status ${response.code}")
+                    }
                 }
             }
         } catch (e: SocketTimeoutException) {

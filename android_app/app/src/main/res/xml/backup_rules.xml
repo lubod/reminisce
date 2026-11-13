@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <full-backup-content>
-    <!-- Exclude specific shared preferences that contain GCM registration Id -->
+    <!-- Exclude Keystore-encrypted credentials/tokens and transient backup state -->
+    <exclude domain="sharedpref" path="secure_prefs.xml" />
+    <exclude domain="sharedpref" path="BackupState.xml" />
 </full-backup-content>

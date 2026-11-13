@@ -16,9 +16,12 @@ import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import org.openreminisce.app.util.AuthHelper
+import org.openreminisce.app.util.AuthenticatedHttpClient
 import org.openreminisce.app.util.LogCollector
 import org.openreminisce.app.util.PreferenceHelper
 import org.openreminisce.app.util.SecureStorageHelper
+import org.openreminisce.app.util.ServerValidator
+import org.openreminisce.app.util.TofuPinningSupport
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.textfield.MaterialAutoCompleteTextView
 import com.google.android.material.textfield.TextInputEditText
@@ -114,9 +117,50 @@ class LoginActivity : AppCompatActivity() {
         supportActionBar?.hide()
         initializeViews()
         setupListeners()
-        if (intent.getBooleanExtra("session_expired", false)) {
+
+        val savedUrl = PreferenceHelper.getServerUrl(this)
+        val sessionExpired = intent.getBooleanExtra("session_expired", false)
+        if (sessionExpired) {
             showError("Session expired. Please sign in again.")
-            showLoginPhase()
+            if (savedUrl.isNotEmpty()) {
+                showLoginPhase()
+            }
+            return
+        }
+
+        if (savedUrl.isNotEmpty()) {
+            val accessToken = SecureStorageHelper.getAccessToken(this)
+            val refreshToken = SecureStorageHelper.getRefreshToken(this)
+            if (!accessToken.isNullOrEmpty() && AuthHelper.isTokenValid(accessToken)) {
+                (application as? ReminisceApplication)?.registerAuthClientWithGlide()
+                navigateToMain()
+                return
+            }
+            if (!refreshToken.isNullOrEmpty()) {
+                attemptSessionResume()
+            }
+        }
+    }
+
+    private fun attemptSessionResume() {
+        TofuPinningSupport.consumeLastMismatch()
+        showLoading()
+        lifecycleScope.launch(Dispatchers.IO) {
+            val refreshed = AuthHelper.refreshAuthToken(this@LoginActivity)
+            withContext(Dispatchers.Main) {
+                hideLoading()
+                if (!refreshed.isNullOrEmpty()) {
+                    (application as? ReminisceApplication)?.registerAuthClientWithGlide()
+                    navigateToMain()
+                } else if (!handlePossibleCertMismatch { attemptSessionResume() }) {
+                    showLoginPhase()
+                    if (SecureStorageHelper.getRefreshToken(this@LoginActivity).isNullOrEmpty()) {
+                        showError("Session expired. Please sign in again.")
+                    } else {
+                        showError("Server unreachable. Check connection or sign in.")
+                    }
+                }
+            }
         }
     }
 
@@ -223,16 +267,19 @@ class LoginActivity : AppCompatActivity() {
     /** Check setup status and show either setup phase or login phase. */
     private fun advanceFromServer() {
         val serverUrl = PreferenceHelper.getServerUrl(this)
+        TofuPinningSupport.consumeLastMismatch()
         showLoading()
         lifecycleScope.launch(Dispatchers.IO) {
             val needsSetup = try {
-                AuthHelper.checkSetupStatus(serverUrl)
-            } catch (e: Exception) {
+                AuthHelper.checkSetupStatus(this@LoginActivity, serverUrl)
+            } catch (_: Exception) {
                 false
             }
             withContext(Dispatchers.Main) {
                 hideLoading()
-                if (needsSetup) showSetupPhase() else showLoginPhase()
+                if (!handlePossibleCertMismatch { advanceFromServer() }) {
+                    if (needsSetup) showSetupPhase() else showLoginPhase()
+                }
             }
         }
     }
@@ -286,16 +333,28 @@ class LoginActivity : AppCompatActivity() {
         }
         Toast.makeText(this, "Testing connection...", Toast.LENGTH_SHORT).show()
         LogCollector.i(TAG, "Testing connection to $serverUrl")
+        TofuPinningSupport.consumeLastMismatch()
         lifecycleScope.launch(Dispatchers.IO) {
-            try {
-                val ok = AuthHelper.pingServer(serverUrl)
-                LogCollector.i(TAG, if (ok) "Server reachable" else "Server unreachable")
-            } catch (e: Exception) {
-                LogCollector.e(TAG, "Connection test failed: ${e.message}")
+            val pingResult = ServerValidator.pingServer(this@LoginActivity, serverUrl)
+            when (pingResult) {
+                is ServerValidator.PingResult.Success -> LogCollector.i(TAG, pingResult.message)
+                is ServerValidator.PingResult.Error -> {
+                    val msg = "Connection test failed: ${pingResult.message}"
+                    pingResult.exception?.let { LogCollector.e(TAG, msg, it) } ?: LogCollector.e(TAG, msg)
+                }
             }
             withContext(Dispatchers.Main) {
                 if (logsVisible) logsTextView.text = LogCollector.getLogs()
-                Toast.makeText(this@LoginActivity, "Test complete (check logs)", Toast.LENGTH_SHORT).show()
+                when (pingResult) {
+                    is ServerValidator.PingResult.Success -> {
+                        Toast.makeText(this@LoginActivity, pingResult.message, Toast.LENGTH_SHORT).show()
+                    }
+                    is ServerValidator.PingResult.Error -> {
+                        if (!handlePossibleCertMismatch(pingResult.exception) { testConnection() }) {
+                            Toast.makeText(this@LoginActivity, pingResult.message, Toast.LENGTH_LONG).show()
+                        }
+                    }
+                }
             }
         }
     }
@@ -325,10 +384,11 @@ class LoginActivity : AppCompatActivity() {
         if (password != confirm) { setupConfirmPasswordLayout.error = "Passwords do not match"; return }
 
         val serverUrl = PreferenceHelper.getServerUrl(this)
+        TofuPinningSupport.consumeLastMismatch()
         showLoading()
 
         lifecycleScope.launch(Dispatchers.IO) {
-            val error = AuthHelper.setupAdmin(username, password, serverUrl)
+            val error = AuthHelper.setupAdmin(this@LoginActivity, username, password, serverUrl)
             if (error == null) {
                 // Auto-login after setup
                 val loginOk = AuthHelper.loginWithCredentials(this@LoginActivity, username, password, serverUrl)
@@ -336,10 +396,9 @@ class LoginActivity : AppCompatActivity() {
                     hideLoading()
                     if (loginOk) {
                         SecureStorageHelper.setUsername(this@LoginActivity, username)
-                        SecureStorageHelper.setPassword(this@LoginActivity, password)
                         (application as? ReminisceApplication)?.registerAuthClientWithGlide()
                         navigateToMain()
-                    } else {
+                    } else if (!handlePossibleCertMismatch { performSetup() }) {
                         showError("Account created. Please sign in.")
                         showLoginPhase()
                     }
@@ -347,7 +406,9 @@ class LoginActivity : AppCompatActivity() {
             } else {
                 withContext(Dispatchers.Main) {
                     hideLoading()
-                    showError(error)
+                    if (!handlePossibleCertMismatch { performSetup() }) {
+                        showError(error)
+                    }
                 }
             }
         }
@@ -364,6 +425,7 @@ class LoginActivity : AppCompatActivity() {
         if (password.isEmpty()) { passwordLayout.error = getString(R.string.password_required); return }
 
         val serverUrl = PreferenceHelper.getServerUrl(this)
+        TofuPinningSupport.consumeLastMismatch()
         showLoading()
 
         lifecycleScope.launch(Dispatchers.IO) {
@@ -371,7 +433,6 @@ class LoginActivity : AppCompatActivity() {
                 val result = AuthHelper.loginWithCredentials(this@LoginActivity, username, password, serverUrl)
                 if (result) {
                     SecureStorageHelper.setUsername(this@LoginActivity, username)
-                    SecureStorageHelper.setPassword(this@LoginActivity, password)
                     (application as? ReminisceApplication)?.registerAuthClientWithGlide()
                     withContext(Dispatchers.Main) {
                         hideLoading()
@@ -380,17 +441,40 @@ class LoginActivity : AppCompatActivity() {
                 } else {
                     withContext(Dispatchers.Main) {
                         hideLoading()
-                        showError(getString(R.string.login_failed, "Invalid credentials"))
+                        if (!handlePossibleCertMismatch { performLogin() }) {
+                            showError(getString(R.string.login_failed, "Invalid credentials"))
+                        }
                     }
                 }
             } catch (e: Exception) {
                 LogCollector.e(TAG, "Error during login", e)
                 withContext(Dispatchers.Main) {
                     hideLoading()
-                    showError(getString(R.string.login_failed, e.message ?: "Unknown error"))
+                    if (!handlePossibleCertMismatch(e) { performLogin() }) {
+                        showError(getString(R.string.login_failed, e.message ?: "Unknown error"))
+                    }
                 }
             }
         }
+    }
+
+    private fun handlePossibleCertMismatch(
+        throwable: Throwable? = null,
+        onTrusted: () -> Unit
+    ): Boolean {
+        val mismatch = TofuPinningSupport.findMismatch(throwable)
+            ?: TofuPinningSupport.consumeLastMismatch()
+            ?: return false
+        TofuPinningSupport.showMismatchDialog(
+            activity = this,
+            mismatch = mismatch,
+            onTrustNewCertificate = {
+                SecureStorageHelper.setCertPin(this, mismatch.hostPort, mismatch.actualSha256)
+                AuthenticatedHttpClient.invalidateClient()
+                onTrusted()
+            }
+        )
+        return true
     }
 
     private fun showLoading() {

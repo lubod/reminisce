@@ -42,8 +42,6 @@ android {
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
             if (keystorePropertiesFile.exists()) {
                 signingConfig signingConfigs.release
-            } else {
-                signingConfig signingConfigs.debug
             }
         }
     }
@@ -59,6 +57,20 @@ android {
     }
     lint {
         abortOnError true
+    }
+    testOptions {
+        unitTests.includeAndroidResources = true
+    }
+}
+
+gradle.taskGraph.whenReady { graph ->
+    def buildingRelease = graph.allTasks.any {
+        it.name in ['assembleRelease', 'bundleRelease', 'packageRelease', 'signReleaseBundle']
+    }
+    if (buildingRelease && !keystorePropertiesFile.exists()) {
+        throw new GradleException(
+            'Release builds require android_app/keystore.properties; refusing debug-signed release.'
+        )
     }
 }
 
@@ -83,10 +95,7 @@ dependencies {
     // For networking
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
     implementation 'com.squareup.okhttp3:logging-interceptor:4.12.0'
-    
-    // For JSON handling
-    implementation 'com.google.code.gson:gson:2.10.1'
-    
+
     // For SQLite and database operations
     implementation 'androidx.sqlite:sqlite-ktx:2.4.0'
     
@@ -133,6 +142,9 @@ dependencies {
     implementation 'io.noties.markwon:core:4.6.2'
 
     testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.json:json:20240303'
+    testImplementation 'com.squareup.okhttp3:mockwebserver:4.12.0'
+    testImplementation 'org.robolectric:robolectric:4.14.1'
     androidTestImplementation 'androidx.test.ext:junit:1.1.5'
     androidTestImplementation 'androidx.test.espresso:espresso-core:3.5.1'
 }

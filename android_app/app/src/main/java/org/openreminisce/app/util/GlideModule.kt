@@ -1,7 +1,6 @@
 package org.openreminisce.app.util
 
 import android.content.Context
-import android.util.Log
 import com.bumptech.glide.Glide
 import com.bumptech.glide.Registry
 import com.bumptech.glide.annotation.Excludes
@@ -17,8 +16,7 @@ import okhttp3.Response
 import java.io.InputStream
 import java.util.concurrent.TimeUnit
 
-// This is a utility class to handle authentication for HTTP requests
-// Caches the token to avoid repeated reads from EncryptedSharedPreferences
+// Caches the active JWT access token for Glide/OkHttp media requests and refreshes once on 401.
 class ThumbnailAuthInterceptor(private val context: Context) : Interceptor {
     companion object {
         private const val TAG = "ThumbnailAuthInterceptor"
@@ -31,67 +29,76 @@ class ThumbnailAuthInterceptor(private val context: Context) : Interceptor {
             cachedToken = null
             tokenExpiryTime = 0
         }
+
+        private fun updateCachedToken(token: String?) {
+            if (token.isNullOrEmpty()) {
+                clearCachedToken()
+                return
+            }
+            cachedToken = token
+            val parsedExpiry = AuthHelper.decodeJwtExpiryMs(token)
+            tokenExpiryTime = if (parsedExpiry > 0L) parsedExpiry else System.currentTimeMillis() + 3600_000L
+        }
     }
 
     private fun getCachedToken(): String? {
         val now = System.currentTimeMillis()
-
-        // If token is cached and not near expiry (5 min buffer), use it
-        if (cachedToken != null && tokenExpiryTime > now + 300_000) {
-            return cachedToken
+        val existing = cachedToken
+        if (!existing.isNullOrEmpty() && tokenExpiryTime > now + 300_000) {
+            return existing
         }
 
-        // Otherwise fetch from storage (this is expensive, do it rarely)
         val token = AuthHelper.getValidToken(context)
-        if (token != null) {
-            cachedToken = token
-            // Parse expiry from JWT
-            try {
-                val parts = token.split(".")
-                if (parts.size == 3) {
-                    val payload = String(android.util.Base64.decode(parts[1], android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING))
-                    val json = org.json.JSONObject(payload)
-                    tokenExpiryTime = json.optLong("exp", 0) * 1000
-                }
-            } catch (e: Exception) {
-                LogCollector.e(TAG, "Error parsing token expiry", e)
-                // Default to 1 hour from now if parsing fails
-                tokenExpiryTime = now + 3600_000
-            }
-        }
-
+        updateCachedToken(token)
         return token
     }
 
     override fun intercept(chain: Interceptor.Chain): Response {
         val originalRequest = chain.request()
+        val path = originalRequest.url.encodedPath
+        val isAuthEndpoint = path.contains("/api/auth/")
 
-        // If authorization header is already present (e.g. injected via GlideUrl LazyHeaders), proceed
+        // Callers that already attach Authorization (e.g. via AuthHelper.executeWithTokenRefresh)
+        // manage their own retry loop; we only invalidate the cached thumbnail token on 401.
         if (!originalRequest.header("Authorization").isNullOrEmpty()) {
-            return chain.proceed(originalRequest)
+            val response = chain.proceed(originalRequest)
+            if (response.code == 401 && !isAuthEndpoint) {
+                clearCachedToken()
+            }
+            return response
         }
 
-        // Only add the header for thumbnail or image requests
-        val path = originalRequest.url.encodedPath
-        val newRequest = if (path.contains("/api/thumbnail/") || path.contains("/api/image/")) {
-            val token = getCachedToken()
-            if (!token.isNullOrEmpty()) {
-                originalRequest.newBuilder()
-                    .addHeader("Authorization", "Bearer $token")
-                    .build()
-            } else {
-                originalRequest
-            }
+        val shouldInjectAuth = !isAuthEndpoint && (
+            path.contains("/api/thumbnail/") ||
+                path.contains("/api/image/") ||
+                path.contains("/api/video/")
+            )
+
+        val injectedToken = if (shouldInjectAuth) getCachedToken() else null
+        val newRequest = if (!injectedToken.isNullOrEmpty()) {
+            originalRequest.newBuilder()
+                .addHeader("Authorization", "Bearer $injectedToken")
+                .build()
         } else {
             originalRequest
         }
 
         val response = chain.proceed(newRequest)
 
-        // If we get 401, clear the cached token so it gets refreshed
-        if (response.code == 401) {
-            LogCollector.w(TAG, "Got 401 on ${originalRequest.url}, clearing cached token")
+        if (response.code == 401 && shouldInjectAuth && !isAuthEndpoint) {
+            LogCollector.w(TAG, "Got 401 on ${originalRequest.url}, refreshing access token")
             clearCachedToken()
+            val refreshedToken = AuthHelper.refreshAuthToken(context, failedAccessToken = injectedToken)
+            if (!refreshedToken.isNullOrEmpty()) {
+                updateCachedToken(refreshedToken)
+                response.close()
+                val retryRequest = originalRequest.newBuilder()
+                    .header("Authorization", "Bearer $refreshedToken")
+                    .build()
+                return chain.proceed(retryRequest)
+            } else if (SecureStorageHelper.getRefreshToken(context).isNullOrEmpty()) {
+                AuthHelper.redirectToLogin(context)
+            }
         }
 
         return response
@@ -105,6 +112,13 @@ object AuthenticatedHttpClient {
     @Volatile
     private var cachedUrl: String? = null
     private val lock = Any()
+
+    fun invalidateClient() {
+        synchronized(lock) {
+            client = null
+            cachedUrl = null
+        }
+    }
 
     fun getClient(context: Context): OkHttpClient {
         val baseUrl = PreferenceHelper.getServerUrl(context)
@@ -122,10 +136,10 @@ object AuthenticatedHttpClient {
         return synchronized(lock) {
             client?.let { return it }
 
-            val useInsecure = NetworkHelper.isPrivateOrLocalAddress(baseUrl)
+            val isPrivateOrLocal = NetworkHelper.isPrivateOrLocalAddress(baseUrl)
             cachedUrl = baseUrl
 
-            LogCollector.d(TAG, "getClient called - Creating client for URL: $baseUrl (useInsecure: $useInsecure)")
+            LogCollector.d(TAG, "getClient called - Creating client for URL: $baseUrl (isPrivateOrLocal: $isPrivateOrLocal)")
 
             val builder = OkHttpClient.Builder()
                 .addInterceptor(ThumbnailAuthInterceptor(context.applicationContext))
@@ -144,7 +158,7 @@ object AuthenticatedHttpClient {
                     }
                 }
 
-            NetworkHelper.configureInsecureSsl(builder, baseUrl)
+            NetworkHelper.configureSsl(builder, baseUrl, context)
 
             val newClient = builder.build()
             client = newClient
@@ -163,16 +177,16 @@ object AuthenticatedHttpClient {
         readTimeoutSeconds: Long = 300
     ): OkHttpClient {
         val baseUrl = PreferenceHelper.getServerUrl(context)
-        val useInsecure = NetworkHelper.isPrivateOrLocalAddress(baseUrl)
+        val isPrivateOrLocal = NetworkHelper.isPrivateOrLocalAddress(baseUrl)
 
-        LogCollector.d(TAG, "Creating client with custom timeouts for URL: $baseUrl (useInsecure: $useInsecure)")
+        LogCollector.d(TAG, "Creating client with custom timeouts for URL: $baseUrl (isPrivateOrLocal: $isPrivateOrLocal)")
 
         val builder = OkHttpClient.Builder()
             .addInterceptor(ThumbnailAuthInterceptor(context.applicationContext))
             .connectTimeout(connectTimeoutSeconds, TimeUnit.SECONDS)
             .readTimeout(readTimeoutSeconds, TimeUnit.SECONDS)
 
-        NetworkHelper.configureInsecureSsl(builder, baseUrl)
+        NetworkHelper.configureSsl(builder, baseUrl, context)
 
         return builder.build()
     }

@@ -29,63 +29,24 @@ data class BackupStats(
 class BackupWorker(context: Context, val params: WorkerParameters) : Worker(context, params) {
     companion object {
         private const val TAG = "BackupWorker"
-        private const val PROGRESS_UPDATE_THROTTLE_MS = 200L // Send progress updates frequently for responsive UI (200ms ~5 updates/sec)
+        private const val PROGRESS_UPDATE_THROTTLE_MS = 200L
+        private const val NOTIFICATION_UPDATE_THROTTLE_MS = 1000L
         private const val NOTIFICATION_ID = 2
-        private const val CHANNEL_ID = "backup_worker_channel"
-        private const val WAKE_LOCK_TAG = "Reminisce::BackupWorkerWakeLock"
+        private const val CHANNEL_ID = "backup_worker_progress_v2"
     }
 
     private var backupStats: BackupStats? = null
     @Volatile
     private var activeCall: Call? = null
-    private var wakeLock: android.os.PowerManager.WakeLock? = null
 
-    // Throttling mechanism for progress updates using lock-free AtomicLong
+    // Lock-free throttles for WorkManager progress and foreground notification updates
     private val lastProgressUpdateTime = AtomicLong(0L)
+    private val lastNotificationUpdateTime = AtomicLong(0L)
 
     override fun onStopped() {
         super.onStopped()
         Log.d(TAG, "Worker stopped, cancelling active HTTP call")
-        // Cancel any active HTTP request immediately
         activeCall?.cancel()
-
-        // Release wake lock if held
-        releaseWakeLock()
-    }
-
-    private fun acquireWakeLock() {
-        try {
-            val powerManager = applicationContext.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
-
-            // NUCLEAR OPTION for Honor/Huawei devices with extremely aggressive battery management
-            // Use PARTIAL_WAKE_LOCK to keep CPU running during backup without forcing screen on
-            // Timeout capped at 6h: Android 14 limits dataSync foreground services to 6h/day.
-            wakeLock = powerManager.newWakeLock(
-                android.os.PowerManager.PARTIAL_WAKE_LOCK,
-                WAKE_LOCK_TAG
-            ).apply {
-                setReferenceCounted(false)
-                acquire(6 * 60 * 60 * 1000L) // 6 hours max timeout
-            }
-
-            Log.d(TAG, "Wake lock acquired (PARTIAL_WAKE_LOCK) for background backup execution")
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to acquire wake lock", e)
-        }
-    }
-
-    private fun releaseWakeLock() {
-        try {
-            wakeLock?.let {
-                if (it.isHeld) {
-                    it.release()
-                    Log.d(TAG, "PARTIAL wake lock released")
-                }
-            }
-            wakeLock = null
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to release wake lock", e)
-        }
     }
 
     override fun getForegroundInfo(): androidx.work.ForegroundInfo {
@@ -95,17 +56,20 @@ class BackupWorker(context: Context, val params: WorkerParameters) : Worker(cont
     private fun createForegroundInfo(currentFile: String, fileIndex: Int, totalFiles: Int): androidx.work.ForegroundInfo {
         // Create notification channel for Android 8.0 and above
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            val notificationManager = applicationContext.getSystemService(android.app.NotificationManager::class.java)
+            // Remove legacy noisy high-importance channels if present
+            notificationManager?.deleteNotificationChannel("backup_worker_channel")
+            notificationManager?.deleteNotificationChannel("backup_service_channel")
+
             val channel = android.app.NotificationChannel(
                 CHANNEL_ID,
-                "Backup Worker Channel",
-                android.app.NotificationManager.IMPORTANCE_HIGH // HIGH importance to prevent worker from sleeping
+                "Media Upload Progress",
+                android.app.NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "Notifications for backup worker - keeps backup running with screen off"
-                setShowBadge(true)
+                description = "Ongoing progress notification while uploading media"
+                setShowBadge(false)
                 lockscreenVisibility = android.app.Notification.VISIBILITY_PUBLIC
             }
-
-            val notificationManager = applicationContext.getSystemService(android.app.NotificationManager::class.java)
             notificationManager?.createNotificationChannel(channel)
         }
 
@@ -128,10 +92,11 @@ class BackupWorker(context: Context, val params: WorkerParameters) : Worker(cont
             .setContentText(currentFile)
             .setContentIntent(contentIntent)
             .setSmallIcon(org.openreminisce.app.R.drawable.ic_launcher_foreground)
-            .setPriority(androidx.core.app.NotificationCompat.PRIORITY_HIGH)
+            .setPriority(androidx.core.app.NotificationCompat.PRIORITY_LOW)
+            .setSilent(true)
             .setOngoing(true)
             .setVisibility(androidx.core.app.NotificationCompat.VISIBILITY_PUBLIC)
-            .setProgress(totalFiles, fileIndex, false) // Show progress bar
+            .setProgress(totalFiles, fileIndex, false)
             .build()
 
         return if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
@@ -145,8 +110,20 @@ class BackupWorker(context: Context, val params: WorkerParameters) : Worker(cont
         }
     }
 
-    // Update notification with current progress - call this frequently to prove work is ongoing
+    // Update notification with current progress (throttled to avoid binder/SystemUI churn)
     private fun updateNotificationProgress(currentFile: String, fileIndex: Int, totalFiles: Int) {
+        val now = System.currentTimeMillis()
+        val last = lastNotificationUpdateTime.get()
+        val isFinal = totalFiles > 0 && fileIndex >= totalFiles
+        if (!isFinal && now - last < NOTIFICATION_UPDATE_THROTTLE_MS) {
+            return
+        }
+        if (!isFinal && !lastNotificationUpdateTime.compareAndSet(last, now)) {
+            return
+        }
+        if (isFinal) {
+            lastNotificationUpdateTime.set(now)
+        }
         try {
             setForegroundAsync(createForegroundInfo(currentFile, fileIndex, totalFiles))
         } catch (e: Exception) {
@@ -181,71 +158,56 @@ class BackupWorker(context: Context, val params: WorkerParameters) : Worker(cont
     override fun doWork(): Result {
         Log.d(TAG, "Backup worker started")
 
-        // Acquire wake lock to prevent device sleep during backup
-        acquireWakeLock()
+        // Promote to foreground service so background uploads continue reliably.
+        setForegroundAsync(getForegroundInfo()).also { fgsFuture ->
+            fgsFuture.addListener({
+                try {
+                    fgsFuture.get()
+                    Log.d(TAG, "Worker promoted to foreground service")
+                } catch (e: Exception) {
+                    Log.e(TAG, "FGS promotion failed; relying on WorkManager scheduling", e)
+                }
+            }, Runnable::run)
+        }
+
+        Log.d(TAG, "Input data processed")
+        val backupType = inputData.getString("backup_type") ?: "image"
+        Log.d(TAG, "Input backup type: $backupType")
+        val quickBackup = inputData.getBoolean("quick_backup", false)
+        Log.d(TAG, "Input quick backup: $quickBackup")
 
         return try {
-            // Promote to foreground service to prevent being killed during sleep.
-            // setForegroundAsync returns a ListenableFuture: a synchronous try/catch
-            // around it would never see the actual failure, so inspect the future
-            // via addListener instead (Runnable::run executes the listener inline
-            // on whichever thread completes the future).
-            setForegroundAsync(getForegroundInfo()).also { fgsFuture ->
-                fgsFuture.addListener({
-                    try {
-                        fgsFuture.get()
-                        Log.d(TAG, "Worker promoted to foreground service")
-                    } catch (e: Exception) {
-                        Log.e(TAG, "FGS promotion failed — relying on PARTIAL wake lock", e)
-                    }
-                }, Runnable::run)
-            }
+            val success = performBackup()
+            Log.d(TAG, "performBackup returned: $success")
+            if (success) {
+                Log.d(TAG, "Backup worker completed successfully")
 
-            Log.d(TAG, "Input data processed")
-            val backupType = inputData.getString("backup_type") ?: "image"
-            Log.d(TAG, "Input backup type: $backupType")
-            val quickBackup = inputData.getBoolean("quick_backup", false)
-            Log.d(TAG, "Input quick backup: $quickBackup")
+                val outputData = if (backupStats != null) {
+                    val builder = androidx.work.Data.Builder()
+                        .putInt("successfullyBackedUp", backupStats!!.successfullyBackedUp)
+                        .putInt("totalProcessed", backupStats!!.totalProcessed)
+                        .putInt("skippedExisting", backupStats!!.skippedExisting)
+                        .putInt("failedCount", backupStats!!.failedCount)
 
-            try {
-                val success = performBackup()
-                Log.d(TAG, "performBackup returned: $success")
-                if (success) {
-                    Log.d(TAG, "Backup worker completed successfully")
-
-                    // Add backup statistics to the result if available
-                    val outputData = if (backupStats != null) {
-                        val builder = androidx.work.Data.Builder()
-                            .putInt("successfullyBackedUp", backupStats!!.successfullyBackedUp)
-                            .putInt("totalProcessed", backupStats!!.totalProcessed)
-                            .putInt("skippedExisting", backupStats!!.skippedExisting)
-                            .putInt("failedCount", backupStats!!.failedCount)
-
-                        // Add failed files as a string array (WorkManager Data supports string arrays)
-                        if (backupStats!!.failedFiles.isNotEmpty()) {
-                            builder.putStringArray("failedFiles", backupStats!!.failedFiles.toTypedArray())
-                        }
-
-                        builder.build()
-                    } else {
-                        androidx.work.Data.Builder().build()
+                    if (backupStats!!.failedFiles.isNotEmpty()) {
+                        builder.putStringArray("failedFiles", backupStats!!.failedFiles.toTypedArray())
                     }
 
-                    Result.success(outputData)
+                    builder.build()
                 } else {
-                    Log.w(TAG, "Backup worker completed with warnings (some operations may have failed)")
-                    Result.failure()
+                    androidx.work.Data.Builder().build()
                 }
-            } catch (e: Exception) {
-                Log.e(TAG, "Backup worker failed with exception", e)
-                // Transient failures (network drop, server restart, timeouts) should be
-                // retried with backoff instead of terminating the run. Give up after a few
-                // attempts so a persistently broken setup doesn't retry forever.
-                if (params.runAttemptCount < 4) Result.retry() else Result.failure()
+
+                Result.success(outputData)
+            } else {
+                Log.w(TAG, "Backup worker completed with warnings (some operations may have failed)")
+                Result.failure()
             }
-        } finally {
-            // Always release wake lock when work completes
-            releaseWakeLock()
+        } catch (e: Exception) {
+            Log.e(TAG, "Backup worker failed with exception", e)
+            // Transient failures (network drop, server restart, timeouts) should be
+            // retried with backoff instead of terminating the run.
+            if (params.runAttemptCount < 4) Result.retry() else Result.failure()
         }
     }
 
@@ -1076,48 +1038,55 @@ class BackupWorker(context: Context, val params: WorkerParameters) : Worker(cont
             .build()
 
         try {
-            val response = AuthHelper.executeWithTokenRefresh(applicationContext, client, request)
+            AuthHelper.executeWithTokenRefresh(
+                applicationContext,
+                client,
+                request,
+                onCallCreated = { activeCall = it }
+            ).use { response ->
+                if (response.isSuccessful) {
+                    val responseBody = response.body?.string()
+                    val jsonResponse = org.json.JSONObject(responseBody ?: "{}")
 
-            if (response.isSuccessful) {
-                val responseBody = response.body?.string()
-                val jsonResponse = org.json.JSONObject(responseBody ?: "{}")
+                    // Backend returns: { "existing_hashes": ["hash1", "hash2"] }
+                    val existingHashesArray = jsonResponse.optJSONArray("existing_hashes")
+                    val existingHashes = mutableSetOf<String>()
 
-                // Backend returns: { "existing_hashes": ["hash1", "hash2"] }
-                val existingHashesArray = jsonResponse.optJSONArray("existing_hashes")
-                val existingHashes = mutableSetOf<String>()
-                
-                if (existingHashesArray != null) {
-                    for (i in 0 until existingHashesArray.length()) {
-                        existingHashes.add(existingHashesArray.getString(i))
+                    if (existingHashesArray != null) {
+                        for (i in 0 until existingHashesArray.length()) {
+                            existingHashes.add(existingHashesArray.getString(i))
+                        }
                     }
-                }
 
-                // Determine which files need upload
-                val needsUpload = mutableSetOf<String>()
+                    // Determine which files need upload
+                    val needsUpload = mutableSetOf<String>()
 
-                // Check each requested file against existing hashes
-                for (file in files) {
-                    if (!existingHashes.contains(file.hash)) {
-                        needsUpload.add(file.hash)
+                    // Check each requested file against existing hashes
+                    for (file in files) {
+                        if (!existingHashes.contains(file.hash)) {
+                            needsUpload.add(file.hash)
+                        }
                     }
+
+                    LogCollector.i(TAG, "Batch check result: exist=${existingHashes.size}, upload=${needsUpload.size}")
+
+                    return BatchCheckResult(existingHashes, needsUpload)
+                } else if (response.code == 401) {
+                    Log.e(TAG, "Authentication failed (401) during batch check")
+                    LogCollector.e(TAG, "Batch check FAILED (401 auth error)")
+                } else if (response.code == 404) {
+                    Log.d(TAG, "Batch endpoint not found (404)")
+                    LogCollector.w(TAG, "Batch check endpoint not found (404)")
+                } else {
+                    Log.e(TAG, "Batch check failed with code: ${response.code}")
+                    LogCollector.e(TAG, "Batch check FAILED (${response.code})")
                 }
-
-                LogCollector.i(TAG, "Batch check result: exist=${existingHashes.size}, upload=${needsUpload.size}")
-
-                return BatchCheckResult(existingHashes, needsUpload)
-            } else if (response.code == 401) {
-                Log.e(TAG, "Authentication failed (401) during batch check")
-                LogCollector.e(TAG, "Batch check FAILED (401 auth error)")
-            } else if (response.code == 404) {
-                Log.d(TAG, "Batch endpoint not found (404)")
-                LogCollector.w(TAG, "Batch check endpoint not found (404)")
-            } else {
-                Log.e(TAG, "Batch check failed with code: ${response.code}")
-                LogCollector.e(TAG, "Batch check FAILED (${response.code})")
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error during batch check for ${files.size} files", e)
             LogCollector.e(TAG, "Batch check EXCEPTION: ${e.javaClass.simpleName}: ${e.message}")
+        } finally {
+            activeCall = null
         }
 
         return null
@@ -1200,10 +1169,13 @@ class BackupWorker(context: Context, val params: WorkerParameters) : Worker(cont
             .build()
 
         try {
-            val response = AuthHelper.executeWithTokenRefresh(applicationContext, client, request)
-
-        val resp = response
-        try {
+            val resp = AuthHelper.executeWithTokenRefresh(
+                applicationContext,
+                client,
+                request,
+                onCallCreated = { activeCall = it }
+            )
+            try {
                 // Check if cancelled after upload completed but before processing response
                 if (isStopped) {
                     Log.d(TAG, "Upload cancelled after completion: $fileName")
@@ -1330,6 +1302,7 @@ class BackupWorker(context: Context, val params: WorkerParameters) : Worker(cont
         } catch (e: Exception) {
             Log.e(TAG, "Upload failed with error for $fileName", e)
             LogCollector.e(TAG, "Upload EXCEPTION: $fileName - ${e.javaClass.simpleName}: ${e.message}")
+        } finally {
             activeCall = null
         }
 

@@ -99,8 +99,4 @@ object LogCollector {
             }
         }
     }
-
-    fun fetchRustLogs() {
-        // No-op: captured by startLogcatReader
-    }
 }

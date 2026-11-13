@@ -61,9 +61,14 @@ class QRScannerActivity : AppCompatActivity() {
         barcodeLauncher.launch(options)
     }
 
+    private var scannedCertSha256: String? = null
+
     private fun handleQRCode(qrContent: String) {
         try {
             val json = JSONObject(qrContent)
+            scannedCertSha256 = org.openreminisce.app.util.TofuPinningSupport.normalizeSha256(
+                json.optString("cert_sha256", "")
+            )
             val urls = mutableListOf<String>()
 
             // Parse server_urls array (current format)
@@ -110,6 +115,9 @@ class QRScannerActivity : AppCompatActivity() {
     }
 
     private fun urlLabel(url: String): String {
+        if (org.openreminisce.app.util.NetworkHelper.isTailscaleAddress(url)) {
+            return "Tailscale (VPN)  —  $url"
+        }
         val host = try {
             java.net.URL(url).host
         } catch (e: Exception) {
@@ -123,8 +131,18 @@ class QRScannerActivity : AppCompatActivity() {
     }
 
     private fun returnUrl(url: String) {
+        val certPin = scannedCertSha256
+        if (!certPin.isNullOrEmpty() && org.openreminisce.app.util.NetworkHelper.isPrivateOrLocalAddress(url)) {
+            org.openreminisce.app.util.TofuPinningSupport.hostPortKey(url)?.let { hostPort ->
+                org.openreminisce.app.util.SecureStorageHelper.setCertPin(this, hostPort, certPin)
+                org.openreminisce.app.util.AuthenticatedHttpClient.invalidateClient()
+            }
+        }
         val resultIntent = Intent()
         resultIntent.putExtra("server_url", url)
+        if (!certPin.isNullOrEmpty()) {
+            resultIntent.putExtra("cert_sha256", certPin)
+        }
         setResult(RESULT_OK, resultIntent)
         finish()
     }
