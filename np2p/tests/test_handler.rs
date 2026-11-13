@@ -185,11 +185,11 @@ async fn oversize_stream_init_rejected_with_413() {
     let file_hash: [u8; 32] = [7u8; 32];
     let shard_index: u8 = 0;
     // Token is valid on purpose: the rejection must come from the SIZE cap, not from
-    // authentication. Such a shard would otherwise store fine yet never be retrievable
-    // (retrieval ships one frame capped at MAX_MESSAGE_LEN).
+    // authentication. Multi-segment shards can exceed MAX_MESSAGE_LEN on disk and are
+    // capped at MAX_SHARD_BYTES (8 GiB).
     let binding: [u8; 32] = blake3::hash(&[file_hash.as_slice(), &[shard_index]].concat()).into();
     let token = client_id.create_shard_token(np2p::crypto::ShardOp::Store, &binding);
-    let oversize: u64 = (np2p::network::protocol::MAX_MESSAGE_LEN as u64) - 512;
+    let oversize: u64 = np2p::storage::MAX_SHARD_BYTES + 1;
 
     let (mut send, mut recv) = conn.open_bi().await.unwrap();
     Protocol::send(&mut send, &Message::StoreShardStreamInit {
@@ -304,5 +304,115 @@ async fn retrieve_shard_stream_success_and_not_found() {
             Message::RetrieveShardStreamAck { found: false, total_bytes: 0 } => {}
             other => panic!("expected RetrieveShardStreamAck found=false, got {:?}", other),
         }
+    }
+}
+
+#[tokio::test]
+async fn verify_shard_challenge_proof_and_auth() {
+    let tmp = tempdir().unwrap();
+    let server_storage = DiskStorage::new(tmp.path()).await.unwrap();
+    let server_identity = Arc::new(NodeIdentity::generate());
+    let client_id = NodeIdentity::generate();
+    let (server_id_hex, addr) = spawn_server(server_storage.clone(), server_identity, Some(client_id.node_id())).await;
+
+    let shard_data = vec![0x5Au8; 128 * 1024];
+    let shard_hash: [u8; 32] = blake3::hash(&shard_data).into();
+    server_storage.store(shard_hash, &shard_data).await.unwrap();
+
+    let client_node = Node::new("127.0.0.1:0".parse().unwrap(), client_id.clone()).unwrap();
+    let conn = client_node.connect(addr, &server_id_hex).await.expect("connect");
+
+    let challenge = [0xC3u8; 32];
+    let mut expected_hasher = blake3::Hasher::new();
+    expected_hasher.update(&challenge);
+    expected_hasher.update(&shard_data);
+    let expected_proof: [u8; 32] = *expected_hasher.finalize().as_bytes();
+
+    // 1. Valid Verify token returns matching proof_hash.
+    {
+        let (mut send, mut recv) = conn.open_bi().await.unwrap();
+        let token = client_id.create_shard_token(np2p::crypto::ShardOp::Verify, &shard_hash);
+        Protocol::send(&mut send, &Message::VerifyShardRequest { shard_hash, challenge, token }).await.unwrap();
+        match Protocol::receive(&mut recv).await.unwrap() {
+            Message::VerifyShardResponse { shard_hash: h, proof_hash } => {
+                assert_eq!(h, shard_hash);
+                assert_eq!(proof_hash, Some(expected_proof));
+            }
+            other => panic!("expected VerifyShardResponse, got {:?}", other),
+        }
+    }
+
+    // 2. Missing shard returns proof_hash: None.
+    {
+        let (mut send, mut recv) = conn.open_bi().await.unwrap();
+        let missing = [0x99u8; 32];
+        let token = client_id.create_shard_token(np2p::crypto::ShardOp::Verify, &missing);
+        Protocol::send(&mut send, &Message::VerifyShardRequest { shard_hash: missing, challenge, token }).await.unwrap();
+        match Protocol::receive(&mut recv).await.unwrap() {
+            Message::VerifyShardResponse { shard_hash: h, proof_hash } => {
+                assert_eq!(h, missing);
+                assert_eq!(proof_hash, None);
+            }
+            other => panic!("expected VerifyShardResponse None, got {:?}", other),
+        }
+    }
+
+    // 3. Retrieve token must NOT authorize VerifyShardRequest.
+    {
+        let (mut send, mut recv) = conn.open_bi().await.unwrap();
+        let wrong_op = client_id.create_shard_token(np2p::crypto::ShardOp::Retrieve, &shard_hash);
+        Protocol::send(&mut send, &Message::VerifyShardRequest { shard_hash, challenge, token: wrong_op }).await.unwrap();
+        match Protocol::receive(&mut recv).await.unwrap() {
+            Message::Error { code, .. } => assert_eq!(code, 401),
+            other => panic!("expected Error 401, got {:?}", other),
+        }
+    }
+}
+
+#[tokio::test]
+async fn delete_pinned_object_roundtrip_and_auth() {
+    let tmp = tempdir().unwrap();
+    let server_storage = DiskStorage::new(tmp.path()).await.unwrap();
+    let server_identity = Arc::new(NodeIdentity::generate());
+    let client_id = NodeIdentity::generate();
+    let (server_id_hex, addr) = spawn_server(server_storage, server_identity, Some(client_id.node_id())).await;
+
+    let client_node = Node::new("127.0.0.1:0".parse().unwrap(), client_id.clone()).unwrap();
+    let conn = client_node.connect(addr, &server_id_hex).await.expect("connect");
+
+    let name = "manifest:test".to_string();
+    let name_hash: [u8; 32] = blake3::hash(name.as_bytes()).into();
+
+    // Store pinned object first
+    {
+        let (mut send, mut recv) = conn.open_bi().await.unwrap();
+        let token = client_id.create_shard_token(np2p::crypto::ShardOp::Store, &name_hash);
+        Protocol::send(&mut send, &Message::StorePinnedObject { name: name.clone(), data: b"payload".to_vec(), token }).await.unwrap();
+        assert!(matches!(Protocol::receive(&mut recv).await.unwrap(), Message::StorePinnedResponse { success: true }));
+    }
+
+    // Unauthorized attacker delete is rejected
+    {
+        let attacker = NodeIdentity::generate();
+        let bad_token = attacker.create_shard_token(np2p::crypto::ShardOp::Delete, &name_hash);
+        let (mut send, mut recv) = conn.open_bi().await.unwrap();
+        Protocol::send(&mut send, &Message::DeletePinnedObject { name: name.clone(), token: bad_token }).await.unwrap();
+        assert!(matches!(Protocol::receive(&mut recv).await.unwrap(), Message::DeletePinnedResponse { success: false }));
+    }
+
+    // Authorized delete removes object
+    {
+        let del_token = client_id.create_shard_token(np2p::crypto::ShardOp::Delete, &name_hash);
+        let (mut send, mut recv) = conn.open_bi().await.unwrap();
+        Protocol::send(&mut send, &Message::DeletePinnedObject { name: name.clone(), token: del_token }).await.unwrap();
+        assert!(matches!(Protocol::receive(&mut recv).await.unwrap(), Message::DeletePinnedResponse { success: true }));
+    }
+
+    // Subsequent get returns None
+    {
+        let get_token = client_id.create_shard_token(np2p::crypto::ShardOp::Retrieve, &name_hash);
+        let (mut send, mut recv) = conn.open_bi().await.unwrap();
+        Protocol::send(&mut send, &Message::GetPinnedObject { name, token: get_token }).await.unwrap();
+        assert!(matches!(Protocol::receive(&mut recv).await.unwrap(), Message::PinnedObjectResponse { data: None }));
     }
 }

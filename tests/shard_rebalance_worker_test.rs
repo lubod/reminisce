@@ -97,14 +97,12 @@ async fn test_find_file_info_returns_image_data() {
         &[&uid, &hash, &format!("{}.png", hash), &encrypted_key],
     ).await.unwrap();
 
-    let info = find_file_info(&client, hash, api_secret).await.expect("query should succeed");
-    assert!(info.is_some(), "file info should be found");
-    let (ext, enc_key, enc_size, data_shards, parity_shards) = info.unwrap();
-    assert_eq!(ext, "png");
-    assert_eq!(enc_key, Some(key.to_vec()));
-    assert_eq!(enc_size, Some(512));
-    assert_eq!(data_shards, 3);
-    assert_eq!(parity_shards, 2);
+    let info = find_file_info(&client, hash, api_secret).await.expect("query should succeed").expect("file info should be found");
+    assert_eq!(info.ext, "png");
+    assert_eq!(info.encryption_key, Some(key.to_vec()));
+    assert_eq!(info.encrypted_size, Some(512));
+    assert_eq!(info.data_shards, 3);
+    assert_eq!(info.parity_shards, 2);
 }
 
 #[tokio::test]
@@ -124,11 +122,9 @@ async fn test_find_file_info_returns_video_data() {
         &[&uid, &hash, &format!("{}.mp4", hash), &encrypted_key],
     ).await.unwrap();
 
-    let info = find_file_info(&client, hash, api_secret).await.expect("query should succeed");
-    assert!(info.is_some());
-    let (ext, _, enc_size, _, _) = info.unwrap();
-    assert_eq!(ext, "mp4");
-    assert_eq!(enc_size, Some(1024));
+    let info = find_file_info(&client, hash, api_secret).await.expect("query should succeed").expect("file info should be found");
+    assert_eq!(info.ext, "mp4");
+    assert_eq!(info.encrypted_size, Some(1024));
 }
 
 #[tokio::test]
@@ -157,10 +153,8 @@ async fn test_find_file_info_returns_none_key_when_key_is_null() {
     ).await.unwrap();
 
     let api_secret = "test_secret_key_which_is_at_least_32_bytes_long";
-    let info = find_file_info(&client, hash, api_secret).await.expect("query should not fail");
-    assert!(info.is_some());
-    let (_, enc_key, _, _, _) = info.unwrap();
-    assert!(enc_key.is_none(), "key should be None when not set");
+    let info = find_file_info(&client, hash, api_secret).await.expect("query should not fail").expect("file info should be found");
+    assert!(info.encryption_key.is_none(), "key should be None when not set");
 }
 
 // ---------------------------------------------------------------------------

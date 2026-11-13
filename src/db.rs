@@ -279,6 +279,7 @@ pub async fn run_migrations_with_schema(pool: &Pool, init_sql: &str) -> Result<(
         ("008", include_str!("../db/migrations/008_metric_series.sql")),
         ("009", include_str!("../db/migrations/009_replication_attempt.sql")),
         ("010", include_str!("../db/migrations/010_ai_poison.sql")),
+        ("011", include_str!("../db/migrations/011_scale_indexes_and_bigint.sql")),
     ];
 
     for (version, sql) in migrations {

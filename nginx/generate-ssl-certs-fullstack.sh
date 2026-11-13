@@ -17,7 +17,7 @@ fi
 echo "Generating self-signed SSL certificate for fullstack dev environment..."
 
 # Build SAN list
-SAN="DNS:localhost,DNS:*.localhost,IP:127.0.0.1"
+SAN="DNS:localhost,DNS:*.localhost,DNS:*.ts.net,IP:127.0.0.1"
 
 # Also include any EXTRA_SAN_IPS passed via environment
 if [ -n "${EXTRA_SAN_IPS:-}" ]; then

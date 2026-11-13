@@ -390,6 +390,7 @@ pub enum ShardOp {
     Retrieve,
     Delete,
     List,
+    Verify,
 }
 
 impl ShardOp {
@@ -400,6 +401,7 @@ impl ShardOp {
             ShardOp::Retrieve => 0x02,
             ShardOp::Delete => 0x03,
             ShardOp::List => 0x04,
+            ShardOp::Verify => 0x05,
         }
     }
 }
@@ -729,6 +731,21 @@ mod tests {
             signature: identity.sign(&msg_to_sign).to_vec(),
         };
         assert!(!verify_shard_token(&future_token, ShardOp::Store, &shard_hash, Some(&identity.node_id())));
+    }
+
+    #[test]
+    fn test_shard_op_verify_domain_isolation() {
+        let identity = NodeIdentity::generate();
+        let shard_hash = [0x5Au8; 32];
+        let verify_token = identity.create_shard_token(ShardOp::Verify, &shard_hash);
+
+        assert!(verify_shard_token(&verify_token, ShardOp::Verify, &shard_hash, Some(&identity.node_id())));
+        assert!(!verify_shard_token(&verify_token, ShardOp::Retrieve, &shard_hash, Some(&identity.node_id())));
+        assert!(!verify_shard_token(&verify_token, ShardOp::Store, &shard_hash, Some(&identity.node_id())));
+        assert!(!verify_shard_token(&verify_token, ShardOp::Delete, &shard_hash, Some(&identity.node_id())));
+
+        let other = NodeIdentity::generate();
+        assert!(!verify_shard_token(&verify_token, ShardOp::Verify, &shard_hash, Some(&other.node_id())));
     }
 }
 

@@ -25,6 +25,9 @@ p2p_data_dir: "/app/data/p2p"
 # Coordinator address — storage nodes register here and are discovered automatically
 p2p_coordinator_addr: "127.0.0.1:5055"
 p2p_namespace: "production"
+# Optional Tailscale URL or IP/hostname (e.g. "https://100.x.y.z:28443" or "https://my-server.tail1234.ts.net:28443")
+# Included in the Android Setup QR code for Tailscale VPN access.
+# tailscale_url: "https://100.x.y.z:28443"
 
 # Geocoding
 enable_local_geocoding: true

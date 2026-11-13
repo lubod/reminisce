@@ -25,6 +25,42 @@ pub struct RebalanceProgress {
 /// appears in its own live-peer registry, so it does not count toward the bar.
 /// An open mesh keeps the absolute 3/5 Reed-Solomon total of 5; a degenerate
 /// allow-list containing only this node falls back to the same total.
+const SYNCED_FILE_NODE_COUNTS_SQL: &str = "
+    SELECT synced.hash, COALESCE(shards.distinct_nodes, 0)::BIGINT AS sc
+    FROM (
+        SELECT hash FROM images WHERE p2p_synced_at IS NOT NULL AND deleted_at IS NULL
+        UNION
+        SELECT hash FROM videos WHERE p2p_synced_at IS NOT NULL AND deleted_at IS NULL
+    ) AS synced
+    LEFT JOIN (
+        SELECT s.file_hash,
+               COUNT(DISTINCT s.node_id) FILTER (WHERE n.node_id IS NOT NULL) AS distinct_nodes
+        FROM p2p_shards s
+        LEFT JOIN p2p_nodes n ON n.node_id = s.node_id
+            AND n.is_active = TRUE AND n.last_seen > NOW() - INTERVAL '10 minutes'
+        GROUP BY s.file_hash
+    ) AS shards ON shards.file_hash = synced.hash";
+
+fn redundancy_thresholds(config: &Config) -> (i64, i64) {
+    let required = config.p2p_data_shards.max(1) as i64;
+    let total = (config.p2p_data_shards + config.p2p_parity_shards).max(config.p2p_data_shards) as i64;
+    (required, total)
+}
+
+fn classify_file_redundancy(node_count: i64, shards_required: i64, shards_total: i64) -> &'static str {
+    if node_count >= shards_total {
+        "ok"
+    } else if node_count >= shards_required {
+        "degraded"
+    } else if node_count > 0 {
+        "failed"
+    } else {
+        "missing"
+    }
+}
+
+/// Mesh full-parity bar: if admitted_ids is configured with remote nodes, every remote node must
+/// be active for healthy status; otherwise fall back to 5 for an open mesh.
 fn mesh_full_parity_bar(admitted_ids: &[String], local_node_id_hex: &str) -> usize {
     let admitted_remote = admitted_ids.iter()
         .filter(|id| !id.trim().eq_ignore_ascii_case(local_node_id_hex))
@@ -161,33 +197,22 @@ pub async fn get_p2p_backup_status(
     // BackupPeersUnavailable alert never fires on a stale value left by an idle replication cycle.
     BACKUP_PEERS_AVAILABLE.set(active_peers as i64);
 
-    // Reconstruction breakdown across all synced media. Only shards whose owning node is currently
-    // reachable count as available, so stale/dead node assignments don't falsely inflate the numbers.
-    // Needs at least DATA_SHARDS (3) shards on distinct nodes to rebuild a file, 5 for full parity.
-    let breakdown_row = client.query_one(
+    // Reconstruction breakdown across all deduplicated synced media. Only shards whose owning
+    // node is currently reachable count, using DISTINCT node_id so co-located shards on a single
+    // node cannot inflate redundancy.
+    let (shards_required, shards_total) = redundancy_thresholds(&config);
+    let breakdown_sql = format!(
         "SELECT
-            COUNT(*) FILTER (WHERE sc >= 5) AS ok_files,
-            COUNT(*) FILTER (WHERE sc >= 3 AND sc < 5) AS degraded_files,
-            COUNT(*) FILTER (WHERE sc > 0 AND sc < 3) AS failed_files,
+            COUNT(*) FILTER (WHERE sc >= $2) AS ok_files,
+            COUNT(*) FILTER (WHERE sc >= $1 AND sc < $2) AS degraded_files,
+            COUNT(*) FILTER (WHERE sc > 0 AND sc < $1) AS failed_files,
             COUNT(*) FILTER (WHERE sc = 0) AS missing_files
-         FROM (
-            SELECT i.hash, COUNT(s.id) FILTER (WHERE n.node_id IS NOT NULL) AS sc
-            FROM images i
-            LEFT JOIN p2p_shards s ON s.file_hash = i.hash
-            LEFT JOIN p2p_nodes n ON n.node_id = s.node_id
-                AND n.is_active = TRUE AND n.last_seen > NOW() - INTERVAL '10 minutes'
-            WHERE i.p2p_synced_at IS NOT NULL AND i.deleted_at IS NULL
-            GROUP BY i.hash
-            UNION ALL
-            SELECT v.hash, COUNT(s.id) FILTER (WHERE n.node_id IS NOT NULL) AS sc
-            FROM videos v
-            LEFT JOIN p2p_shards s ON s.file_hash = v.hash
-            LEFT JOIN p2p_nodes n ON n.node_id = s.node_id
-                AND n.is_active = TRUE AND n.last_seen > NOW() - INTERVAL '10 minutes'
-            WHERE v.p2p_synced_at IS NOT NULL AND v.deleted_at IS NULL
-            GROUP BY v.hash
-         ) AS combined",
-        &[],
+         FROM ({}) AS combined",
+        SYNCED_FILE_NODE_COUNTS_SQL
+    );
+    let breakdown_row = client.query_one(
+        &breakdown_sql,
+        &[&shards_required, &shards_total],
     ).await.map_err(|_| actix_web::error::ErrorInternalServerError("DB query error"))?;
 
     let ok_files: i64 = breakdown_row.get(0);
@@ -285,6 +310,22 @@ pub struct ConnectionInfoResponse {
     pub local_ip: Option<String>,
     /// Public URL to reach this server via the VPS coordinator tunnel (for Android on other networks).
     pub tunnel_url: Option<String>,
+    /// Tailscale URL or IP/hostname to reach this server over Tailscale (for Android on the tailnet).
+    pub tailscale_url: Option<String>,
+}
+
+/// Inspects active network interfaces for a Tailscale CGNAT IPv4 address (100.64.0.0/10).
+fn detect_tailscale_ip() -> Option<String> {
+    let ifaces = get_if_addrs::get_if_addrs().ok()?;
+    for iface in ifaces {
+        if let get_if_addrs::IfAddr::V4(v4) = iface.addr {
+            let octets = v4.ip.octets();
+            if octets[0] == 100 && (octets[1] & 0b1100_0000) == 64 {
+                return Some(v4.ip.to_string());
+            }
+        }
+    }
+    None
 }
 
 #[utoipa::path(
@@ -319,11 +360,14 @@ pub async fn get_p2p_connection_info(
 
     // Tunnel URL: configured public URL to reach this server via VPS coordinator tunnel.
     let tunnel_url = config.p2p_tunnel_public_url.clone();
+    // Tailscale URL or IP: explicit config/env overrides auto-detection from local interfaces.
+    let tailscale_url = config.tailscale_url.clone().or_else(detect_tailscale_ip);
 
     Ok(HttpResponse::Ok().json(ConnectionInfoResponse {
         node_id: hex::encode(p2p_service.identity().node_id()),
         local_ip,
         tunnel_url,
+        tailscale_url,
     }))
 }
 
@@ -459,35 +503,15 @@ pub async fn verify_p2p_backup(
 
     let client = utils::get_db_client(&pool.0).await?;
 
-    // Query all synced files from both images and videos with their shard counts.
-    // Only count shards whose owning node is currently reachable (last_seen within 10 min and is_active),
-    // so dead/stale node assignments don't falsely inflate the count.
-    let rows = client.query(
-        "SELECT hash, COALESCE(shard_count, 0) as shard_count FROM (
-            SELECT i.hash, COUNT(s.id) FILTER (WHERE n.node_id IS NOT NULL) as shard_count
-            FROM images i
-            LEFT JOIN p2p_shards s ON s.file_hash = i.hash
-            LEFT JOIN p2p_nodes n ON n.node_id = s.node_id
-                AND n.is_active = TRUE
-                AND n.last_seen > NOW() - INTERVAL '10 minutes'
-            WHERE i.p2p_synced_at IS NOT NULL AND i.deleted_at IS NULL
-            GROUP BY i.hash
-            UNION ALL
-            SELECT v.hash, COUNT(s.id) FILTER (WHERE n.node_id IS NOT NULL) as shard_count
-            FROM videos v
-            LEFT JOIN p2p_shards s ON s.file_hash = v.hash
-            LEFT JOIN p2p_nodes n ON n.node_id = s.node_id
-                AND n.is_active = TRUE
-                AND n.last_seen > NOW() - INTERVAL '10 minutes'
-            WHERE v.p2p_synced_at IS NOT NULL AND v.deleted_at IS NULL
-            GROUP BY v.hash
-        ) AS combined
-        ORDER BY shard_count ASC",
-        &[]
-    ).await.map_err(|_| actix_web::error::ErrorInternalServerError("DB query error"))?;
+    // Query all deduplicated synced files from both images and videos with their distinct active-node counts.
+    let verify_sql = format!(
+        "SELECT hash, sc FROM ({}) AS combined ORDER BY sc ASC, hash ASC",
+        SYNCED_FILE_NODE_COUNTS_SQL
+    );
+    let rows = client.query(&verify_sql, &[]).await
+        .map_err(|_| actix_web::error::ErrorInternalServerError("DB query error"))?;
 
-    const SHARDS_REQUIRED: i64 = 3; // DATA_SHARDS — minimum needed to reconstruct
-    const SHARDS_TOTAL: i64 = 5;    // TOTAL_SHARDS — full complement
+    let (shards_required, shards_total) = redundancy_thresholds(&config);
 
     let mut files = Vec::with_capacity(rows.len());
     let mut verified_files: i64 = 0;
@@ -498,16 +522,7 @@ pub async fn verify_p2p_backup(
     for row in &rows {
         let hash: String = row.get(0);
         let shard_count: i64 = row.get(1);
-
-        let status = if shard_count >= SHARDS_TOTAL {
-            "ok"
-        } else if shard_count >= SHARDS_REQUIRED {
-            "degraded"
-        } else if shard_count > 0 {
-            "failed"
-        } else {
-            "missing"
-        };
+        let status = classify_file_redundancy(shard_count, shards_required, shards_total);
 
         match status {
             "ok" => verified_files += 1,
@@ -520,8 +535,8 @@ pub async fn verify_p2p_backup(
             root_hash: hash,
             status: status.to_string(),
             shards_available: shard_count,
-            shards_required: SHARDS_REQUIRED,
-            shards_total: SHARDS_TOTAL,
+            shards_required,
+            shards_total,
             error: None,
         });
     }
@@ -551,17 +566,6 @@ pub struct BackupEntry {
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct BackupTimestampsResponse {
     pub timestamps: Vec<u64>,
-}
-
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
-pub struct InviteStatusResponse {
-    pub is_member: bool,
-    pub membership: Option<MembershipInfo>,
-}
-
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
-pub struct MembershipInfo {
-    pub node_id: String,
 }
 
 #[utoipa::path(
@@ -641,10 +645,6 @@ pub async fn list_backup_timestamps(
 
     Ok(HttpResponse::Ok().json(BackupTimestampsResponse { timestamps }))
 }
-
-#[utoipa::path(get, path = "/api/p2p-invite-status", responses((status = 200, description = "Invite status", body = InviteStatusResponse)), tag = "P2P")]
-#[get("/p2p-invite-status")]
-pub async fn get_invite_status() -> HttpResponse { HttpResponse::Ok().json(InviteStatusResponse { is_member: true, membership: None }) }
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct RemoveNodeResponse {

@@ -65,6 +65,7 @@ Copy `config-fullstack.yaml.example` to `config-fullstack.yaml`. Required fields
 | `p2p_coordinator_addr` | No | `host:port` of coordinator for WAN peer discovery |
 | `p2p_coordinator_node_id` | Required with `p2p_coordinator_addr` | The coordinator's 64-hex Node ID (printed in the coordinator startup log). Bound to the QUIC connection so a spoofed coordinator cannot impersonate the real one. If set without `p2p_coordinator_addr` it is ignored; if `p2p_coordinator_addr` is set without it, coordinator/tunnel use is disabled with a clear error. |
 | `p2p_discovery_port` | No | UDP port for LAN peer discovery broadcasts (default `5066`) |
+| `tailscale_url` | No | Optional Tailscale URL or IP/hostname (e.g. `https://100.x.y.z:28443` or `https://server.tail123.ts.net:28443`) included in the Android setup QR code (`TAILSCALE_URL` / `TAILSCALE_IP` env fallback) |
 | `p2p_deterministic_identity` | No | Derive P2P node identity from `api_secret_key` (default `false`). Enables true full-disk-loss recovery but changes node_id — use for new setups |
 | `p2p_allowed_node_ids` | No | **Mesh admission allow-list.** Only these storage-node IDs (64-hex) may receive shards; empty = open admission with a loud startup warning. List your Pi/home-server IDs here |
 | `p2p_identity_kdf` | No | `legacy` (default, fast BLAKE3) or `argon2id` (memory-hard). **`argon2id` changes the node ID** — re-pair storage nodes during a maintenance window |
@@ -157,6 +158,52 @@ cd ~/reminisce-node && docker compose pull && docker compose up -d
 > The runtime images run as **uid 10001** — if `/data` is a bind mount, `chown -R 10001:10001` it once after adopting this image or the node will loop on `Permission denied`.
 
 > **Coordinator admission**: pass `--allowed-node <64-hex>` once per trusted node (home server + every Pi). Without any flag the coordinator still accepts identity-verified registrations but logs `[COORD] Node admission OPEN`; unlisted nodes get `403 "Node not allowed"` once the list is non-empty.
+
+## Tailscale Deployment (Android + Backup RPi Write-In)
+
+If your home server, Android phone, and backup Raspberry Pi are on the same Tailscale tailnet, you do **not** need a public VPS coordinator:
+
+### 1. Home Reminisce Server
+The home server already listens on `0.0.0.0:5066/udp` (for storage-node discovery) and exposes HTTPS via nginx on port `28443`.
+1. Add your server's Tailscale URL (or Tailscale IP / MagicDNS name) to `config.yaml` (or set `TAILSCALE_URL` / `TAILSCALE_IP` in the container environment) so it appears in the Web UI's **Android App Setup** QR code:
+   ```yaml
+   tailscale_url: "https://<home-server-tailscale-ip>:28443"
+   # Or with MagicDNS:
+   # tailscale_url: "https://<host>.tailnet-xxxx.ts.net:28443"
+   ```
+2. Add the backup RPi's 64-hex Node ID (`<p2p_data_dir>/node_id.txt`) to `p2p_allowed_node_ids` in `config.yaml` if admission allow-listing is enabled, then restart the server (`docker compose restart reminisce`).
+3. Make sure your firewall permits incoming UDP ports `5066` (discovery) and `5050` (QUIC) and TCP port `28443` (HTTPS) on the `tailscale0` interface.
+
+### 2. Backup Raspberry Pi (`np2pd`) — Unicast Write-In
+Tailscale is a Layer-3 WireGuard mesh (`100.64.0.0/10`) and does not forward LAN UDP broadcasts (`255.255.255.255`). Pass `--announce-addr` (or `NP2P_ANNOUNCE_ADDR`) so the RPi sends signed unicast discovery ("write-in") packets directly to the home server every 10s, alongside its normal LAN broadcast:
+
+```bash
+# Native binary / systemd on the Raspberry Pi:
+np2pd \
+  --listen 0.0.0.0:5050 \
+  --data-dir /mnt/disk/p2p \
+  --discovery-port 5066 \
+  --announce-addr <home-server-tailscale-ip>:5066 \
+  --authorized-node-id <64-hex-home-server-node-id>
+```
+
+Or via Docker on the Raspberry Pi (use `--network host` or expose `5050:5050/udp` and pass `--advertise-ip <rpi-tailscale-ip>`):
+```bash
+docker run -d --name reminisce-p2p --restart unless-stopped \
+  --network host \
+  -v /mnt/disk/p2p:/data \
+  lubod/reminisce-p2p:latest \
+  np2pd --listen 0.0.0.0:5050 --data-dir /data \
+    --announce-addr <home-server-tailscale-ip>:5066 \
+    --authorized-node-id <64-hex-home-server-node-id>
+```
+
+> **How Docker NAT on the home server is handled:** When sending unicast announcements, `np2pd` automatically detects the local Tailscale source IP (`advertise_ip`) selected by the routing table and signs it inside the `DiscoveryAnnouncement`. Even if the home `reminisce` container runs behind Docker's bridge NAT (`ports: ["5066:5066/udp"]`), it still records the RPi's real `100.x.y.z:5050` Tailscale address and dials it directly over QUIC. You can override this explicitly with `--advertise-ip <rpi-tailscale-ip>` (or `NP2P_ADVERTISE_IP`).
+
+### 3. Android App
+1. Install Tailscale on your Android device and sign into the same tailnet.
+2. Open the Reminisce Web UI on desktop → **Dashboard → Android App Setup** and scan the QR code from the Reminisce Android app's Login screen (choose the **Tailscale (VPN)** URL when prompted), or enter `https://<home-server-tailscale-ip>:28443` / `https://<host>.ts.net:28443` manually.
+3. The Android app recognizes both `100.64.0.0/10`, Tailscale IPv6 ULA (`fd7a:...`), and `*.ts.net` MagicDNS hostnames so the server's self-signed HTTPS certificate works out of the box.
 
 ## Observability
 

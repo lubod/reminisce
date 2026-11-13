@@ -45,8 +45,17 @@ pub struct PeerRegistry {
 
 fn is_private_ip(ip: std::net::IpAddr) -> bool {
     match ip {
-        std::net::IpAddr::V4(v4) => v4.is_private() || v4.is_loopback() || v4.is_link_local(),
-        std::net::IpAddr::V6(v6) => v6.is_loopback(),
+        std::net::IpAddr::V4(v4) => {
+            let octets = v4.octets();
+            let is_cgnat = octets[0] == 100 && (octets[1] & 0b1100_0000) == 64;
+            v4.is_private() || v4.is_loopback() || v4.is_link_local() || is_cgnat
+        }
+        std::net::IpAddr::V6(v6) => {
+            let first_seg = v6.segments()[0];
+            let is_ula = (first_seg & 0xfe00) == 0xfc00;
+            let is_link_local = (first_seg & 0xffc0) == 0xfe80;
+            v6.is_loopback() || is_ula || is_link_local
+        }
     }
 }
 

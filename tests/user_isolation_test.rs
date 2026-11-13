@@ -39,7 +39,7 @@ async fn test_user_isolation_workflow() {
     // Login as user_a (admin) to get token for creating user_b
     let req = test::TestRequest::post()
         .uri("/auth/user-login")
-        .set_json(&UserLoginRequest { username: "user_a".to_string(), password: "password123".to_string() })
+        .set_json(&UserLoginRequest { username: "user_a".to_string(), password: "password123".to_string(), device_id: None })
         .to_request();
     let resp = test::call_service(&app, req).await;
     let body_a: serde_json::Value = test::read_body_json(resp).await;
@@ -57,7 +57,7 @@ async fn test_user_isolation_workflow() {
     // Login as user_b
     let req = test::TestRequest::post()
         .uri("/auth/user-login")
-        .set_json(&UserLoginRequest { username: "user_b".to_string(), password: "password123".to_string() })
+        .set_json(&UserLoginRequest { username: "user_b".to_string(), password: "password123".to_string(), device_id: None })
         .to_request();
     let resp = test::call_service(&app, req).await;
     let body_b: serde_json::Value = test::read_body_json(resp).await;

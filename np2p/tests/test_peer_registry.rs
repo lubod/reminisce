@@ -95,6 +95,25 @@ fn public_ip_can_be_registered_if_no_private_entry() {
     assert_eq!(p.addr, wan_addr);
 }
 
+#[test]
+fn tailscale_ip_not_overwritten_by_public_ip() {
+    let r = PeerRegistry::new();
+    let ts_addr: SocketAddr = "100.100.10.20:5050".parse().unwrap();
+    let wan_addr: SocketAddr = "203.0.113.5:5050".parse().unwrap();
+
+    r.upsert("node_ts".into(), ts_addr);
+    r.upsert("node_ts".into(), wan_addr);
+
+    let p = r.get("node_ts").unwrap();
+    assert_eq!(p.addr, ts_addr, "Tailscale CGNAT address should be preserved over public address");
+
+    let r6 = PeerRegistry::new();
+    let ts6_addr: SocketAddr = "[fd7a:115c:a1e0::1]:5050".parse().unwrap();
+    r6.upsert("node_ts6".into(), ts6_addr);
+    r6.upsert("node_ts6".into(), wan_addr);
+    assert_eq!(r6.get("node_ts6").unwrap().addr, ts6_addr);
+}
+
 // ---------------------------------------------------------------------------
 // Staleness / TTL
 // ---------------------------------------------------------------------------

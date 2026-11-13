@@ -46,14 +46,14 @@ CREATE TABLE IF NOT EXISTS images (
     p2p_synced_at TIMESTAMPTZ, -- Timestamp when this media file was last synced to P2P network. NULL means needs sync.
     p2p_shard_hash VARCHAR(255), -- Root hash or manifest hash of the object in P2P network (Blake3).
     p2p_encryption_key BYTEA, -- 32-byte encryption key used for sharding (needed for re-sharding during rebalance)
-    p2p_encrypted_size INTEGER, -- Size of the encrypted blob before erasure coding (needed for reconstruction)
+    p2p_encrypted_size BIGINT, -- Size of the encrypted blob before erasure coding (needed for reconstruction)
     p2p_data_shards INTEGER DEFAULT 3,
     p2p_parity_shards INTEGER DEFAULT 2,
     aesthetic_score REAL, -- AI-computed aesthetic quality score (0–10)
     sharpness_score REAL, -- Laplacian variance sharpness score
     width INTEGER, -- Image width in pixels
     height INTEGER, -- Image height in pixels
-    file_size_bytes INTEGER, -- File size in bytes
+    file_size_bytes BIGINT, -- File size in bytes
     quality_score_generated_at TIMESTAMPTZ, -- Timestamp when quality scores were computed
     PRIMARY KEY (user_id, hash)
 );
@@ -107,7 +107,7 @@ ALTER TABLE images ADD COLUMN IF NOT EXISTS aesthetic_score REAL;
 ALTER TABLE images ADD COLUMN IF NOT EXISTS sharpness_score REAL;
 ALTER TABLE images ADD COLUMN IF NOT EXISTS width INTEGER;
 ALTER TABLE images ADD COLUMN IF NOT EXISTS height INTEGER;
-ALTER TABLE images ADD COLUMN IF NOT EXISTS file_size_bytes INTEGER;
+ALTER TABLE images ADD COLUMN IF NOT EXISTS file_size_bytes BIGINT;
 ALTER TABLE images ADD COLUMN IF NOT EXISTS quality_score_generated_at TIMESTAMPTZ;
 ALTER TABLE images ADD COLUMN IF NOT EXISTS duplicates_checked_at TIMESTAMPTZ;
 ALTER TABLE images ADD COLUMN IF NOT EXISTS p2p_segment_count INTEGER NOT NULL DEFAULT 1;
@@ -182,7 +182,7 @@ CREATE TABLE IF NOT EXISTS videos (
     p2p_synced_at TIMESTAMPTZ, -- Timestamp when this media file was last synced to P2P network. NULL means needs sync.
     p2p_shard_hash VARCHAR(255), -- Root hash or manifest hash of the object in P2P network (Blake3).
     p2p_encryption_key BYTEA, -- 32-byte encryption key used for sharding (needed for re-sharding during rebalance)
-    p2p_encrypted_size INTEGER, -- Size of the encrypted blob before erasure coding (needed for reconstruction)
+    p2p_encrypted_size BIGINT, -- Size of the encrypted blob before erasure coding (needed for reconstruction)
     p2p_data_shards INTEGER DEFAULT 3,
     p2p_parity_shards INTEGER DEFAULT 2,
     embedding vector(1152), -- SigLIP keyframe centroid embedding vector for semantic video search
@@ -416,12 +416,36 @@ CREATE TABLE IF NOT EXISTS p2p_shards (
     node_id VARCHAR(64) REFERENCES p2p_nodes(node_id) ON DELETE CASCADE,
     shard_hash VARCHAR(64) NOT NULL, -- BLAKE3 hash of the shard itself
     last_checked_at TIMESTAMPTZ, -- When this shard was last verified on the remote node
+    last_audit_attempt_at TIMESTAMPTZ, -- Last audit attempt timestamp to prevent queue starvation
     created_at TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE(file_hash, shard_index)
 );
 
+ALTER TABLE p2p_shards ADD COLUMN IF NOT EXISTS last_audit_attempt_at TIMESTAMPTZ;
+
 CREATE INDEX IF NOT EXISTS idx_p2p_shards_file_hash ON p2p_shards(file_hash);
 CREATE INDEX IF NOT EXISTS idx_p2p_shards_node_id ON p2p_shards(node_id);
+CREATE INDEX IF NOT EXISTS idx_p2p_shards_audit_order
+    ON p2p_shards ((COALESCE(last_audit_attempt_at, last_checked_at)) ASC NULLS FIRST, id ASC);
+
+CREATE INDEX IF NOT EXISTS idx_faces_user_person ON faces(user_id, person_id);
+CREATE INDEX IF NOT EXISTS idx_videos_description_fts
+    ON videos USING GIN (to_tsvector('english', COALESCE(description, '') || ' ' || COALESCE(name, '')));
+
+-- Revocable refresh tokens for session renewal without storing plaintext passwords
+CREATE TABLE IF NOT EXISTS refresh_tokens (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    token_hash VARCHAR(64) NOT NULL UNIQUE,
+    device_id VARCHAR(255),
+    expires_at TIMESTAMPTZ NOT NULL,
+    revoked_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_used_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user_id ON refresh_tokens(user_id);
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_expires_at ON refresh_tokens(expires_at);
 
 -- Database backup manifest: rolling list of P2P-backed pg_dump snapshots.
 -- Kept separate from media p2p_shards so the audit worker's orphan cleanup never

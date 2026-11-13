@@ -379,28 +379,42 @@ async fn perform_keyframe_search(
     offset: i64,
     pool: &web::Data<MainDbPool>,
 ) -> Result<Vec<VideoKeyframeResult>, actix_web::Error> {
-    let client = utils::get_db_client(&pool.0).await?;
+    let mut client = utils::get_db_client(&pool.0).await?;
 
     // ef_search must be >= limit + offset for the HNSW KNN scan.
     let ef_search = std::cmp::max((limit + offset) * 2, 100);
-    client.execute(&format!("SET hnsw.ef_search = {}", ef_search), &[]).await
+    let tx = client.transaction().await.map_err(|e| {
+        error!("Failed to start video keyframe search transaction: {}", e);
+        actix_web::error::ErrorInternalServerError("Video keyframe search query failed")
+    })?;
+    tx.execute(&format!("SET LOCAL hnsw.ef_search = {}", ef_search), &[]).await
         .unwrap_or(0);
 
     // $1=user_id, $2=embedding, $3=min_similarity, $4=limit, $5=offset, $6=video_hash (optional)
-    let mut sql = String::from(
-        "SELECT k.video_hash, k.timestamp_secs,
-                1 - (k.embedding <=> $2) as similarity,
+    // Pure HNSW ORDER BY inside CTE so PostgreSQL always picks idx_video_keyframes_embedding_hnsw.
+    let video_filter = if video_hash.is_some() {
+        " AND k.video_hash = $6"
+    } else {
+        ""
+    };
+    let sql = format!(
+        "WITH knn AS (
+             SELECT k.video_hash, k.timestamp_secs, (k.embedding <=> $2) AS dist
+             FROM video_keyframes k
+             WHERE k.user_id = $1{video_filter}
+             ORDER BY k.embedding <=> $2
+             LIMIT (($4::bigint + $5::bigint) * 2)
+         )
+         SELECT knn.video_hash, knn.timestamp_secs,
+                1 - knn.dist as similarity,
                 v.name, v.created_at
-         FROM video_keyframes k
-         JOIN videos v ON v.hash = k.video_hash AND v.user_id = k.user_id
-         WHERE k.user_id = $1
-           AND v.deleted_at IS NULL
-           AND (1 - (k.embedding <=> $2)) > $3"
+         FROM knn
+         JOIN videos v ON v.hash = knn.video_hash AND v.user_id = $1
+         WHERE v.deleted_at IS NULL
+           AND (1 - knn.dist) > $3
+         ORDER BY knn.dist ASC
+         LIMIT $4 OFFSET $5"
     );
-    if video_hash.is_some() {
-        sql.push_str(" AND k.video_hash = $6");
-    }
-    sql.push_str(" ORDER BY k.embedding <=> $2 LIMIT $4 OFFSET $5");
 
     let mut params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> =
         vec![user_uuid, embedding, &min_similarity, &limit, &offset];
@@ -408,10 +422,11 @@ async fn perform_keyframe_search(
         params.push(vh);
     }
 
-    let rows = client.query(&sql, &params).await.map_err(|e| {
+    let rows = tx.query(&sql, &params).await.map_err(|e| {
         error!("Failed to execute video keyframe search query: {}", e);
         actix_web::error::ErrorInternalServerError("Video keyframe search query failed")
     })?;
+    let _ = tx.commit().await;
 
     let results = rows
         .iter()
@@ -452,7 +467,7 @@ pub async fn perform_semantic_search(
     media_type: &str,
     pool: &web::Data<MainDbPool>,
 ) -> Result<(Vec<SearchResult>, usize), actix_web::Error> {
-    let client = utils::get_db_client(&pool.0).await?;
+    let mut client = utils::get_db_client(&pool.0).await?;
 
     let include_image = media_type != "video";
     let include_video = media_type != "image";
@@ -515,7 +530,6 @@ pub async fn perform_semantic_search(
             format!("{}.embedding IS NOT NULL", alias),
             format!("{}.user_id = $1", alias),
             format!("{}.deleted_at IS NULL", alias),
-            format!("(1 - ({}.embedding <=> $2)) > {}", alias, min_similarity),
         ];
         if let Some(p) = device_param {
             conds.push(format!("{}.deviceid = ${}", alias, p));
@@ -595,15 +609,21 @@ pub async fn perform_semantic_search(
         (false, false) => unreachable!(),
     };
 
+    // Distance threshold is checked after HNSW top-K ORDER BY so the planner always
+    // uses the vector index (1 - dist is monotonic with dist).
     let sql = format!(
-        "SELECT hash, name, description, place, created_at, similarity, starred, deviceid, distance_km, media_type FROM (\n            {}\n        ) combined\n        ORDER BY dist ASC\n        LIMIT $4 OFFSET $5",
-        union_body
+        "SELECT hash, name, description, place, created_at, similarity, starred, deviceid, distance_km, media_type FROM (\n            {}\n        ) combined\n        WHERE (1 - dist) > {}\n        ORDER BY dist ASC\n        LIMIT $4 OFFSET $5",
+        union_body, min_similarity
     );
 
     // hnsw.ef_search controls how many candidates HNSW considers at query time.
-    // Default is 40 — must be >= per_branch_limit so each arm returns enough rows.
+    // SET LOCAL scopes it strictly to this transaction so pooled sessions stay clean.
     let ef_search = std::cmp::max(per_branch_limit * 2, 100);
-    client.execute(&format!("SET hnsw.ef_search = {}", ef_search), &[]).await
+    let tx = client.transaction().await.map_err(|e| {
+        error!("Failed to start semantic search transaction: {}", e);
+        actix_web::error::ErrorInternalServerError("Semantic search query failed")
+    })?;
+    tx.execute(&format!("SET LOCAL hnsw.ef_search = {}", ef_search), &[]).await
         .unwrap_or(0);
 
     info!("Executing semantic search query across {} (ef_search={})", media_type, ef_search);
@@ -655,10 +675,11 @@ pub async fn perform_semantic_search(
         params.push(&lat_val);
     }
 
-    let rows = client.query(&sql, &params).await.map_err(|e| {
+    let rows = tx.query(&sql, &params).await.map_err(|e| {
         error!("Failed to execute semantic search query: {}", e);
         actix_web::error::ErrorInternalServerError("Semantic search query failed")
     })?;
+    let _ = tx.commit().await;
 
     let results: Vec<SearchResult> = rows
         .iter()

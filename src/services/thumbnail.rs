@@ -667,15 +667,25 @@ pub async fn get_thumbnail(
         })));
     }
     let thumb_filename = format!("{}.thumb.jpg", media_hash);
+    let user_thumb_filename = format!("{}.{}.thumb.jpg", media_hash, user_uuid);
 
-    // First try to find thumbnail in images directory with subdirectory structure
+    // First check for a per-user overlay thumbnail (created when a user rotates a shared image)
+    // and then the shared content thumbnail in images directory.
     let image_sub_dir_path = utils::get_subdirectory_path(config.get_images_dir(), &media_hash);
+    let user_image_thumb_path = image_sub_dir_path.join(&user_thumb_filename);
+    if let Ok(data) = async_fs::read(&user_image_thumb_path).await {
+        return Ok(HttpResponse::Ok()
+            .content_type("image/jpeg")
+            .insert_header(("Cache-Control", "private, max-age=3600"))
+            .body(data));
+    }
+
     let image_thumb_path = image_sub_dir_path.join(&thumb_filename);
     match async_fs::read(&image_thumb_path).await {
         Ok(data) => {
             return Ok(HttpResponse::Ok()
                 .content_type("image/jpeg")
-                .insert_header(("Cache-Control", "public, max-age=31536000, immutable"))
+                .insert_header(("Cache-Control", "private, max-age=31536000, immutable"))
                 .body(data));
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -700,7 +710,7 @@ pub async fn get_thumbnail(
     match async_fs::read(&video_thumb_path).await {
         Ok(data) => Ok(HttpResponse::Ok()
             .content_type("image/jpeg")
-            .insert_header(("Cache-Control", "public, max-age=31536000, immutable"))
+            .insert_header(("Cache-Control", "private, max-age=31536000, immutable"))
             .body(data)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             warn!(
@@ -709,18 +719,18 @@ pub async fn get_thumbnail(
                 image_thumb_path,
                 video_thumb_path
             );
-            // Reset has_thumbnail so the verification worker regenerates it
+            // Reset has_thumbnail for this user so the verification worker regenerates it
             let pool_clone = pool.clone();
             let hash_clone = media_hash.clone();
             tokio::spawn(async move {
                 if let Ok(client) = pool_clone.0.get().await {
                     let _ = client.execute(
-                        "UPDATE images SET has_thumbnail = false WHERE hash = $1 AND has_thumbnail = true",
-                        &[&hash_clone],
+                        "UPDATE images SET has_thumbnail = false WHERE hash = $1 AND user_id = $2 AND has_thumbnail = true",
+                        &[&hash_clone, &user_uuid],
                     ).await;
                     let _ = client.execute(
-                        "UPDATE videos SET has_thumbnail = false WHERE hash = $1 AND has_thumbnail = true",
-                        &[&hash_clone],
+                        "UPDATE videos SET has_thumbnail = false WHERE hash = $1 AND user_id = $2 AND has_thumbnail = true",
+                        &[&hash_clone, &user_uuid],
                     ).await;
                 }
             });

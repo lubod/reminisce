@@ -352,7 +352,7 @@ pub async fn search_hybrid(
     media_type: &str,
     pool: &web::Data<MainDbPool>,
 ) -> Result<(Vec<SearchResult>, usize), actix_web::Error> {
-    let client = utils::get_db_client(&pool.0).await?;
+    let mut client = utils::get_db_client(&pool.0).await?;
 
     let include_image = media_type != "video";
     let include_video = media_type != "image";
@@ -408,11 +408,8 @@ pub async fn search_hybrid(
         0.0
     };
 
-    let img_threshold = format!("(1 - (i.embedding <=> $2)) > {}", min_similarity);
-    let vid_threshold = format!("(1 - (v.embedding <=> $2)) > {}", min_similarity);
-
     let img_where = build_arm_where(
-        &img_threshold,
+        "i.embedding IS NOT NULL",
         "i",
         device_param,
         starred_only,
@@ -427,7 +424,7 @@ pub async fn search_hybrid(
         "image_user_id",
     );
     let vid_where = build_arm_where(
-        &vid_threshold,
+        "v.embedding IS NOT NULL",
         "v",
         device_param,
         starred_only,
@@ -445,27 +442,20 @@ pub async fn search_hybrid(
     let img_distance = build_distance_expr(lon_param, lat_param, "i");
     let vid_distance = build_distance_expr(None, None, "v");
 
-    // Hybrid similarity: vector*0.7 + ts_rank*0.3
-    let hybrid_score = |alias: &str| -> String {
-        format!(
-            "((1 - ({a}.embedding <=> $2)) * 0.7 + CASE WHEN {a}.description IS NOT NULL AND {a}.description != '' \
-             THEN ts_rank(to_tsvector('english', COALESCE({a}.description, '') || ' ' || COALESCE({a}.name, '')), plainto_tsquery('english', $3)) * 0.3 ELSE 0 END)",
-            a = alias
-        )
-    };
-
+    // Fetch top-K HNSW candidates per branch before computing hybrid re-ranking so
+    // PostgreSQL uses the vector index instead of sequentially scanning every row.
     let img_arm = if include_image {
         format!(
-            "(\n                SELECT i.hash, i.name, i.description, i.place, i.created_at,\n                       {} as similarity,\n                       CASE WHEN s.hash IS NOT NULL THEN true ELSE false END as starred,\n                       i.deviceid, {} as distance_km, 'image' as media_type\n                FROM images i\n                LEFT JOIN starred_images s ON i.hash = s.hash AND s.user_id = $1\n                WHERE {}\n                ORDER BY similarity DESC\n                LIMIT $4\n            )",
-            hybrid_score("i"), img_distance, img_where
+            "(\n                SELECT i.hash, i.name, i.description, i.place, i.created_at,\n                       (i.embedding <=> $2) as dist,\n                       CASE WHEN s.hash IS NOT NULL THEN true ELSE false END as starred,\n                       i.deviceid, {} as distance_km, 'image' as media_type\n                FROM images i\n                LEFT JOIN starred_images s ON i.hash = s.hash AND s.user_id = $1\n                WHERE {}\n                ORDER BY i.embedding <=> $2\n                LIMIT GREATEST(($4::bigint * 4), 200)\n            )",
+            img_distance, img_where
         )
     } else {
         String::new()
     };
     let vid_arm = if include_video {
         format!(
-            "(\n                SELECT v.hash, v.name, v.description, NULL::text as place, v.created_at,\n                       {} as similarity,\n                       CASE WHEN s.hash IS NOT NULL THEN true ELSE false END as starred,\n                       v.deviceid, {} as distance_km, 'video' as media_type\n                FROM videos v\n                LEFT JOIN starred_videos s ON v.hash = s.hash AND s.user_id = $1\n                WHERE {}\n                ORDER BY similarity DESC\n                LIMIT $4\n            )",
-            hybrid_score("v"), vid_distance, vid_where
+            "(\n                SELECT v.hash, v.name, v.description, NULL::text as place, v.created_at,\n                       (v.embedding <=> $2) as dist,\n                       CASE WHEN s.hash IS NOT NULL THEN true ELSE false END as starred,\n                       v.deviceid, {} as distance_km, 'video' as media_type\n                FROM videos v\n                LEFT JOIN starred_videos s ON v.hash = s.hash AND s.user_id = $1\n                WHERE {}\n                ORDER BY v.embedding <=> $2\n                LIMIT GREATEST(($4::bigint * 4), 200)\n            )",
+            vid_distance, vid_where
         )
     } else {
         String::new()
@@ -479,17 +469,27 @@ pub async fn search_hybrid(
     };
 
     let sql = format!(
-        "SELECT hash, name, description, place, created_at, similarity, starred, deviceid, distance_km, media_type FROM (\n            {}\n        ) combined\n        ORDER BY similarity DESC\n        LIMIT $5 OFFSET $6",
-        union_body
+        "SELECT hash, name, description, place, created_at,
+                ((1 - dist) * 0.7 + CASE WHEN description IS NOT NULL AND description != ''
+                 THEN ts_rank(to_tsvector('english', COALESCE(description, '') || ' ' || COALESCE(name, '')), plainto_tsquery('english', $3)) * 0.3 ELSE 0 END) as similarity,
+                starred, deviceid, distance_km, media_type
+         FROM (\n            {}\n         ) combined
+         WHERE (1 - dist) > {}
+         ORDER BY similarity DESC
+         LIMIT $5 OFFSET $6",
+        union_body, min_similarity
     );
 
-    let ef_search = std::cmp::max(per_branch_limit * 2, 100);
-    client
-        .execute(&format!("SET hnsw.ef_search = {}", ef_search), &[])
+    let ef_search = std::cmp::max(per_branch_limit * 4, 200);
+    let tx = client.transaction().await.map_err(|e| {
+        log::error!("Failed to start hybrid search transaction: {}", e);
+        actix_web::error::ErrorInternalServerError("Hybrid search query failed")
+    })?;
+    tx.execute(&format!("SET LOCAL hnsw.ef_search = {}", ef_search), &[])
         .await
         .unwrap_or(0);
 
-    info!("Executing hybrid search query for: '{}'", query_text);
+    info!("Executing hybrid search query for: '{}' (ef_search={})", query_text, ef_search);
 
     let (start_datetime, end_datetime) = parse_datetime_pair(start_date, end_date);
 
@@ -523,10 +523,11 @@ pub async fn search_hybrid(
         params.push(&lat_val);
     }
 
-    let rows = client.query(&sql, &params).await.map_err(|e| {
+    let rows = tx.query(&sql, &params).await.map_err(|e| {
         log::error!("Failed to execute hybrid search query: {}", e);
         actix_web::error::ErrorInternalServerError("Hybrid search query failed")
     })?;
+    let _ = tx.commit().await;
 
     let results: Vec<SearchResult> = rows
         .iter()

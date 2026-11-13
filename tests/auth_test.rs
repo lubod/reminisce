@@ -4,32 +4,82 @@ use serial_test::serial;
 
 mod common;
 
-/// Registration is disabled — endpoint must always return 403.
+/// Refresh token flow: login issues refresh_token, refresh rotates single-use token,
+/// replaying old refresh token returns 401, and logout revokes the active refresh token.
 #[actix_web::test]
 #[serial]
-async fn test_register_user_disabled() {
+async fn test_refresh_token_rotation_and_logout_revocation() {
     common::init_log();
     let (pool, _test_db) = setup_test_database_with_instance().await;
+    let config = common::utils::create_test_config();
     let main_pool = common::utils::wrap_main_pool(pool.clone());
 
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(main_pool))
-            .service(reminisce::services::auth::register_user)
+            .app_data(web::Data::new(config.clone()))
+            .service(reminisce::services::auth::user_login)
+            .service(reminisce::services::auth::user_refresh)
+            .service(reminisce::services::auth::user_logout)
     ).await;
 
-    let req = test::TestRequest::post()
-        .uri("/auth/register")
+    let login_req = test::TestRequest::post()
+        .uri("/auth/user-login")
         .insert_header(("Content-Type", "application/json"))
         .set_json(serde_json::json!({
-            "username": "someuser",
-            "email": "someuser@example.com",
-            "password": "securepassword123"
+            "username": "test-user",
+            "password": "admin123",
+            "device_id": "android-test-1"
         }))
         .to_request();
+    let login_resp = test::call_service(&app, login_req).await;
+    assert_eq!(login_resp.status(), http::StatusCode::OK);
+    let login_body: serde_json::Value = test::read_body_json(login_resp).await;
+    let refresh_1 = login_body["refresh_token"]
+        .as_str()
+        .expect("login response must include refresh_token")
+        .to_string();
 
-    let response = test::call_service(&app, req).await;
-    assert_eq!(response.status(), http::StatusCode::FORBIDDEN);
+    let refresh_req = test::TestRequest::post()
+        .uri("/auth/refresh")
+        .insert_header(("Content-Type", "application/json"))
+        .set_json(serde_json::json!({ "refresh_token": refresh_1 }))
+        .to_request();
+    let refresh_resp = test::call_service(&app, refresh_req).await;
+    assert_eq!(refresh_resp.status(), http::StatusCode::OK);
+    let refresh_body: serde_json::Value = test::read_body_json(refresh_resp).await;
+    let refresh_2 = refresh_body["refresh_token"]
+        .as_str()
+        .expect("refresh response must rotate refresh_token")
+        .to_string();
+    assert_ne!(refresh_1, refresh_2);
+    assert!(refresh_body["access_token"].is_string());
+
+    // Old token must be rejected after single-use rotation.
+    let replay_req = test::TestRequest::post()
+        .uri("/auth/refresh")
+        .insert_header(("Content-Type", "application/json"))
+        .set_json(serde_json::json!({ "refresh_token": refresh_1 }))
+        .to_request();
+    let replay_resp = test::call_service(&app, replay_req).await;
+    assert_eq!(replay_resp.status(), http::StatusCode::UNAUTHORIZED);
+
+    // Logout revokes the new refresh token.
+    let logout_req = test::TestRequest::post()
+        .uri("/auth/logout")
+        .insert_header(("Content-Type", "application/json"))
+        .set_json(serde_json::json!({ "refresh_token": refresh_2 }))
+        .to_request();
+    let logout_resp = test::call_service(&app, logout_req).await;
+    assert_eq!(logout_resp.status(), http::StatusCode::OK);
+
+    let revoked_req = test::TestRequest::post()
+        .uri("/auth/refresh")
+        .insert_header(("Content-Type", "application/json"))
+        .set_json(serde_json::json!({ "refresh_token": refresh_2 }))
+        .to_request();
+    let revoked_resp = test::call_service(&app, revoked_req).await;
+    assert_eq!(revoked_resp.status(), http::StatusCode::UNAUTHORIZED);
 }
 
 /// setup_status returns needs_setup=true on a fresh (empty) database.

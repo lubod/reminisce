@@ -22,7 +22,7 @@ pub struct DuplicateImage {
     pub sharpness_score: Option<f32>,
     pub width: Option<i32>,
     pub height: Option<i32>,
-    pub file_size_bytes: Option<i32>,
+    pub file_size_bytes: Option<i64>,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -340,9 +340,9 @@ pub async fn trigger_duplicate_scan(
         error!("trigger_duplicate_scan: reset failed: {}", e);
         actix_web::error::ErrorInternalServerError("Database error")
     })?;
-    // Clear stale pairs
-    client.execute("TRUNCATE TABLE image_duplicate_pairs", &[]).await.map_err(|e| {
-        error!("trigger_duplicate_scan: truncate failed: {}", e);
+    // Clear stale pairs without acquiring an ACCESS EXCLUSIVE lock
+    client.execute("DELETE FROM image_duplicate_pairs", &[]).await.map_err(|e| {
+        error!("trigger_duplicate_scan: delete failed: {}", e);
         actix_web::error::ErrorInternalServerError("Database error")
     })?;
 

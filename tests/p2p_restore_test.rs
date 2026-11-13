@@ -41,7 +41,7 @@ async fn insert_image(
     name: &str,
     ext: &str,
     key: &[u8],
-    encrypted_size: i32,
+    encrypted_size: i64,
     segment_count: i32,
     segment_enc_sizes: Option<&[i64]>,
 ) {
@@ -71,7 +71,7 @@ async fn insert_video(
     name: &str,
     ext: &str,
     key: &[u8],
-    encrypted_size: i32,
+    encrypted_size: i64,
     segment_count: i32,
     segment_enc_sizes: Option<&[i64]>,
 ) {
@@ -131,7 +131,7 @@ async fn test_restore_single_segment_image_all_shards() {
     let (shards, enc_size) = StorageEngine::process_for_backup(original, &key, &key, 3, 2).unwrap();
 
     let hash = "restore_test_single_001";
-    insert_image(&client, hash, "photo", "jpg", &key, enc_size as i32, 1, None).await;
+    insert_image(&client, hash, "photo", "jpg", &key, enc_size as i64, 1, None).await;
     for (i, shard) in shards.iter().enumerate() {
         insert_shard(&client, hash, i as i32, shard).await;
     }
@@ -156,7 +156,7 @@ async fn test_restore_single_segment_video() {
     let (shards, enc_size) = StorageEngine::process_for_backup(&original, &key, &key, 3, 2).unwrap();
 
     let hash = "restore_test_video_001";
-    insert_video(&client, hash, "clip", "mp4", &key, enc_size as i32, 1, None).await;
+    insert_video(&client, hash, "clip", "mp4", &key, enc_size as i64, 1, None).await;
     for (i, shard) in shards.iter().enumerate() {
         insert_shard(&client, hash, i as i32, shard).await;
     }
@@ -181,7 +181,7 @@ async fn test_restore_degraded_one_shard_missing() {
     let (shards, enc_size) = StorageEngine::process_for_backup(&original, &key, &key, 3, 2).unwrap();
 
     let hash = "restore_test_degraded_001";
-    insert_image(&client, hash, "degraded", "png", &key, enc_size as i32, 1, None).await;
+    insert_image(&client, hash, "degraded", "png", &key, enc_size as i64, 1, None).await;
     // Register all 5 shards in DB, but only store 4 in the mock (shard 2 is missing)
     for (i, shard) in shards.iter().enumerate() {
         insert_shard(&client, hash, i as i32, shard).await;
@@ -209,7 +209,7 @@ async fn test_restore_fails_with_only_two_shards() {
     let (shards, enc_size) = StorageEngine::process_for_backup(&original, &key, &key, 3, 2).unwrap();
 
     let hash = "restore_test_toofew_001";
-    insert_image(&client, hash, "toofew", "jpg", &key, enc_size as i32, 1, None).await;
+    insert_image(&client, hash, "toofew", "jpg", &key, enc_size as i64, 1, None).await;
     for (i, shard) in shards.iter().enumerate() {
         insert_shard(&client, hash, i as i32, shard).await;
     }
@@ -240,7 +240,7 @@ async fn test_restore_hash_mismatch_treated_as_missing() {
     let (shards, enc_size) = StorageEngine::process_for_backup(&original, &key, &key, 3, 2).unwrap();
 
     let hash = "restore_test_mismatch_001";
-    insert_image(&client, hash, "corrupt", "jpg", &key, enc_size as i32, 1, None).await;
+    insert_image(&client, hash, "corrupt", "jpg", &key, enc_size as i64, 1, None).await;
     for (i, shard) in shards.iter().enumerate() {
         insert_shard(&client, hash, i as i32, shard).await;
     }
@@ -434,7 +434,7 @@ async fn test_restore_scoped_to_owner() {
     let (shards, enc_size) = StorageEngine::process_for_backup(original, &key, &key, 3, 2).unwrap();
 
     let hash = "restore_test_owner_001";
-    insert_image(&client, hash, "owned", "jpg", &key, enc_size as i32, 1, None).await;
+    insert_image(&client, hash, "owned", "jpg", &key, enc_size as i64, 1, None).await;
     for (i, shard) in shards.iter().enumerate() {
         insert_shard(&client, hash, i as i32, shard).await;
     }

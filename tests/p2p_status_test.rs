@@ -123,25 +123,6 @@ async fn test_backup_list_and_timestamps() {
     assert!(ts[0].as_u64().unwrap() > 1_700_000_000, "a plausible epoch timestamp");
 }
 
-#[actix_web::test]
-#[serial]
-async fn test_invite_status() {
-    let (pool, _test_db) = setup_test_database_with_instance().await;
-    let config = common::utils::create_test_config();
-    let main_pool = common::utils::wrap_main_pool(pool.clone());
-    let app = test::init_service(
-        App::new()
-            .app_data(web::Data::new(main_pool))
-            .app_data(web::Data::new(config.clone()))
-            .service(services::p2p_status::get_invite_status)
-    ).await;
-    let req = test::TestRequest::get().uri("/p2p-invite-status").to_request();
-    let resp = test::call_service(&app, req).await;
-    assert_eq!(resp.status(), http::StatusCode::OK);
-    let body: serde_json::Value = test::read_body_json(resp).await;
-    assert_eq!(body["is_member"], true);
-}
-
 async fn make_test_p2p_helper() -> std::sync::Arc<np2p::network::P2PService> {
     let addr: std::net::SocketAddr = "127.0.0.1:0".parse().unwrap();
     let identity = np2p::crypto::NodeIdentity::generate();

@@ -462,15 +462,24 @@ async fn prune_old_snapshots(
     for row in old {
         let backup_hash: String = row.get(0);
 
-        // Delete each shard from its remote node (best-effort).
+        // Delete each shard from its remote node (best-effort), and track nodes for manifest cleanup.
         let shard_rows = client
             .query("SELECT shard_hash, node_id FROM db_backup_shards WHERE backup_hash = $1", &[&backup_hash])
             .await
             .map_err(|e| e.to_string())?;
+        let manifest_name = crate::db_restore::mesh_manifest_name(&backup_hash);
+        let mut manifest_nodes: std::collections::HashSet<String> =
+            p2p_service.registry.all().into_iter().map(|p| p.node_id).collect();
         for srow in shard_rows {
             let shard_hash: String = srow.get(0);
             let node_id: String = srow.get(1);
+            manifest_nodes.insert(node_id.clone());
             delete_shard_remote(pool, p2p_service, &node_id, &shard_hash).await;
+        }
+        for node_id in manifest_nodes {
+            if let Err(e) = crate::p2p_upload::delete_pinned_remote(p2p_service, &node_id, &manifest_name).await {
+                log::debug!("Best-effort pinned manifest delete on {} for {}: {}", node_id, backup_hash, e);
+            }
         }
 
         // Remove the manifest row (cascades to db_backup_shards) and the on-disk manifest file.

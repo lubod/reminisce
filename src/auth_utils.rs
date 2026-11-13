@@ -61,7 +61,12 @@ pub async fn ensure_user_exists(
 // Media-read-scoped tokens (the short-lived `image_token` handed out for `<img>` /
 // media URLs) must never unlock anything that is not raw media byte-serving.
 // Every other handler requires a full session token.
-const MEDIA_READ_SAFE_HANDLERS: &[&str] = &["get_image", "get_video"];
+const MEDIA_READ_SAFE_HANDLERS: &[&str] = &[
+    "get_image",
+    "get_video",
+    "get_thumbnail",
+    "get_face_thumbnail",
+];
 
 /// Authenticates a request by checking for a valid JWT in the Authorization header or
 /// `token` query parameter. Returns the decoded claims on success.
@@ -142,7 +147,7 @@ pub async fn authenticate_request(
     api_secret_env: Result<&str, &'static str>,
 ) -> Result<Claims, HttpResponse> {
     if let Some(peer_addr) = req.peer_addr() {
-        info!("{} request from: {}", handler_name, peer_addr);
+        log::debug!("{} request from: {}", handler_name, peer_addr);
     }
 
     let api_secret = match api_secret_env {

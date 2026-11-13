@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
-use crate::error::Result;
+use crate::error::{Np2pError, Result};
 use tokio::fs;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 /// Manages local disk storage for encrypted shards.
 /// Shards are stored in subdirectories based on their hash to avoid
@@ -17,6 +17,8 @@ pub struct DiskStorage {
 /// ~file_size/3 ≈ 3.8 GB shards under 3/5 EC). Shards are streamed to disk, not
 /// held in RAM, so a larger bound only limits worst-case per-shard disk usage.
 pub const MAX_SHARD_BYTES: u64 = 8 << 30; // 8 GiB
+/// Maximum size of a single pinned metadata object (64 MiB).
+pub const MAX_PINNED_BYTES: usize = 64 * 1024 * 1024;
 
 #[cfg(unix)]
 fn get_available_space(path: &Path) -> std::io::Result<u64> {
@@ -27,7 +29,8 @@ fn get_available_space(path: &Path) -> std::io::Result<u64> {
     unsafe {
         let mut stats: libc::statvfs = std::mem::zeroed();
         if libc::statvfs(c_path.as_ptr(), &mut stats) == 0 {
-            Ok(stats.f_frsize * stats.f_bavail)
+            #[allow(clippy::unnecessary_cast)]
+            Ok(stats.f_frsize as u64 * stats.f_bavail as u64)
         } else {
             Err(std::io::Error::last_os_error())
         }
@@ -131,42 +134,40 @@ impl DiskStorage {
         let _ = path;
     }
 
-    /// Stores a shard on disk.
-    pub async fn store(&self, shard_hash: [u8; 32], data: &[u8]) -> Result<()> {
-        // Assert at least 100MB of free space is available (fails closed off-Unix).
-        ensure_sufficient_space(&self.base_path)?;
-
-        let path = self.get_shard_path(&shard_hash);
-
-        // Ensure parent directory exists
+    /// Durably writes `data` to `path` via a unique sibling temp file, fsync, and atomic rename.
+    async fn write_atomic_bytes(path: &Path, data: &[u8]) -> Result<()> {
         if let Some(parent) = path.parent() {
             if !parent.exists() {
                 fs::create_dir_all(parent).await?;
             }
         }
 
-        // Durable write: temp file in the same dir → flush → fsync → atomic rename
-        // over the content-addressed final path. A crash mid-write can therefore
-        // never leave a truncated/partial shard at the final path.
-        let tmp_path = Self::unique_temp_sibling(&path);
+        let tmp_path = Self::unique_temp_sibling(path);
         let result = async {
             let mut file = fs::File::create(&tmp_path).await?;
             file.write_all(data).await?;
             file.flush().await?;
             file.sync_all().await?;
             drop(file);
-            fs::rename(&tmp_path, &path).await
+            fs::rename(&tmp_path, path).await
         }
         .await;
         if let Err(e) = result {
-            // Never leak the temp file on failure.
             let _ = fs::remove_file(&tmp_path).await;
             return Err(e.into());
         }
 
-        // Persist the directory entry (best-effort).
-        Self::sync_parent_dir(&path).await;
+        Self::sync_parent_dir(path).await;
         Ok(())
+    }
+
+    /// Stores a shard on disk.
+    pub async fn store(&self, shard_hash: [u8; 32], data: &[u8]) -> Result<()> {
+        // Assert at least 100MB of free space is available (fails closed off-Unix).
+        ensure_sufficient_space(&self.base_path)?;
+
+        let path = self.get_shard_path(&shard_hash);
+        Self::write_atomic_bytes(&path, data).await
     }
 
     /// Appends a chunk to the in-progress temp file for a streaming shard upload.
@@ -335,14 +336,46 @@ impl DiskStorage {
     /// Stores a pinned object by name (overwrites any existing value).
     /// Used for small critical metadata that must survive a home-server disk loss.
     pub async fn store_pinned(&self, name: &str, data: &[u8]) -> Result<()> {
-        let path = self.pinned_path(name);
-        if let Some(parent) = path.parent() {
-            if !parent.exists() {
-                fs::create_dir_all(parent).await?;
-            }
+        if data.len() > MAX_PINNED_BYTES {
+            return Err(Np2pError::Storage(format!(
+                "Pinned object '{}' exceeds {} byte cap",
+                name, MAX_PINNED_BYTES
+            )));
         }
-        fs::write(path, data).await?;
-        Ok(())
+        let path = self.pinned_path(name);
+        Self::write_atomic_bytes(&path, data).await
+    }
+
+    /// Removes a pinned object by name if present (idempotent).
+    pub async fn delete_pinned(&self, name: &str) -> Result<()> {
+        let path = self.pinned_path(name);
+        match fs::remove_file(path).await {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Computes a proof-of-storage digest over an on-disk shard by streaming in 1 MiB chunks.
+    /// When `challenge` is all zeroes (`[0u8; 32]`), hashes the raw shard bytes (`blake3(bytes)`);
+    /// otherwise prefixes `challenge` (`blake3(challenge || bytes)`).
+    pub async fn hash_shard_with_challenge(&self, shard_hash: [u8; 32], challenge: [u8; 32]) -> Result<Option<[u8; 32]>> {
+        let Some((mut file, _)) = self.open_shard_file(shard_hash).await? else {
+            return Ok(None);
+        };
+        let mut hasher = blake3::Hasher::new();
+        if challenge != [0u8; 32] {
+            hasher.update(&challenge);
+        }
+        let mut buf = vec![0u8; 1024 * 1024];
+        loop {
+            let n = file.read(&mut buf).await?;
+            if n == 0 {
+                break;
+            }
+            hasher.update(&buf[..n]);
+        }
+        Ok(Some(*hasher.finalize().as_bytes()))
     }
 
     /// Retrieves a pinned object by name.
@@ -411,6 +444,28 @@ mod tests {
         storage.store_pinned("manifest:abc", b"other").await.unwrap();
         assert_eq!(storage.get_pinned("manifest:abc").await.unwrap().unwrap(), b"other");
         assert_eq!(storage.get_pinned("manifest:latest").await.unwrap().unwrap(), b"v2");
+
+        // Delete pinned object (and verify idempotency).
+        storage.delete_pinned("manifest:latest").await.unwrap();
+        assert!(storage.get_pinned("manifest:latest").await.unwrap().is_none());
+        storage.delete_pinned("manifest:latest").await.unwrap();
+
+        // Enforce MAX_PINNED_BYTES cap.
+        let oversized = vec![0u8; MAX_PINNED_BYTES + 1];
+        assert!(storage.store_pinned("manifest:huge", &oversized).await.is_err());
+
+        // Challenge hash proof-of-storage matches blake3(challenge || data).
+        let hash = [0xEFu8; 32];
+        let payload = vec![0x3Cu8; 2 * 1024 * 1024 + 7];
+        storage.store(hash, &payload).await.unwrap();
+        let challenge = [0x12u8; 32];
+        let mut h = blake3::Hasher::new();
+        h.update(&challenge);
+        h.update(&payload);
+        let expected: [u8; 32] = *h.finalize().as_bytes();
+        assert_eq!(storage.hash_shard_with_challenge(hash, challenge).await.unwrap(), Some(expected));
+        assert_eq!(storage.hash_shard_with_challenge(hash, [0u8; 32]).await.unwrap(), Some(*blake3::hash(&payload).as_bytes()));
+        assert_eq!(storage.hash_shard_with_challenge([0x01u8; 32], challenge).await.unwrap(), None);
     }
 
     #[tokio::test]

@@ -73,64 +73,113 @@ pub async fn get_image(
 
         // Guess the MIME type from the file extension for the Content-Type header.
         let mime_type = mime_guess::from_path(&image_path).first_or_octet_stream();
+        let ext_lc = extension.to_lowercase();
+        let inline_safe = crate::services::ingest::IMAGE_EXTS.contains(&ext_lc.as_str());
 
-        match tokio::fs::read(&image_path).await {
-            Ok(data) => {
-                // Orientation correction on serve:
-                // - JPEG: guarantee the file carries the DB-verified orientation
-                //   tag (inject minimal EXIF, splice into existing EXIF, or
-                //   rewrite a stale tag). Browsers then render it upright.
-                //   Covers photos whose files never had an Orientation tag but
-                //   whose orientation was fixed by AI detection later.
-                // - PNG (no EXIF container): rotate pixels losslessly instead.
-                let data = match orientation.filter(|o| (1..=8).contains(o)) {
-                    Some(o) => {
-                        let ext_lc = extension.to_lowercase();
-                        if ext_lc == "jpg" || ext_lc == "jpeg" {
-                            crate::media_utils::ensure_exif_orientation(&data, o as u16)
-                        } else if no_exif && ext_lc == "png" && o > 1 {
-                            crate::media_utils::rotate_png_bytes(&data, o as u16).unwrap_or(data)
-                        } else {
-                            data
+        // Orientation correction on serve:
+        // - JPEG: guarantee the file carries the DB-verified orientation
+        //   tag (inject minimal EXIF, splice into existing EXIF, or
+        //   rewrite a stale tag). Browsers then render it upright.
+        // - PNG (no EXIF container): rotate pixels losslessly instead.
+        // Only these cases rewrite bytes in memory; everything else streams from disk.
+        let rewrite_orient = orientation.filter(|o| (1..=8).contains(o)).and_then(|o| {
+            if ext_lc == "jpg" || ext_lc == "jpeg" || (no_exif && ext_lc == "png" && o > 1) {
+                Some(o as u16)
+            } else {
+                None
+            }
+        });
+
+        if let Some(o) = rewrite_orient {
+            let path_for_block = image_path.clone();
+            let ext_for_block = ext_lc.clone();
+            let read_res = tokio::task::spawn_blocking(move || -> std::io::Result<Vec<u8>> {
+                let data = std::fs::read(&path_for_block)?;
+                if ext_for_block == "jpg" || ext_for_block == "jpeg" {
+                    Ok(crate::media_utils::ensure_exif_orientation(&data, o))
+                } else {
+                    Ok(crate::media_utils::rotate_png_bytes(&data, o).unwrap_or(data))
+                }
+            })
+            .await
+            .map_err(|e| {
+                error!("Blocking image read failed for '{}': {}", hash_to_find, e);
+                actix_web::error::ErrorInternalServerError("Could not read image file.")
+            })?;
+
+            match read_res {
+                Ok(data) => {
+                    info!("Serving image: {:?}", image_path);
+                    let disposition = if inline_safe {
+                        format!("inline; filename=\"{}\"", original_name)
+                    } else {
+                        "attachment".to_string()
+                    };
+                    let mut response = HttpResponse::Ok();
+                    if inline_safe {
+                        response.content_type(mime_type.as_ref());
+                    } else {
+                        response.content_type("application/octet-stream");
+                    }
+                    response.insert_header(("Content-Disposition", disposition));
+                    if let Some(place_value) = place {
+                        response.insert_header(("X-Image-Place", place_value));
+                    }
+                    Ok(response.body(data))
+                }
+                Err(e) => {
+                    error!(
+                        "Local image file not found. Hash: '{}', Path: {:?}, Error: {}",
+                        hash_to_find,
+                        image_path,
+                        e
+                    );
+                    Err(actix_web::error::ErrorInternalServerError("Could not read image file."))
+                }
+            }
+        } else {
+            match actix_files::NamedFile::open_async(&image_path).await {
+                Ok(file) => {
+                    info!("Serving image: {:?}", image_path);
+                    let file = if inline_safe {
+                        file.set_content_type(mime_type).set_content_disposition(
+                            actix_web::http::header::ContentDisposition {
+                                disposition: actix_web::http::header::DispositionType::Inline,
+                                parameters: vec![actix_web::http::header::DispositionParam::Filename(
+                                    original_name,
+                                )],
+                            },
+                        )
+                    } else {
+                        file.set_content_type(mime_guess::mime::APPLICATION_OCTET_STREAM)
+                            .set_content_disposition(
+                                actix_web::http::header::ContentDisposition {
+                                    disposition:
+                                        actix_web::http::header::DispositionType::Attachment,
+                                    parameters: vec![],
+                                },
+                            )
+                    };
+                    let mut response = file.into_response(&req);
+                    if let Some(place_value) = place {
+                        if let Ok(val) = actix_web::http::header::HeaderValue::try_from(place_value) {
+                            response.headers_mut().insert(
+                                actix_web::http::header::HeaderName::from_static("x-image-place"),
+                                val,
+                            );
                         }
                     }
-                    None => data,
-                };
-                info!("Serving image: {:?}", image_path);
-                // Only allow-listed media extensions may render inline from our
-                // origin; anything else (e.g. a name ending in .html/.svg that
-                // slipped into the DB historically) is forced to download as
-                // inert octet-stream so it cannot host active content.
-                let ext_lc = extension.to_lowercase();
-                let inline_safe = crate::services::ingest::IMAGE_EXTS.contains(&ext_lc.as_str());
-                let disposition = if inline_safe {
-                    format!("inline; filename=\"{}\"", original_name)
-                } else {
-                    "attachment".to_string()
-                };
-                let mut response = HttpResponse::Ok();
-                if inline_safe {
-                    response.content_type(mime_type.as_ref());
-                } else {
-                    response.content_type("application/octet-stream");
+                    Ok(response)
                 }
-                response.insert_header(("Content-Disposition", disposition));
-
-                // Add place as a custom header if available
-                if let Some(place_value) = place {
-                    response.insert_header(("X-Image-Place", place_value));
+                Err(e) => {
+                    error!(
+                        "Local image file not found. Hash: '{}', Path: {:?}, Error: {}",
+                        hash_to_find,
+                        image_path,
+                        e
+                    );
+                    Err(actix_web::error::ErrorInternalServerError("Could not read image file."))
                 }
-
-                Ok(response.body(data))
-            }
-            Err(e) => {
-                error!(
-                    "Local image file not found. Hash: '{}', Path: {:?}, Error: {}",
-                    hash_to_find,
-                    image_path,
-                    e
-                );
-                Err(actix_web::error::ErrorInternalServerError("Could not read image file."))
             }
         }
     } else {
@@ -378,7 +427,7 @@ pub async fn get_image_metadata(
         })?;
 
     if let Some(row) = img_row {
-        let file_size: Option<i32> = row.get(8);
+        let file_size: Option<i64> = row.get(8);
         let metadata = ImageMetadata {
             hash: row.get(0),
             name: row.get(1),
@@ -388,7 +437,7 @@ pub async fn get_image_metadata(
             exif: row.get(5),
             starred: row.get(6),
             device_id: row.get(7),
-            file_size_bytes: file_size.map(|v| v as i64),
+            file_size_bytes: file_size,
             width: row.get(9),
             height: row.get(10),
             orientation: row.get(11),
@@ -711,8 +760,8 @@ pub async fn update_image_orientation(
         })));
     };
 
-    // Regenerate thumbnail on disk with the new orientation BEFORE committing the DB update
-    let thumb_filename = format!("{}.thumb.jpg", hash);
+    // Regenerate per-user thumbnail overlay on disk with the new orientation BEFORE committing the DB update
+    let thumb_filename = format!("{}.{}.thumb.jpg", hash, user_uuid);
     let image_sub_dir_path = utils::get_subdirectory_path(config.get_images_dir(), &hash);
     let image_thumb_path = image_sub_dir_path.join(&thumb_filename);
     let has_thumbnail = if let Ok(image_path) = crate::media_utils::safe_resolve_content_path(
@@ -1034,17 +1083,17 @@ pub async fn get_random_image(
         .filter_map(|s| s.trim().parse::<i32>().ok())
         .collect();
 
-    let mut sql = "SELECT i.hash, i.name, i.created_at, i.place FROM images i".to_string();
+    let mut from_clause = String::from("FROM images i");
     let mut conditions = vec!["i.deleted_at IS NULL".to_string()];
     let mut params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = Vec::new();
 
     if query.starred_only {
-        sql.push_str(" INNER JOIN starred_images s ON i.hash = s.hash AND s.user_id = $1");
+        from_clause.push_str(" INNER JOIN starred_images s ON i.hash = s.hash AND s.user_id = $1");
         params.push(&user_uuid as &(dyn tokio_postgres::types::ToSql + Sync));
     }
 
     if !label_ids_vec.is_empty() {
-        sql.push_str(&format!(
+        from_clause.push_str(&format!(
             " INNER JOIN image_labels il ON i.hash = il.image_hash AND il.label_id = ANY(${})",
             params.len() + 1
         ));
@@ -1054,14 +1103,30 @@ pub async fn get_random_image(
     conditions.push(format!("i.user_id = ${}", params.len() + 1));
     params.push(&user_uuid as &(dyn tokio_postgres::types::ToSql + Sync));
 
-    if !conditions.is_empty() {
-        sql.push_str(" WHERE ");
-        sql.push_str(&conditions.join(" AND "));
+    let where_clause = format!("WHERE {}", conditions.join(" AND "));
+    let count_sql = format!("SELECT COUNT(*) {} {}", from_clause, where_clause);
+    let total: i64 = client
+        .query_one(&count_sql, &params)
+        .await
+        .map_err(|e| {
+            error!("Failed to count random images: {}", e);
+            actix_web::error::ErrorInternalServerError("Database error")
+        })?
+        .get(0);
+
+    if total <= 0 {
+        return Ok(HttpResponse::NotFound().json(serde_json::json!({"error": "No images found"})));
     }
 
-    sql.push_str(" ORDER BY RANDOM() LIMIT 1");
+    let offset = rand::Rng::random_range(&mut rand::rng(), 0..total);
+    let offset_idx = params.len() + 1;
+    let select_sql = format!(
+        "SELECT i.hash, i.name, i.created_at, i.place {} {} OFFSET ${} LIMIT 1",
+        from_clause, where_clause, offset_idx
+    );
+    params.push(&offset as &(dyn tokio_postgres::types::ToSql + Sync));
 
-    let row = client.query_opt(&sql, &params).await.map_err(|e| {
+    let row = client.query_opt(&select_sql, &params).await.map_err(|e| {
         error!("Failed to fetch random image: {}", e);
         actix_web::error::ErrorInternalServerError("Database error")
     })?;
@@ -1151,6 +1216,48 @@ pub async fn get_trash(
     Ok(HttpResponse::Ok().json(items))
 }
 
+/// Recalculate `face_count` and keep `representative_face_id` pointing at a live image
+/// for any persons appearing in `(user_id, hash)` after soft-delete or restore.
+async fn refresh_person_face_counts_for_image(
+    client: &(impl deadpool_postgres::GenericClient + Sync),
+    hash: &str,
+    user_id: &uuid::Uuid,
+) {
+    let sql = "
+        WITH affected_persons AS (
+            SELECT DISTINCT person_id
+            FROM faces
+            WHERE image_user_id = $1 AND image_hash = $2 AND person_id IS NOT NULL
+        )
+        UPDATE persons p
+        SET
+            face_count = COALESCE((
+                SELECT COUNT(*)::int
+                FROM faces f
+                JOIN images i ON i.user_id = f.image_user_id AND i.hash = f.image_hash
+                WHERE f.person_id = p.id
+                  AND f.user_id = p.user_id
+                  AND i.deleted_at IS NULL
+            ), 0),
+            representative_face_id = (
+                SELECT f2.id
+                FROM faces f2
+                JOIN images i2 ON i2.user_id = f2.image_user_id AND i2.hash = f2.image_hash
+                WHERE f2.person_id = p.id
+                  AND f2.user_id = p.user_id
+                  AND i2.deleted_at IS NULL
+                ORDER BY COALESCE(f2.id = p.representative_face_id, FALSE) DESC, f2.confidence DESC
+                LIMIT 1
+            ),
+            updated_at = NOW()
+        FROM affected_persons ap
+        WHERE p.id = ap.person_id AND p.user_id = $1
+    ";
+    if let Err(e) = client.execute(sql, &[user_id, &hash]).await {
+        warn!("Failed to refresh person face counts for image {}: {}", hash, e);
+    }
+}
+
 /// Shared implementation for soft-restoring images or videos.
 async fn soft_restore_media(
     pool: &deadpool_postgres::Pool,
@@ -1181,6 +1288,10 @@ async fn soft_restore_media(
             "status": "error",
             "message": format!("{} not found or not deleted.", media_type.chars().next().unwrap().to_uppercase().to_string() + &media_type[1..])
         })));
+    }
+
+    if table == "images" {
+        refresh_person_face_counts_for_image(&client, hash, user_id).await;
     }
 
     info!("{} restored: {}", table, hash);
@@ -1276,6 +1387,7 @@ async fn soft_delete_media(
                 &[user_id, &hash],
             )
             .await;
+        refresh_person_face_counts_for_image(&client, hash, user_id).await;
     }
 
     info!("{} marked as deleted: {}", table, hash);
@@ -1344,6 +1456,61 @@ pub struct EnhanceQuery {
     mode: Option<String>,
 }
 
+const ENHANCE_MAX_DIM: u32 = 2048;
+const ENHANCE_MAX_PIXELS: u64 = 4_000_000;
+
+/// Downscales oversized images to at most 2048px on the longest edge and 4 MP,
+/// returning JPEG bytes suitable for AI enhancement (or the original bytes if already
+/// a small JPEG).
+fn prepare_image_for_enhance(raw_bytes: Vec<u8>) -> Result<Vec<u8>, String> {
+    use image::ImageFormat;
+    let cursor = std::io::Cursor::new(&raw_bytes);
+    if let Ok(reader) = image::io::Reader::new(cursor).with_guessed_format() {
+        let fmt = reader.format();
+        if let Ok((w, h)) = reader.into_dimensions() {
+            let pixels = (w as u64).saturating_mul(h as u64);
+            if fmt == Some(ImageFormat::Jpeg)
+                && w <= ENHANCE_MAX_DIM
+                && h <= ENHANCE_MAX_DIM
+                && pixels <= ENHANCE_MAX_PIXELS
+            {
+                return Ok(raw_bytes);
+            }
+        }
+    }
+
+    let img = image::load_from_memory(&raw_bytes)
+        .map_err(|e| format!("Unsupported or corrupt image data: {}", e))?;
+    let (w, h) = (img.width(), img.height());
+    let pixels = (w as u64).saturating_mul(h as u64);
+    let max_dim = w.max(h) as f64;
+    let dim_scale = if max_dim > ENHANCE_MAX_DIM as f64 {
+        ENHANCE_MAX_DIM as f64 / max_dim
+    } else {
+        1.0
+    };
+    let pixel_scale = if pixels > ENHANCE_MAX_PIXELS {
+        (ENHANCE_MAX_PIXELS as f64 / pixels as f64).sqrt()
+    } else {
+        1.0
+    };
+    let scale = dim_scale.min(pixel_scale);
+    let out_img = if scale < 1.0 {
+        let new_w = ((w as f64) * scale).round().max(1.0) as u32;
+        let new_h = ((h as f64) * scale).round().max(1.0) as u32;
+        img.resize(new_w, new_h, image::imageops::FilterType::Lanczos3)
+    } else {
+        img
+    };
+
+    let rgb = out_img.to_rgb8();
+    let mut buf = Vec::new();
+    let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, 92);
+    enc.encode_image(&rgb)
+        .map_err(|e| format!("Failed to encode image for enhance: {}", e))?;
+    Ok(buf)
+}
+
 #[utoipa::path(
     post,
     path = "/image/{hash}/enhance",
@@ -1406,12 +1573,27 @@ pub async fn enhance_image(
         actix_web::error::ErrorInternalServerError("Failed to read image file")
     })?;
 
+    let prepared_bytes = tokio::task::spawn_blocking(move || prepare_image_for_enhance(image_data))
+        .await
+        .map_err(|e| {
+            error!("Image enhance preparation task panicked: {}", e);
+            actix_web::error::ErrorInternalServerError("Image preparation failed")
+        })?
+        .map_err(|e| {
+            warn!("Cannot prepare image {} for enhance: {}", hash, e);
+            actix_web::error::ErrorBadRequest(e)
+        })?;
+
     let mode = query.mode.clone().unwrap_or_else(|| "auto".to_string());
 
     let ai_client = crate::ai_client::AiClient::shared(&config);
-    let enhance_resp = ai_client.enhance_image(image_data.to_vec(), mode).await.map_err(|e| {
+    let enhance_resp = ai_client.enhance_image(prepared_bytes, mode).await.map_err(|e| {
         error!("AI service enhance failed: {}", e);
-        actix_web::error::ErrorServiceUnavailable("AI service unavailable")
+        if crate::ai_client::is_permanent_failure(&e) {
+            actix_web::error::ErrorBadRequest("Invalid or unsupported image for enhancement")
+        } else {
+            actix_web::error::ErrorServiceUnavailable("AI service unavailable")
+        }
     })?;
 
     info!("Enhanced image {}: ops={:?}", hash, enhance_resp.operations);
@@ -1477,6 +1659,13 @@ pub async fn save_enhanced_image(
     let image_bytes = general_purpose::STANDARD.decode(&body.image).map_err(|_| {
         actix_web::error::ErrorBadRequest("Invalid base64 image data")
     })?;
+    if image_bytes.is_empty() {
+        return Err(actix_web::error::ErrorBadRequest("Empty image data"));
+    }
+    match image::guess_format(&image_bytes) {
+        Ok(image::ImageFormat::Jpeg | image::ImageFormat::Png | image::ImageFormat::WebP) => {}
+        _ => return Err(actix_web::error::ErrorBadRequest("Unsupported enhanced image format")),
+    }
 
     // Hash the bytes (blake3) — this becomes the new image's identifier
     let new_hash = blake3::hash(&image_bytes).to_hex().to_string();
@@ -1521,6 +1710,7 @@ pub async fn save_enhanced_image(
             })))
         }
         Err(e) => {
+            let _ = tokio::fs::remove_file(&temp_path).await;
             error!("Failed to ingest enhanced image: {}", e);
             Ok(HttpResponse::InternalServerError().json(
                 serde_json::json!({"error": format!("Failed to save: {}", e)})

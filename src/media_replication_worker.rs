@@ -83,6 +83,12 @@ async fn replicate_all(
         warn!("Only {} P2P nodes discovered. 3+ nodes recommended for 3/5 EC redundancy.", nodes.len());
     }
 
+    // Refresh peer liveness in DB before checking for under-replicated files so
+    // last_seen timestamps reflect currently connected nodes.
+    if let Err(e) = crate::shard_rebalance_worker::ensure_peers_registered(pool, &nodes).await {
+        warn!("Failed to sync peer liveness before replication cycle: {}", e);
+    }
+
     // Re-queue files that lost redundancy below the RECONSTRUCTION threshold
     // (data_shards). Losing parity-only shards is handled by the audit
     // worker's targeted shard repair - resetting p2p_synced_at here would
@@ -130,14 +136,25 @@ pub async fn requeue_under_replicated(
                AND hash IN (
                  SELECT i.hash FROM {} i
                  LEFT JOIN (
-                   SELECT s.file_hash, COUNT(s.id) FILTER (WHERE n.node_id IS NOT NULL) AS sc
+                   SELECT s.file_hash,
+                          COUNT(DISTINCT s.shard_index) FILTER (WHERE n.node_id IS NOT NULL) AS shard_slots,
+                          COUNT(DISTINCT s.node_id) FILTER (WHERE n.node_id IS NOT NULL) AS distinct_nodes
                    FROM p2p_shards s
                    LEFT JOIN p2p_nodes n ON n.node_id = s.node_id
                      AND n.is_active = TRUE AND n.last_seen > NOW() - INTERVAL '10 minutes'
                    GROUP BY s.file_hash
                  ) t ON t.file_hash = i.hash
-                 WHERE COALESCE(t.sc, 0) < $1
-                 ORDER BY i.created_at ASC
+                 WHERE i.deleted_at IS NULL AND i.p2p_synced_at IS NOT NULL
+                   AND (i.p2p_last_attempt_at IS NULL OR i.p2p_last_attempt_at < NOW() - INTERVAL '10 minutes')
+                   AND (
+                     COALESCE(t.shard_slots, 0) < $1
+                     OR COALESCE(t.distinct_nodes, 0) < LEAST(
+                       $1,
+                       (SELECT COUNT(*) FROM p2p_nodes WHERE is_active = TRUE AND last_seen > NOW() - INTERVAL '10 minutes')
+                     )
+                   )
+                 GROUP BY i.hash, t.shard_slots, t.distinct_nodes
+                 ORDER BY MIN(i.created_at) ASC
                  LIMIT $2
                )",
             table, table
@@ -165,10 +182,14 @@ async fn replicate_batch(
     }
 
     let query = format!(
-        "SELECT hash, name, ext
-         FROM {}
-         WHERE p2p_synced_at IS NULL
-           AND (p2p_last_attempt_at IS NULL OR p2p_last_attempt_at < NOW() - INTERVAL '10 minutes')
+        "SELECT hash, name, ext FROM (
+           SELECT DISTINCT ON (hash) hash, name, ext, created_at
+           FROM {}
+           WHERE deleted_at IS NULL
+             AND p2p_synced_at IS NULL
+             AND (p2p_last_attempt_at IS NULL OR p2p_last_attempt_at < NOW() - INTERVAL '10 minutes')
+           ORDER BY hash, created_at ASC
+         ) dedup
          ORDER BY created_at ASC
          LIMIT $1",
         table
@@ -266,6 +287,14 @@ async fn replicate_single_file(
     api_secret: &str,
     config: &Config,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let data_shards = config.p2p_data_shards;
+    let parity_shards = config.p2p_parity_shards;
+    let total_shards = data_shards + parity_shards;
+
+    if try_reuse_existing_replication(pool, table, &file.hash, data_shards as i64).await? {
+        return Ok(());
+    }
+
     let file_path = PathBuf::from(base_dir)
         .join(&file.hash[0..2])
         .join(format!("{}.{}", file.hash, file.ext));
@@ -288,15 +317,11 @@ async fn replicate_single_file(
     let metadata = tokio::fs::metadata(&file_path).await?;
     let file_size = metadata.len() as usize;
 
-    let data_shards = config.p2p_data_shards;
-    let parity_shards = config.p2p_parity_shards;
-    let total_shards = data_shards + parity_shards;
-
     let start = std::time::Instant::now();
 
     // Route large files through the segmented streaming path to cap peak RAM at ~940 MB.
     if file_size > SEGMENT_THRESHOLD {
-        let res = replicate_large_file(pool, p2p_service, base_dir, table, nodes, file, &file_path, api_secret, data_shards, parity_shards).await;
+        let res = replicate_large_file(pool, p2p_service, table, nodes, file, &file_path, api_secret, data_shards, parity_shards).await;
         if res.is_ok() {
             BACKUP_SIZE_BYTES.observe(file_size as f64);
             BACKUP_DURATION_SECONDS.observe(start.elapsed().as_secs_f64());
@@ -346,7 +371,7 @@ async fn replicate_single_file(
     }
 
     // Mark as synced and store the encryption key + encrypted size for future re-sharding
-    let enc_size_i32 = enc_size as i32;
+    let enc_size_i64 = enc_size as i64;
     let data_shards_i32 = data_shards as i32;
     let parity_shards_i32 = parity_shards as i32;
     let encrypted_key = crate::utils::encrypt_key(&encryption_key, api_secret)?;
@@ -360,12 +385,9 @@ async fn replicate_single_file(
         "UPDATE {} SET p2p_synced_at = NOW(), p2p_last_attempt_at = NOW(), p2p_shard_hash = $1, p2p_encryption_key = $2, p2p_encrypted_size = $3, p2p_data_shards = $4, p2p_parity_shards = $5 WHERE hash = $6",
         table
     );
-    trans.execute(&update_query, &[&manifest_hash, &encrypted_key, &enc_size_i32, &data_shards_i32, &parity_shards_i32, &file.hash]).await?;
+    trans.execute(&update_query, &[&manifest_hash, &encrypted_key, &enc_size_i64, &data_shards_i32, &parity_shards_i32, &file.hash]).await?;
 
     trans.commit().await?;
-
-    // Append to escrow file for key recovery
-    append_key_to_escrow(base_dir, &file.hash, &encrypted_key);
 
     info!("Replicated {}: {} shards stored (rendezvous)", file.hash, final_results.len());
     BACKUP_SIZE_BYTES.observe(file_size as f64);
@@ -373,18 +395,97 @@ async fn replicate_single_file(
     Ok(())
 }
 
+/// If another live row in `images` or `videos` for `file_hash` already completed
+/// P2P replication and still has at least `min_shards` on active nodes, copy its
+/// P2P metadata onto unsynced rows in `table` without re-encrypting or re-uploading.
+async fn try_reuse_existing_replication(
+    pool: &Pool,
+    table: &str,
+    file_hash: &str,
+    min_shards: i64,
+) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+    crate::utils::validate_table_name(table)?;
+    let client = pool.get().await?;
+    let active_shards: i64 = client
+        .query_one(
+            "SELECT COUNT(DISTINCT s.shard_index)
+             FROM p2p_shards s
+             INNER JOIN p2p_nodes n ON n.node_id = s.node_id
+             WHERE s.file_hash = $1 AND n.is_active = TRUE AND n.last_seen > NOW() - INTERVAL '10 minutes'",
+            &[&file_hash],
+        )
+        .await?
+        .get(0);
+    if active_shards < min_shards {
+        return Ok(false);
+    }
+
+    let sibling = client
+        .query_opt(
+            "SELECT p2p_shard_hash, p2p_encryption_key, p2p_encrypted_size::BIGINT,
+                    p2p_segment_count, p2p_segment_enc_sizes, p2p_data_shards, p2p_parity_shards
+             FROM (
+               SELECT p2p_shard_hash, p2p_encryption_key, p2p_encrypted_size,
+                      p2p_segment_count, p2p_segment_enc_sizes, p2p_data_shards, p2p_parity_shards,
+                      p2p_synced_at
+               FROM images
+               WHERE hash = $1 AND deleted_at IS NULL AND p2p_synced_at IS NOT NULL AND p2p_encryption_key IS NOT NULL
+               UNION ALL
+               SELECT p2p_shard_hash, p2p_encryption_key, p2p_encrypted_size,
+                      p2p_segment_count, p2p_segment_enc_sizes, p2p_data_shards, p2p_parity_shards,
+                      p2p_synced_at
+               FROM videos
+               WHERE hash = $1 AND deleted_at IS NULL AND p2p_synced_at IS NOT NULL AND p2p_encryption_key IS NOT NULL
+             ) siblings
+             ORDER BY p2p_synced_at DESC
+             LIMIT 1",
+            &[&file_hash],
+        )
+        .await?;
+
+    let Some(row) = sibling else {
+        return Ok(false);
+    };
+
+    let shard_hash: Option<String> = row.get(0);
+    let enc_key: Vec<u8> = row.get(1);
+    let enc_size: Option<i64> = row.get(2);
+    let seg_count: Option<i32> = row.get(3);
+    let seg_enc_sizes: Option<Vec<i64>> = row.get(4);
+    let data_shards: Option<i32> = row.get(5);
+    let parity_shards: Option<i32> = row.get(6);
+
+    let update_sql = format!(
+        "UPDATE {} SET p2p_synced_at = NOW(), p2p_last_attempt_at = NOW(),
+            p2p_shard_hash = $1, p2p_encryption_key = $2, p2p_encrypted_size = $3,
+            p2p_segment_count = $4, p2p_segment_enc_sizes = $5,
+            p2p_data_shards = $6, p2p_parity_shards = $7
+         WHERE hash = $8 AND deleted_at IS NULL AND p2p_synced_at IS NULL",
+        table
+    );
+    let updated = client
+        .execute(
+            &update_sql,
+            &[&shard_hash, &enc_key, &enc_size, &seg_count, &seg_enc_sizes, &data_shards, &parity_shards, &file_hash],
+        )
+        .await?;
+
+    if updated > 0 {
+        info!("Reused existing P2P replication metadata for {} ({} row(s) in {})", file_hash, updated, table);
+    }
+    Ok(true)
+}
+
 /// Replicates a file larger than SEGMENT_THRESHOLD by processing it in 256 MB segments.
 /// Opens one persistent QUIC stream per shard, then streams sub-shard chunks across all
 /// segments before finalising with a BLAKE3 hash. Peak RAM ≈ 940 MB regardless of file size.
 ///
 /// The per-file encryption key is stored wrapped with the master secret (same as the
-/// single-segment path) and appended to the on-disk escrow, so large-file keys survive
-/// a database loss and are never stored in plaintext in the DB.
+/// single-segment path) so keys are never stored in plaintext in the DB.
 #[allow(clippy::too_many_arguments)]
 async fn replicate_large_file(
     pool: &Pool,
     p2p_service: &Arc<P2PService>,
-    base_dir: &str,
     table: &str,
     nodes: &[(String, SocketAddr)],
     file: &MediaToReplicate,
@@ -439,31 +540,6 @@ async fn replicate_large_file(
     trans.execute(&update_query, &[&file.hash, &encrypted_key, &segment_count, &segment_enc_sizes, &(data_shards as i32), &(parity_shards as i32)]).await?;
     trans.commit().await?;
 
-    // Append to escrow file for key recovery (same as the single-segment path).
-    append_key_to_escrow(base_dir, &file.hash, &encrypted_key);
-
     info!("Replicated {} ({} segments, {} shards stored)", file.hash, segment_count, shard_results.len());
     Ok(())
-}
-
-/// Best-effort append of `hash,encrypted_key` to the `p2p_keys.escrow` file that
-/// lives next to the media data directory (mode 0600), so backup keys survive a
-/// database loss.
-fn append_key_to_escrow(base_dir: &str, hash: &str, encrypted_key: &[u8]) {
-    use std::io::Write;
-    let abs_base = std::fs::canonicalize(base_dir).unwrap_or_else(|_| PathBuf::from(base_dir));
-    let escrow_path = abs_base.parent().unwrap_or(&abs_base).join("p2p_keys.escrow");
-
-    let mut options = std::fs::OpenOptions::new();
-    options.create(true).append(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-
-    if let Ok(mut escrow_file) = options.open(&escrow_path) {
-        let line = format!("{},{}\n", hash, hex::encode(encrypted_key));
-        let _ = escrow_file.write_all(line.as_bytes());
-    }
 }

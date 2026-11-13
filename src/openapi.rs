@@ -9,6 +9,7 @@ use utoipa::OpenApi;
     paths(
         crate::services::auth::user_login,
         crate::services::auth::user_login_form,
+        crate::services::auth::user_refresh,
         crate::services::health::ping,
         crate::services::health::health_check,
         crate::services::existence_check::check_image_exists,
@@ -122,8 +123,9 @@ use utoipa::OpenApi;
             crate::services::media::TrashItem,
             crate::services::embedding::SearchResult,
             crate::services::embedding::VideoKeyframeResult,
-            crate::services::auth::RegisterRequest,
             crate::services::auth::UserLoginRequest,
+            crate::services::auth::RefreshTokenRequest,
+            crate::services::auth::LogoutRequest,
             crate::services::health::HealthCheckResponse,
             crate::services::system_stats::SystemStatsResponse,
             crate::services::system_stats::P2PDaemonStatus,

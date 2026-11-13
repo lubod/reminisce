@@ -8,10 +8,8 @@ use crate::config::Config;
 use crate::p2p_upload::{rendezvous_select, MIN_NODES_REQUIRED};
 use deadpool_postgres::Pool;
 use log::{info, warn, error};
-use np2p::network::{P2PService, Message, Protocol};
-use np2p::storage::StorageEngine;
+use np2p::network::P2PService;
 use std::net::SocketAddr;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -20,8 +18,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 pub static REBALANCE_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 const REBALANCE_BATCH_SIZE: i64 = 50;
-const UPLOAD_STREAM_THRESHOLD: usize = 64 * 1024 * 1024; // 64 MB — stay under Pi's 100 MB recv limit
-const UPLOAD_CHUNK_SIZE: usize = 32 * 1024 * 1024;       // 32 MB chunks
 
 /// Sync dynamically discovered peers into p2p_nodes.
 /// Upserts active nodes and marks stale nodes inactive only after 10m of inactivity.
@@ -125,7 +121,8 @@ async fn rebalance_cycle_inner(
     config: &Config,
     p2p_service: &Arc<P2PService>,
 ) -> Result<bool, String> {
-        // Sync discovered peers to DB and DB peers to in-memory registry
+    let _worker_guard = crate::utils::P2P_WORKER_LOCK.lock().await;
+    // Sync discovered peers to DB and DB peers to in-memory registry
     let discovered: Vec<(String, SocketAddr)> = p2p_service.registry.all()
         .into_iter()
         .map(|p| (p.node_id, p.addr))
@@ -202,7 +199,7 @@ async fn rebalance_file(
     let api_key = config.get_api_key().map_err(|e| format!("Failed to retrieve API key: {}", e))?;
     let file_info = find_file_info(&client, file_hash, api_key).await?;
     let (data_shards, parity_shards) = match file_info {
-        Some((_, _, _, ds, ps)) => (ds, ps),
+        Some(ref info) => (info.data_shards, info.parity_shards),
         None => (3, 2),
     };
     let total_shards = data_shards + parity_shards;
@@ -255,8 +252,9 @@ async fn rebalance_file(
     Ok(migrated_any)
 }
 
-/// Migrate a shard to a new node. Prefers re-sharding from local file (when encryption key is stored).
-/// Falls back to retrieving the shard from the old node if no key is available.
+/// Migrate a shard to a new node. Prefers streaming re-shard from local file
+/// (handles single- and multi-segment files in bounded RAM); falls back to streaming
+/// the shard directly from the old node.
 #[allow(clippy::too_many_arguments)]
 async fn migrate_shard(
     pool: &Pool,
@@ -270,61 +268,55 @@ async fn migrate_shard(
     old_shard_hash: &str,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     let client = pool.get().await?;
-
     let api_key = config.get_api_key().map_err(|e| format!("Failed to retrieve API key: {}", e))?;
     let file_info = find_file_info(&client, file_hash, api_key).await?;
 
-    // Prefer re-sharding from the local file. If the local file no longer matches its
-    // content hash (reshard_from_local refuses to re-shard a modified file), or local
-    // re-sharding fails for any other reason, fall back to pulling the shard from the
-    // old node.
-    let shard_data = match file_info {
-        Some((ext, Some(key), _enc_size, data_shards, parity_shards)) => {
-            match reshard_from_local(config, file_hash, &ext, &key, shard_index, data_shards, parity_shards).await {
-                Ok(data) => data,
-                Err(e) => {
-                    warn!("reshard_from_local failed for {}: {} — falling back to old node", file_hash, e);
-                    retrieve_shard_from_old_node(pool, p2p_service, old_node_id, old_shard_hash).await?
+    if let Some(info) = file_info {
+        if let Some(key) = info.encryption_key {
+            if let Some(local_path) = crate::p2p_upload::find_local_media_path(config, file_hash, &info.ext) {
+                match crate::p2p_upload::stream_reshard_single_index(
+                    p2p_service,
+                    new_node_addr,
+                    &local_path,
+                    file_hash,
+                    &key,
+                    info.segment_count,
+                    shard_index,
+                    info.data_shards,
+                    info.parity_shards,
+                ).await {
+                    Ok(new_shard_hash) => {
+                        if new_shard_hash == old_shard_hash {
+                            return Ok(new_shard_hash);
+                        }
+                        // Integrity gate: unexpected shard hash mismatch — delete uploaded copy and try fallback.
+                        let nid = p2p_service.registry.find_by_addr(new_node_addr).unwrap_or_default();
+                        let _ = crate::p2p_upload::delete_shard_remote(p2p_service, new_node_addr, &nid, &new_shard_hash).await;
+                        warn!(
+                            "stream_reshard integrity mismatch for {}[{}]: {} != {} — falling back to old node",
+                            file_hash, shard_index, &new_shard_hash[..16.min(new_shard_hash.len())], &old_shard_hash[..16.min(old_shard_hash.len())]
+                        );
+                    }
+                    Err(e) => {
+                        warn!("Local streamed reshard failed for {}: {} — falling back to old node", file_hash, e);
+                    }
                 }
             }
         }
-        _ => {
-            retrieve_shard_from_old_node(pool, p2p_service, old_node_id, old_shard_hash).await?
-        }
-    };
-
-    // Integrity gate: the bytes we are about to make canonical must hash to
-    // exactly what the old record declared. Without this a corrupted shard
-    // retrieved from the old node would be re-uploaded and its bad hash
-    // written over the good one — laundering corruption into the catalog.
-    let new_shard_hash = blake3::hash(&shard_data).to_hex().to_string();
-    if new_shard_hash != old_shard_hash {
-        return Err(format!(
-            "Shard integrity check failed for {}[{}]: retrieved {} but expected {} — aborting migration",
-            file_hash, shard_index, &new_shard_hash[..16], &old_shard_hash[..16.min(old_shard_hash.len())]
-        )
-        .into());
     }
-    upload_shard_to_node(p2p_service, new_node_addr, &shard_data).await?;
 
-    Ok(new_shard_hash)
-}
-
-/// Look up the old node's address and pull the shard from it.
-async fn retrieve_shard_from_old_node(
-    pool: &Pool,
-    p2p_service: &Arc<P2PService>,
-    old_node_id: &str,
-    old_shard_hash: &str,
-) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
-    let old_addr = lookup_node_addr(pool, p2p_service, old_node_id).await;
-    match old_addr {
-        Some(addr) => retrieve_shard_from_node(p2p_service, addr, old_shard_hash).await
-            .map_err(|_| -> Box<dyn std::error::Error + Send + Sync> {
-                "Cannot migrate: old node unreachable".into()
-            }),
-        None => Err("Cannot migrate: old node addr unknown".into()),
-    }
+    let old_addr = lookup_node_addr(pool, p2p_service, old_node_id)
+        .await
+        .ok_or("Cannot migrate: old node addr unknown")?;
+    let transferred = crate::p2p_upload::copy_shard_between_nodes(
+        p2p_service,
+        old_addr,
+        new_node_addr,
+        old_shard_hash,
+        shard_index as u8,
+    )
+    .await?;
+    Ok(transferred)
 }
 
 /// Sync all active nodes from the database into the in-memory P2P service registry.
@@ -367,212 +359,52 @@ pub async fn lookup_node_addr(pool: &Pool, p2p_service: &Arc<P2PService>, node_i
     None
 }
 
-/// Look up file info (ext, encryption_key, encrypted_size) from images or videos table.
+/// Resolved metadata required to re-shard or validate a local media file.
+#[derive(Debug, Clone)]
+pub struct LocalFileInfo {
+    pub ext: String,
+    pub encryption_key: Option<Vec<u8>>,
+    pub encrypted_size: Option<i64>,
+    pub segment_count: i32,
+    pub data_shards: usize,
+    pub parity_shards: usize,
+}
+
+/// Look up file info (`LocalFileInfo`) from `images` or `videos`.
 pub async fn find_file_info(
     client: &tokio_postgres::Client,
     file_hash: &str,
     api_secret: &str,
-) -> Result<Option<(String, Option<Vec<u8>>, Option<i32>, usize, usize)>, Box<dyn std::error::Error + Send + Sync>> {
-    // Try images first
-    let row = client.query_opt(
-        "SELECT ext, p2p_encryption_key, p2p_encrypted_size, p2p_data_shards, p2p_parity_shards FROM images WHERE hash = $1 LIMIT 1",
-        &[&file_hash],
-    ).await?;
-
-    if let Some(row) = row {
-        let ext: String = row.get(0);
-        let key_enc: Option<Vec<u8>> = row.get(1);
-        let enc_size: Option<i32> = row.get(2);
-        let data_shards: i32 = row.get::<_, Option<i32>>(3).unwrap_or(3);
-        let parity_shards: i32 = row.get::<_, Option<i32>>(4).unwrap_or(2);
-        let key = match key_enc {
-            Some(k) => Some(crate::utils::decrypt_key(&k, api_secret)?),
-            None => None,
-        };
-        return Ok(Some((ext, key, enc_size, data_shards as usize, parity_shards as usize)));
-    }
-
-    // Try videos
-    let row = client.query_opt(
-        "SELECT ext, p2p_encryption_key, p2p_encrypted_size, p2p_data_shards, p2p_parity_shards FROM videos WHERE hash = $1 LIMIT 1",
-        &[&file_hash],
-    ).await?;
-
-    if let Some(row) = row {
-        let ext: String = row.get(0);
-        let key_enc: Option<Vec<u8>> = row.get(1);
-        let enc_size: Option<i32> = row.get(2);
-        let data_shards: i32 = row.get::<_, Option<i32>>(3).unwrap_or(3);
-        let parity_shards: i32 = row.get::<_, Option<i32>>(4).unwrap_or(2);
-        let key = match key_enc {
-            Some(k) => Some(crate::utils::decrypt_key(&k, api_secret)?),
-            None => None,
-        };
-        return Ok(Some((ext, key, enc_size, data_shards as usize, parity_shards as usize)));
+) -> Result<Option<LocalFileInfo>, Box<dyn std::error::Error + Send + Sync>> {
+    for table in ["images", "videos"] {
+        crate::utils::validate_table_name(table)?;
+        let query = format!(
+            "SELECT ext, p2p_encryption_key, p2p_encrypted_size::BIGINT, \
+                    COALESCE(p2p_segment_count, 1), p2p_data_shards, p2p_parity_shards \
+             FROM {} WHERE hash = $1 LIMIT 1",
+            table
+        );
+        if let Some(row) = client.query_opt(&query, &[&file_hash]).await? {
+            let ext: String = row.get(0);
+            let key_enc: Option<Vec<u8>> = row.get(1);
+            let encrypted_size: Option<i64> = row.get(2);
+            let segment_count: i32 = row.get(3);
+            let data_shards: usize = row.get::<_, Option<i32>>(4).unwrap_or(3) as usize;
+            let parity_shards: usize = row.get::<_, Option<i32>>(5).unwrap_or(2) as usize;
+            let encryption_key = match key_enc {
+                Some(k) => Some(crate::utils::decrypt_key(&k, api_secret)?),
+                None => None,
+            };
+            return Ok(Some(LocalFileInfo {
+                ext,
+                encryption_key,
+                encrypted_size,
+                segment_count,
+                data_shards,
+                parity_shards,
+            }));
+        }
     }
 
     Ok(None)
-}
-
-/// Re-encrypt and re-shard a file from local disk, returning the specific shard.
-async fn reshard_from_local(
-    config: &Config,
-    file_hash: &str,
-    ext: &str,
-    encryption_key: &[u8],
-    shard_index: usize,
-    data_shards: usize,
-    parity_shards: usize,
-) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
-    // Try images dir first, then videos
-    let images_path = PathBuf::from(config.get_images_dir())
-        .join(&file_hash[0..2])
-        .join(format!("{}.{}", file_hash, ext));
-    let videos_path = PathBuf::from(config.get_videos_dir())
-        .join(&file_hash[0..2])
-        .join(format!("{}.{}", file_hash, ext));
-
-    let file_data = if images_path.exists() {
-        tokio::fs::read(&images_path).await?
-    } else if videos_path.exists() {
-        tokio::fs::read(&videos_path).await?
-    } else {
-        return Err(format!("Local file not found for hash {}", file_hash).into());
-    };
-
-    // Re-sharding produces shards that must be byte-compatible with the survivors
-    // on the other nodes. If the local file changed since it was sharded (its BLAKE3
-    // no longer matches the content hash), refuse to migrate from it so we don't end
-    // up with an inconsistent shard set.
-    let actual_hash = blake3::hash(&file_data).to_hex().to_string();
-    if actual_hash != file_hash {
-        return Err(format!(
-            "Local file hash mismatch ({} != {}): refusing to migrate from a modified file",
-            &actual_hash[..16], &file_hash[..16]
-        ).into());
-    }
-
-    let (shards, _enc_size) = StorageEngine::process_for_backup(&file_data, encryption_key, encryption_key, data_shards, parity_shards)?;
-
-    if shard_index >= shards.len() {
-        return Err(format!("Shard index {} out of range ({})", shard_index, shards.len()).into());
-    }
-
-    Ok(shards[shard_index].clone())
-}
-
-/// Retrieve a shard from a remote node.
-async fn retrieve_shard_from_node(
-    p2p_service: &Arc<P2PService>,
-    addr: SocketAddr,
-    shard_hash_hex: &str,
-) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
-    crate::p2p_upload::retrieve_shard(p2p_service, addr, shard_hash_hex)
-        .await
-        .map_err(|e| e.into())
-}
-
-/// Upload a shard to a remote node.
-/// Uses streaming protocol for shards > 64 MB to stay under the Pi's 100 MB message limit.
-pub async fn upload_shard_to_node(
-    p2p_service: &Arc<P2PService>,
-    addr: SocketAddr,
-    shard_data: &[u8],
-) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-    let node_id = p2p_service.registry.find_by_addr(addr)
-        .unwrap_or_else(|| addr.to_string());
-    let result = upload_shard_to_node_inner(p2p_service, addr, &node_id, shard_data).await;
-
-    // Surface per-peer write health from this code path too (it stores shards on
-    // repair/migrate, so disk-full rejections would otherwise be invisible). The
-    // inner helpers update the available-space gauge on success; this records the
-    // last-write status and success/failure counters for every attempt.
-    crate::metrics::record_peer_write(&node_id, result.is_ok(), None);
-    result
-}
-
-async fn upload_shard_to_node_inner(
-    p2p_service: &Arc<P2PService>,
-    addr: SocketAddr,
-    node_id: &str,
-    shard_data: &[u8],
-) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-    let conn = p2p_service.connect_to_addr(addr).await
-        .map_err(|e| format!("Connection to {} failed: {}", addr, e))?;
-
-    let shard_hash = blake3::hash(shard_data);
-    let shard_hash_bytes: [u8; 32] = shard_hash.into();
-    let shard_hash_hex = shard_hash.to_hex().to_string();
-
-    if shard_data.len() > UPLOAD_STREAM_THRESHOLD {
-        let (mut send, mut recv) = conn.open_bi().await?;
-        // Token binds the stream to (file_hash, shard_index) — the storage node verifies
-        // it before accepting any chunk (matches the non-streamed StoreShardRequest auth).
-        let binding: [u8; 32] = blake3::hash(
-            &[shard_hash_bytes.as_slice(), &[0u8]].concat()
-        ).into();
-        let token = p2p_service.identity().create_shard_token(np2p::crypto::ShardOp::Store, &binding);
-        // Dynamic chunked streaming: if the shard exceeds single-frame retrieval limit,
-        // declare 0 total_shard_bytes (matching p2p_upload::upload_segmented) so the storage
-        // node accepts the chunked stream instead of rejecting with Error 413.
-        let total_bytes = if shard_data.len() as u64 > (np2p::network::protocol::MAX_MESSAGE_LEN as u64 - 1024) {
-            0
-        } else {
-            shard_data.len() as u64
-        };
-        Protocol::send(&mut send, &Message::StoreShardStreamInit {
-            file_hash: shard_hash_bytes,
-            shard_index: 0,
-            total_shard_bytes: total_bytes,
-            segment_count: 1,
-            token,
-        }).await.map_err(|e| e.to_string())?;
-
-        match Protocol::receive(&mut recv).await.map_err(|e| e.to_string())? {
-            Message::StoreShardStreamAck { ready: true } => {}
-            other => return Err(format!("Unexpected stream ack from {}: {:?}", addr, other).into()),
-        }
-
-        for chunk in shard_data.chunks(UPLOAD_CHUNK_SIZE) {
-            Protocol::send(&mut send, &Message::StoreShardChunk { data: chunk.to_vec() })
-                .await.map_err(|e| e.to_string())?;
-        }
-
-        Protocol::send(&mut send, &Message::StoreShardStreamFinal { shard_hash: shard_hash_bytes })
-            .await.map_err(|e| e.to_string())?;
-
-        match Protocol::receive(&mut recv).await.map_err(|e| e.to_string())? {
-            Message::StoreShardStreamResponse { success: true, available_space_bytes } => {
-                crate::metrics::P2P_PEER_AVAILABLE_SPACE_BYTES
-                    .with_label_values(&[node_id]).set(available_space_bytes as f64);
-                conn.close(0u32.into(), b"done");
-                Ok(shard_hash_hex)
-            }
-            _ => {
-                conn.close(0u32.into(), b"done");
-                Err(format!("Node {} rejected large shard (stream)", addr).into())
-            }
-        }
-    } else {
-        let (mut send, mut recv) = conn.open_bi().await?;
-        let token = p2p_service.identity().create_shard_token(np2p::crypto::ShardOp::Store, &shard_hash_bytes);
-        Protocol::send(&mut send, &Message::StoreShardRequest {
-            shard_hash: shard_hash_bytes,
-            data: shard_data.to_vec(),
-            token,
-        }).await.map_err(|e| e.to_string())?;
-
-        match Protocol::receive(&mut recv).await.map_err(|e| e.to_string())? {
-            Message::StoreShardResponse { success: true, available_space_bytes, .. } => {
-                crate::metrics::P2P_PEER_AVAILABLE_SPACE_BYTES
-                    .with_label_values(&[node_id]).set(available_space_bytes as f64);
-                conn.close(0u32.into(), b"done");
-                Ok(shard_hash_hex)
-            }
-            _ => {
-                conn.close(0u32.into(), b"done");
-                Err(format!("Node {} rejected shard", addr).into())
-            }
-        }
-    }
 }

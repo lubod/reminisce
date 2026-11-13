@@ -117,6 +117,10 @@ pub struct Config {
     /// (e.g. https://vps-ip:8443). Included in the QR code.
     #[serde(default)]
     pub p2p_tunnel_public_url: Option<String>,
+    /// Optional Tailscale URL or IP/hostname (e.g. "https://100.x.y.z:28443" or "100.x.y.z")
+    /// to include in the Android setup QR code alongside the LAN URL.
+    #[serde(default)]
+    pub tailscale_url: Option<String>,
 
     /// Namespace used when registering with / querying the coordinator.
     /// Use different values for dev and production to avoid cross-contamination.
@@ -310,6 +314,15 @@ impl Config {
 
         // Validate API key at startup
         config.get_api_key().map_err(std::io::Error::other)?;
+
+        // Allow TAILSCALE_URL / TAILSCALE_IP env var fallback when tailscale_url is unset.
+        if config.tailscale_url.is_none() {
+            config.tailscale_url = std::env::var("TAILSCALE_URL")
+                .ok()
+                .or_else(|| std::env::var("TAILSCALE_IP").ok())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+        }
 
         // Initialize AI processing settings with defaults
         config.enable_ai_descriptions = Arc::new(AtomicBool::new(true));

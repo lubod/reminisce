@@ -12,12 +12,13 @@ Manages QUIC transport connections, peer discovery on local networks, coordinato
 
 ## Discovery & Routing Topology
 ```
-Local LAN ──▶ UDP Broadcast (:5066) ──▶ Signed Announcement (90s TTL) ──▶ Direct QUIC Mesh
+Local LAN ────▶ UDP Broadcast (:5066) ───▶ Signed Announcement (90s TTL) ─▶ Direct QUIC Mesh
+Tailscale VPN ─▶ UDP Unicast Write-In ──┘   (+ signed advertise_ip)          (100.64.0.0/10 / LAN)
                                                                                   │
 WAN Fallback ──▶ Coordinator (VPS) ──▶ Reverse Tunnel / QUIC Relay ───────────────┘
 ```
 
-1. **LAN Discovery (`discovery.rs`)**: Nodes broadcast signed UDP packets on port 5066 every 10 seconds. Peers maintain local registry entries with 90-second TTLs.
+1. **LAN Broadcast & Unicast Write-In (`discovery.rs`)**: Storage nodes broadcast signed UDP packets on port 5066 every 10 seconds, and optionally send signed unicast ("write-in") packets to `--announce-addr` targets (such as a home server over Tailscale, where broadcasts do not traverse `tailscale0`). Unicast announcements carry a signed `advertise_ip` (auto-detected via routing socket when omitted) so Docker bridge NAT on the receiving host cannot mask the sender's real overlay IP. `PeerRegistry::is_private_ip` treats RFC 1918, CGNAT (`100.64.0.0/10`), and IPv6 ULA (`fc00::/7`) as direct addresses preferred over public WAN IPs.
 2. **Direct Connection**: Primary mode connects directly to target node IP via QUIC.
 3. **Coordinator Relay (`coordinator.rs`, `tunnel.rs`)**: If direct connection fails (NAT/firewall), nodes establish reverse tunnels through the VPS Coordinator.
 4. **Channels (`channel.rs`)**: High-level bi-directional streaming abstraction over raw QUIC streams.

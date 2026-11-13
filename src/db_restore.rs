@@ -178,7 +178,7 @@ where
             .segment_enc_sizes
             .as_ref()
             .ok_or("segment_enc_sizes missing for multi-segment snapshot")?;
-        crate::p2p_restore::restore_segmented(full_shards, enc_sizes, &key)
+        crate::p2p_restore::restore_segmented(full_shards, enc_sizes, &key, data_shards, parity_shards)
             .map_err(|e| e.to_string())
     }
 }

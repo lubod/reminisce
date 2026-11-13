@@ -53,18 +53,33 @@ pub async fn trigger_dimension_backfill(
     let images_dir = config.get_images_dir().to_string();
     tokio::spawn(async move {
         const BATCH: i64 = 1000;
-        let mut offset: i64 = 0;
+        let mut cursor: Option<(chrono::DateTime<chrono::Utc>, String)> = None;
         let mut checked: u64 = 0;
         let mut fixed: u64 = 0;
         let mut skipped: u64 = 0;
         loop {
             let rows = match pool.0.get().await {
-                Ok(c) => c.query(
-                    "SELECT hash, ext, width, height FROM images \
-                     WHERE deleted_at IS NULL \
-                     ORDER BY created_at, hash LIMIT $1 OFFSET $2",
-                    &[&BATCH, &offset],
-                ).await,
+                Ok(c) => match &cursor {
+                    None => {
+                        c.query(
+                            "SELECT hash, ext, width, height, created_at FROM images \
+                             WHERE deleted_at IS NULL \
+                             ORDER BY created_at ASC, hash ASC LIMIT $1",
+                            &[&BATCH],
+                        )
+                        .await
+                    }
+                    Some((last_ts, last_hash)) => {
+                        c.query(
+                            "SELECT hash, ext, width, height, created_at FROM images \
+                             WHERE deleted_at IS NULL \
+                               AND (created_at, hash) > ($1, $2) \
+                             ORDER BY created_at ASC, hash ASC LIMIT $3",
+                            &[last_ts, last_hash, &BATCH],
+                        )
+                        .await
+                    }
+                },
                 Err(e) => { log::error!("[DIM-BACKFILL] pool error: {}", e); break; }
             };
             let rows = match rows {
@@ -79,13 +94,19 @@ pub async fn trigger_dimension_backfill(
                 let ext: String = row.get(1);
                 let stored_w: Option<i32> = row.get(2);
                 let stored_h: Option<i32> = row.get(3);
+                let created_at: chrono::DateTime<chrono::Utc> = row.get(4);
+                cursor = Some((created_at, hash.clone()));
                 checked += 1;
 
                 let path = match crate::media_utils::safe_resolve_content_path(&images_dir, &hash, &ext.to_lowercase()) {
                     Ok(p) => p,
                     Err(_) => { skipped += 1; continue; }
                 };
-                let Some((w, h)) = header_dims(&path) else { skipped += 1; continue };
+                let dims = tokio::task::spawn_blocking(move || header_dims(&path))
+                    .await
+                    .ok()
+                    .flatten();
+                let Some((w, h)) = dims else { skipped += 1; continue };
 
                 // Skip formats the decoder cannot really open (heic etc. would
                 // have failed above already).
@@ -96,10 +117,8 @@ pub async fn trigger_dimension_backfill(
                     }
                     fixed += 1;
                 }
-                let _ = &mut offset;
             }
-            offset += BATCH;
-            log::info!("[DIM-BACKFILL] progress: checked={} fixed={} skipped={} offset={}", checked, fixed, skipped, offset);
+            log::info!("[DIM-BACKFILL] progress: checked={} fixed={} skipped={}", checked, fixed, skipped);
             tokio::task::yield_now().await;
         }
         BACKFILL_RUNNING.store(false, Ordering::Release);

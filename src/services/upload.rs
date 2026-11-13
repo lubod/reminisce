@@ -356,21 +356,34 @@ pub async fn upload_image_metadata(
         .map(|dt| dt.with_timezone(&Utc));
 
     let query = "INSERT INTO images (user_id, hash, deviceid, type, created_at, name, ext, exif, has_thumbnail, last_verified_at, verification_status, location, place, added_at)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, ST_SetSRID(ST_MakePoint($12, $13), 4326), $14, NOW())
+                 VALUES (
+                     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+                     CASE WHEN $12::double precision IS NOT NULL AND $13::double precision IS NOT NULL
+                          THEN ST_SetSRID(ST_MakePoint($12, $13), 4326)
+                          ELSE NULL
+                     END,
+                     $14, NOW()
+                 )
                  ON CONFLICT (user_id, hash) DO UPDATE SET
                  type = EXCLUDED.type, name = EXCLUDED.name, ext = EXCLUDED.ext,
                  exif = COALESCE(EXCLUDED.exif, images.exif),
                  has_thumbnail = EXCLUDED.has_thumbnail, last_verified_at = EXCLUDED.last_verified_at,
-                 verification_status = GREATEST(images.verification_status, EXCLUDED.verification_status), location = EXCLUDED.location, place = EXCLUDED.place,
+                 verification_status = GREATEST(images.verification_status, EXCLUDED.verification_status),
+                 location = COALESCE(EXCLUDED.location, images.location),
+                 place = COALESCE(EXCLUDED.place, images.place),
                  added_at = NOW()";
 
-    let lat = metadata.latitude.unwrap_or(0.0);
-    let lon = metadata.longitude.unwrap_or(0.0);
+    let (lon_opt, lat_opt) = match (metadata.latitude, metadata.longitude) {
+        (Some(lat), Some(lon)) if crate::geo_utils::is_valid_gps_coords(lat, lon) => {
+            (Some(lon), Some(lat))
+        }
+        _ => (None, None),
+    };
 
     if let Err(e) = client.execute(query, &[
         &user_uuid, &metadata.hash, &metadata.deviceid, &metadata.type_name, &created_at, &metadata.name, &metadata.ext,
         &metadata.exif, &metadata.has_thumbnail.unwrap_or(false), &last_verified_at,
-        &metadata.verification_status.unwrap_or(0), &lon, &lat, &metadata.place
+        &metadata.verification_status.unwrap_or(0), &lon_opt, &lat_opt, &metadata.place
     ]).await {
         error!("Failed to update image metadata: {}", e);
         return HttpResponse::InternalServerError().json(UploadImageMetadataResponse {

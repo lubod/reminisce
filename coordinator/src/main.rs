@@ -189,6 +189,15 @@ async fn main() -> anyhow::Result<()> {
                     // ── Tunnel connection: challenge-response authentication ────
                     let node_id = node_id.clone();
 
+                    if !handler::peer_cert_matches_node_id(&conn, &node_id) {
+                        warn!("[TUNNEL] Rejected {} from {} — certificate identity mismatch", node_id, remote_ip);
+                        let _ = Protocol::send(&mut first_send, &Message::Error {
+                            code: 401,
+                            message: "Certificate identity verification failed".into(),
+                        }).await;
+                        return;
+                    }
+
                     // Check node_id is in the allowed list (if configured)
                     if let Some(ref allowed) = allowed_node_id {
                         if &node_id != allowed {
@@ -259,6 +268,26 @@ async fn main() -> anyhow::Result<()> {
                 } else if let Message::NodeChannelRegister { ref node_id } = first_msg {
                     // ── Channel connection: challenge-response authentication ───
                     let node_id = node_id.clone();
+
+                    if !handler::peer_cert_matches_node_id(&conn, &node_id) {
+                        warn!("[CHANNEL] Rejecting {} from {} — certificate identity mismatch", node_id, remote_ip);
+                        let _ = Protocol::send(&mut first_send, &Message::Error {
+                            code: 401,
+                            message: "Certificate identity verification failed".into(),
+                        }).await;
+                        return;
+                    }
+
+                    if let Some(ref list) = *allowed_nodes {
+                        if !list.iter().any(|id| id == &node_id) {
+                            warn!("[CHANNEL] Rejecting {} from {}: node not in admission allow-list", node_id, remote_ip);
+                            let _ = Protocol::send(&mut first_send, &Message::Error {
+                                code: 403,
+                                message: "Node not allowed".into(),
+                            }).await;
+                            return;
+                        }
+                    }
 
                     let nonce: Vec<u8> = rand::random::<[u8; 32]>().to_vec();
                     if Protocol::send(&mut first_send, &Message::NodeChannelChallenge { nonce: nonce.clone() }).await.is_err() {

@@ -419,13 +419,24 @@ pub async fn get_admin_gpu(
         .build()
         .unwrap_or_default();
 
-    match client.get(format!("{}/gpu-metrics", base)).send().await {
-        Ok(resp) => match resp.json::<serde_json::Value>().await {
+    let mut req_builder = client.get(format!("{}/gpu-metrics", base));
+    if let Ok(key) = cfg.get_api_key() {
+        if !key.is_empty() {
+            req_builder = req_builder.header("x-api-key", key);
+        }
+    }
+
+    match req_builder.send().await {
+        Ok(resp) if resp.status().is_success() => match resp.json::<serde_json::Value>().await {
             Ok(v) => Ok(HttpResponse::Ok().json(v)),
             Err(_) => Ok(HttpResponse::Ok().json(serde_json::json!({
                 "available": false, "reason": "bad response"
             }))),
         },
+        Ok(resp) => Ok(HttpResponse::Ok().json(serde_json::json!({
+            "available": false,
+            "reason": format!("ai-server returned HTTP {}", resp.status().as_u16())
+        }))),
         Err(_) => Ok(HttpResponse::Ok().json(serde_json::json!({
             "available": false, "reason": "ai-server unreachable"
         }))),

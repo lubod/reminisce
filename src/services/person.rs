@@ -75,6 +75,80 @@ pub struct MergePersonsRequest {
     pub target_person_id: i64,
 }
 
+const PERSON_BASE_QUERY: &str = "SELECT p.id, p.name, p.face_count, p.created_at, p.updated_at,
+                    f.image_hash, f.image_user_id, f.bbox_x, f.bbox_y, f.bbox_width, f.bbox_height, p.representative_face_id, i.hash
+             FROM persons p
+             LEFT JOIN faces f ON p.representative_face_id = f.id
+             LEFT JOIN images i ON f.image_hash = i.hash AND f.image_user_id = i.user_id AND i.deleted_at IS NULL";
+
+fn person_from_row(row: &tokio_postgres::Row) -> Person {
+    let face_id: Option<i64> = row.get(11);
+    let active_image_hash: Option<String> = row.get(12);
+    let has_active_rep = active_image_hash.is_some();
+    Person {
+        id: row.get(0),
+        name: row.get(1),
+        face_count: row.get(2),
+        created_at: row.get::<_, chrono::DateTime<chrono::Utc>>(3).to_rfc3339(),
+        updated_at: row.get::<_, chrono::DateTime<chrono::Utc>>(4).to_rfc3339(),
+        representative_face_hash: if has_active_rep { row.get(5) } else { None },
+        representative_face_user_id: if has_active_rep { row.get(6) } else { None },
+        representative_face_id: if has_active_rep { face_id } else { None },
+        representative_face_url: if has_active_rep {
+            face_id.map(|id| format!("/api/face/{}/thumbnail", id))
+        } else {
+            None
+        },
+        representative_bbox: if has_active_rep && row.get::<_, Option<String>>(5).is_some() {
+            Some(vec![
+                row.get(7),
+                row.get(8),
+                row.get(9),
+                row.get(10),
+            ])
+        } else {
+            None
+        },
+    }
+}
+
+/// Recalculate `face_count`, `representative_embedding`, and centroid `representative_face_id`
+/// for a person cluster using only faces on non-deleted images.
+pub(crate) async fn recalculate_person_cluster(
+    client: &(impl tokio_postgres::GenericClient + Sync),
+    person_id: i64,
+) -> Result<u64, tokio_postgres::Error> {
+    client
+        .execute(
+            "UPDATE persons SET
+                face_count = (
+                    SELECT COUNT(*) FROM faces f
+                    JOIN images i ON i.hash = f.image_hash AND i.user_id = f.image_user_id AND i.deleted_at IS NULL
+                    WHERE f.person_id = $1
+                ),
+                representative_embedding = (
+                    SELECT AVG(f.embedding) FROM faces f
+                    JOIN images i ON i.hash = f.image_hash AND i.user_id = f.image_user_id AND i.deleted_at IS NULL
+                    WHERE f.person_id = $1
+                ),
+                representative_face_id = (
+                    SELECT f.id FROM faces f
+                    JOIN images i ON i.hash = f.image_hash AND i.user_id = f.image_user_id AND i.deleted_at IS NULL
+                    WHERE f.person_id = $1
+                    ORDER BY f.embedding <=> (
+                        SELECT AVG(f2.embedding) FROM faces f2
+                        JOIN images i2 ON i2.hash = f2.image_hash AND i2.user_id = f2.image_user_id AND i2.deleted_at IS NULL
+                        WHERE f2.person_id = $1
+                    )
+                    LIMIT 1
+                ),
+                updated_at = NOW()
+             WHERE id = $1",
+            &[&person_id],
+        )
+        .await
+}
+
 /// Get all persons for authenticated user
 #[utoipa::path(
     get,
@@ -120,21 +194,15 @@ pub async fn get_persons(
     };
 
     // Get total count
-    let total_rows = client.query_one("SELECT COUNT(*) FROM persons WHERE user_id = $1", &[&user_uuid]).await
+    let total_rows = client.query_one("SELECT COUNT(*) FROM persons WHERE user_id = $1 AND face_count > 0", &[&user_uuid]).await
         .map_err(|e| {
             error!("Failed to count persons: {}", e);
             actix_web::error::ErrorInternalServerError("Query failed")
         })?;
     let total: i64 = total_rows.get(0);
 
-    let base_query = "SELECT p.id, p.name, p.face_count, p.created_at, p.updated_at,
-                    f.image_hash, f.image_user_id, f.bbox_x, f.bbox_y, f.bbox_width, f.bbox_height, p.representative_face_id
-             FROM persons p
-             LEFT JOIN faces f ON p.representative_face_id = f.id
-             LEFT JOIN images i ON f.image_hash = i.hash AND f.image_user_id = i.user_id AND i.deleted_at IS NULL";
-
     let rows = client.query(
-        &format!("{} WHERE p.user_id = $1 ORDER BY p.face_count DESC, p.updated_at DESC LIMIT $2 OFFSET $3", base_query),
+        &format!("{} WHERE p.user_id = $1 AND p.face_count > 0 ORDER BY p.face_count DESC, p.updated_at DESC LIMIT $2 OFFSET $3", PERSON_BASE_QUERY),
         &[&user_uuid, &(limit as i64), &offset],
     ).await
     .map_err(|e| {
@@ -142,33 +210,7 @@ pub async fn get_persons(
         actix_web::error::ErrorInternalServerError("Query failed")
     })?;
 
-    let persons: Vec<Person> = rows
-        .iter()
-        .map(|row| {
-            let face_id: Option<i64> = row.get(11);
-            Person {
-                id: row.get(0),
-                name: row.get(1),
-                face_count: row.get(2),
-                created_at: row.get::<_, chrono::DateTime<chrono::Utc>>(3).to_rfc3339(),
-                updated_at: row.get::<_, chrono::DateTime<chrono::Utc>>(4).to_rfc3339(),
-                representative_face_hash: row.get(5),
-                representative_face_user_id: row.get(6),
-                representative_face_id: face_id,
-                representative_face_url: face_id.map(|id| format!("/api/face/{}/thumbnail", id)),
-                representative_bbox: if row.get::<_, Option<String>>(5).is_some() {
-                    Some(vec![
-                        row.get(7),
-                        row.get(8),
-                        row.get(9),
-                        row.get(10),
-                    ])
-                } else {
-                    None
-                },
-            }
-        })
-        .collect();
+    let persons: Vec<Person> = rows.iter().map(person_from_row).collect();
 
     info!("Retrieved {} persons (page {}, limit {}) for user {}", persons.len(), page, limit, user_uuid);
 
@@ -211,14 +253,8 @@ pub async fn get_person(
     let person_id = path.into_inner();
     let client = utils::get_db_client(&pool.0).await?;
 
-    let base_query = "SELECT p.id, p.name, p.face_count, p.created_at, p.updated_at,
-                    f.image_hash, f.image_user_id, f.bbox_x, f.bbox_y, f.bbox_width, f.bbox_height, p.representative_face_id
-             FROM persons p
-             LEFT JOIN faces f ON p.representative_face_id = f.id
-             LEFT JOIN images i ON f.image_hash = i.hash AND f.image_user_id = i.user_id AND i.deleted_at IS NULL";
-
     let row = client.query_opt(
-        &format!("{} WHERE p.id = $1 AND p.user_id = $2", base_query),
+        &format!("{} WHERE p.id = $1 AND p.user_id = $2", PERSON_BASE_QUERY),
         &[&person_id, &user_uuid],
     ).await
     .map_err(|e| {
@@ -227,28 +263,7 @@ pub async fn get_person(
     })?;
 
     if let Some(row) = row {
-        let face_id: Option<i64> = row.get(11);
-        let person = Person {
-            id: row.get(0),
-            name: row.get(1),
-            face_count: row.get(2),
-            created_at: row.get::<_, chrono::DateTime<chrono::Utc>>(3).to_rfc3339(),
-            updated_at: row.get::<_, chrono::DateTime<chrono::Utc>>(4).to_rfc3339(),
-            representative_face_hash: row.get(5),
-            representative_face_user_id: row.get(6),
-            representative_face_id: face_id,
-            representative_face_url: face_id.map(|id| format!("/api/face/{}/thumbnail", id)),
-            representative_bbox: if row.get::<_, Option<String>>(5).is_some() {
-                Some(vec![
-                    row.get(7),
-                    row.get(8),
-                    row.get(9),
-                    row.get(10),
-                ])
-            } else {
-                None
-            },
-        };
+        let person = person_from_row(&row);
 
         Ok(HttpResponse::Ok().json(PersonResponse { person }))
     } else {
@@ -601,21 +616,8 @@ pub async fn merge_persons(
             actix_web::error::ErrorInternalServerError("Merge failed")
         })?;
 
-    // Update target person stats and pick the most central face as thumbnail
-    transaction
-        .execute(
-            "UPDATE persons SET
-                face_count = (SELECT COUNT(*) FROM faces WHERE person_id = $1),
-                representative_embedding = (SELECT AVG(embedding) FROM faces WHERE person_id = $1),
-                representative_face_id = (
-                    SELECT id FROM faces WHERE person_id = $1
-                    ORDER BY embedding <=> (SELECT AVG(embedding) FROM faces WHERE person_id = $1)
-                    LIMIT 1
-                ),
-                updated_at = NOW()
-             WHERE id = $1",
-            &[&body.target_person_id],
-        )
+    // Update target person stats and pick the most central face on a non-deleted image as thumbnail
+    recalculate_person_cluster(&*transaction, body.target_person_id)
         .await
         .map_err(|e| {
             error!("Failed to update target person: {}", e);

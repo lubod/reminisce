@@ -1,3 +1,4 @@
+#[allow(clippy::result_large_err)]
 pub mod proto {
     tonic::include_proto!("ai_service");
 }
@@ -51,6 +52,7 @@ static SHARED: std::sync::OnceLock<std::sync::Arc<AiClient>> = std::sync::OnceLo
 pub struct AiClient {
     grpc_url: String,
     api_key: String,
+    channel: std::sync::Arc<tokio::sync::RwLock<Option<Channel>>>,
 }
 
 impl AiClient {
@@ -61,13 +63,12 @@ impl AiClient {
         Self {
             grpc_url,
             api_key,
+            channel: std::sync::Arc::new(tokio::sync::RwLock::new(None)),
         }
     }
 
-    /// Process-wide shared `AiClient`, so the (state-less) client plus connection
-    /// settings are reused across RPCs. Each RPC builds its own tonic `Channel` to the
-    /// configured gRPC URL; the transport connect-or-fail behaviour is exercised by
-    /// `channel`/`client` below and by the ai_speed integration test.
+    /// Process-wide shared `AiClient`: reuses a single multiplexed HTTP/2 tonic `Channel`
+    /// across concurrent RPCs and reconnects on transport unavailability.
     pub fn shared(config: &crate::config::Config) -> std::sync::Arc<AiClient> {
         SHARED
             .get_or_init(|| {
@@ -78,9 +79,17 @@ impl AiClient {
     }
 
     async fn channel(&self) -> Result<Channel, String> {
-        // A hung TCP/TLS connect would otherwise stall a worker task (and any
-        // pool client it holds) indefinitely; RPC_TIMEOUT only covers post-
-        // connect request time.
+        if let Some(ch) = self.channel.read().await.as_ref() {
+            return Ok(ch.clone());
+        }
+
+        let mut guard = self.channel.write().await;
+        if let Some(ch) = guard.as_ref() {
+            return Ok(ch.clone());
+        }
+
+        // A hung TCP/TLS connect would otherwise stall a worker task indefinitely;
+        // RPC_TIMEOUT only covers post-connect request time.
         const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
         let endpoint = Channel::from_shared(self.grpc_url.clone())
             .map_err(|e| format!("invalid gRPC URL '{}': {}", self.grpc_url, e))?
@@ -89,7 +98,19 @@ impl AiClient {
             .await
             .map_err(|_| format!("gRPC connect to {} timed out after {}s", self.grpc_url, CONNECT_TIMEOUT.as_secs()))?
             .map_err(|e| format!("gRPC connect failed: {}", e))?;
+        *guard = Some(channel.clone());
         Ok(channel)
+    }
+
+    async fn invalidate_channel(&self) {
+        *self.channel.write().await = None;
+    }
+
+    async fn map_status(&self, rpc_name: &str, status: tonic::Status) -> String {
+        if matches!(status.code(), tonic::Code::Unavailable | tonic::Code::Unknown) {
+            self.invalidate_channel().await;
+        }
+        format!("{} gRPC call failed: {}", rpc_name, status)
     }
 
     async fn client(&self) -> Result<AiServiceClient<Channel>, String> {
@@ -112,7 +133,10 @@ impl AiClient {
         let mut client = self.client().await?;
         let request = self.make_request(EmbedImageRequest { image_data });
 
-        let response = client.embed_image(request).await.map_err(|e| format!("EmbedImage gRPC call failed: {}", e))?;
+        let response = match client.embed_image(request).await {
+            Ok(r) => r,
+            Err(e) => return Err(self.map_status("EmbedImage", e).await),
+        };
         Ok(response.into_inner().embedding)
     }
 
@@ -120,7 +144,10 @@ impl AiClient {
         let mut client = self.client().await?;
         let request = self.make_request(EmbedTextRequest { text });
 
-        let response = client.embed_text(request).await.map_err(|e| format!("EmbedText gRPC call failed: {}", e))?;
+        let response = match client.embed_text(request).await {
+            Ok(r) => r,
+            Err(e) => return Err(self.map_status("EmbedText", e).await),
+        };
         Ok(response.into_inner().embedding)
     }
 
@@ -128,7 +155,10 @@ impl AiClient {
         let mut client = self.client().await?;
         let request = self.make_request(DescribeImageRequest { image_data, use_qwen });
 
-        let response = client.describe_image(request).await.map_err(|e| format!("DescribeImage gRPC call failed: {}", e))?;
+        let response = match client.describe_image(request).await {
+            Ok(r) => r,
+            Err(e) => return Err(self.map_status("DescribeImage", e).await),
+        };
         let res = response.into_inner();
         Ok((res.description, res.model_used))
     }
@@ -137,7 +167,10 @@ impl AiClient {
         let mut client = self.client().await?;
         let request = self.make_request(DetectFacesRequest { image_data });
 
-        let response = client.detect_faces(request).await.map_err(|e| format!("DetectFaces gRPC call failed: {}", e))?;
+        let response = match client.detect_faces(request).await {
+            Ok(r) => r,
+            Err(e) => return Err(self.map_status("DetectFaces", e).await),
+        };
         Ok(response.into_inner().faces)
     }
 
@@ -149,7 +182,10 @@ impl AiClient {
         let mut client = self.client().await?;
         let request = self.make_request(DetectOrientationRequest { image_data });
 
-        let response = client.detect_orientation(request).await.map_err(|e| format!("DetectOrientation gRPC call failed: {}", e))?;
+        let response = match client.detect_orientation(request).await {
+            Ok(r) => r,
+            Err(e) => return Err(self.map_status("DetectOrientation", e).await),
+        };
         let res = response.into_inner();
         Ok(DetectedOrientation {
             orientation_value: res.orientation_value,
@@ -162,7 +198,10 @@ impl AiClient {
         let mut client = self.client().await?;
         let request = self.make_request(QualityScoreRequest { image_data });
 
-        let response = client.quality_score(request).await.map_err(|e| format!("QualityScore gRPC call failed: {}", e))?;
+        let response = match client.quality_score(request).await {
+            Ok(r) => r,
+            Err(e) => return Err(self.map_status("QualityScore", e).await),
+        };
         Ok(response.into_inner())
     }
 
@@ -170,7 +209,10 @@ impl AiClient {
         let mut client = self.client().await?;
         let request = self.make_request(EnhanceImageRequest { image_data, mode });
 
-        let response = client.enhance_image(request).await.map_err(|e| format!("EnhanceImage gRPC call failed: {}", e))?;
+        let response = match client.enhance_image(request).await {
+            Ok(r) => r,
+            Err(e) => return Err(self.map_status("EnhanceImage", e).await),
+        };
         Ok(response.into_inner())
     }
 
@@ -187,7 +229,7 @@ impl AiClient {
         match client.health_check(request).await {
             Ok(resp) => Ok(resp.into_inner()),
             Err(e) => {
-                let err_str = e.to_string();
+                let err_str = self.map_status("HealthCheck", e).await;
                 if !is_permanent_failure(&err_str) {
                     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
                     if let Ok(mut c) = self.client().await {
@@ -197,7 +239,7 @@ impl AiClient {
                         }
                     }
                 }
-                Err(format!("HealthCheck gRPC call failed: {}", err_str))
+                Err(err_str)
             }
         }
     }

@@ -1,10 +1,12 @@
 use actix_web::{post, web, HttpRequest, HttpResponse};
 use np2p::network::P2PService;
+use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::io::AsyncReadExt;
 use crate::config::Config;
 use crate::utils;
 use crate::db::MainDbPool;
-use crate::p2p_restore::restore_file;
+use crate::p2p_restore::restore_file_to_path;
 
 #[utoipa::path(
     post,
@@ -43,18 +45,56 @@ pub async fn restore_p2p_file(
         Ok(k) => k.to_string(),
         Err(e) => return Ok(HttpResponse::InternalServerError().body(e.to_string())),
     };
-    match restore_file(&pool.0, &p2p_service, &file_hash, &api_secret, owner_user_id.as_deref()).await {
-        Ok(restored) => {
-            // Sanitize the (client-supplied) filename for use inside a Content-Disposition
-            // header so it can't inject newlines/quotes.
-            let safe_name: String = restored.filename.chars()
-                .filter(|c| !matches!(c, '"' | '\r' | '\n' | '\\'))
+
+    struct TempFileGuard {
+        path: PathBuf,
+    }
+    impl Drop for TempFileGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+
+    let tmp_path = std::env::temp_dir().join(format!(
+        "reminisce_http_restore_{}_{}.bin",
+        std::process::id(),
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+    ));
+    let guard = TempFileGuard { path: tmp_path.clone() };
+
+    match restore_file_to_path(&pool.0, &p2p_service, &file_hash, &api_secret, owner_user_id.as_deref(), &tmp_path).await {
+        Ok(meta) => {
+            let safe_base = std::path::Path::new(&meta.filename)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("restored.bin");
+            let safe_name: String = safe_base.chars()
+                .filter(|c| !matches!(c, '"' | '\r' | '\n' | '\\' | '/' | '\0'))
                 .collect();
             let disposition = format!("attachment; filename=\"{}\"", safe_name);
+
+            let file = match tokio::fs::File::open(&tmp_path).await {
+                Ok(f) => f,
+                Err(e) => return Ok(HttpResponse::InternalServerError().body(e.to_string())),
+            };
+
+            let stream = futures::stream::unfold((file, guard), |(mut file, guard)| async move {
+                let mut buf = vec![0u8; 64 * 1024];
+                match file.read(&mut buf).await {
+                    Ok(0) => None,
+                    Ok(n) => {
+                        buf.truncate(n);
+                        Some((Ok::<actix_web::web::Bytes, std::io::Error>(actix_web::web::Bytes::from(buf)), (file, guard)))
+                    }
+                    Err(e) => Some((Err(e), (file, guard))),
+                }
+            });
+
             Ok(HttpResponse::Ok()
                 .content_type("application/octet-stream")
                 .append_header(("Content-Disposition", disposition))
-                .body(restored.data))
+                .append_header(("Content-Length", meta.size_bytes.to_string()))
+                .streaming(stream))
         }
         Err(e) => {
             let msg = e.to_string();

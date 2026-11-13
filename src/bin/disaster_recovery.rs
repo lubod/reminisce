@@ -19,7 +19,7 @@ use np2p::crypto::NodeIdentity;
 use np2p::network::{Message, P2PService};
 use reminisce::config::Config;
 use reminisce::db_restore::{self, DbBackupManifest};
-use reminisce::p2p_restore::restore_file;
+use reminisce::p2p_restore::{load_cli_identity, parse_node_override, restore_file_to_path, RestoredFileMeta};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -36,7 +36,7 @@ struct CommonOpts {
     #[arg(long, help = "Path to config.yaml (provides api_secret_key, p2p_data_dir, dirs, database_url)")]
     config: String,
 
-    #[arg(long = "node", help = "Storage node override 'node_id=host:port' (repeatable)", value_parser = parse_node)]
+    #[arg(long = "node", help = "Storage node override 'node_id=host:port' (repeatable)", value_parser = parse_node_override)]
     nodes: Vec<(String, SocketAddr)>,
 }
 
@@ -100,12 +100,6 @@ enum Command {
     },
 }
 
-fn parse_node(s: &str) -> Result<(String, SocketAddr), String> {
-    let (id, addr) = s.split_once('=').ok_or("expected node_id=host:port")?;
-    let addr = addr.parse::<SocketAddr>().map_err(|e| format!("invalid addr '{}': {}", addr, e))?;
-    Ok((id.to_string(), addr))
-}
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     tracing_subscriber::fmt::init();
@@ -129,23 +123,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
 fn load_config(common: &CommonOpts) -> Result<Config, Box<dyn std::error::Error + Send + Sync>> {
     Config::from_file(&common.config).map_err(|e| format!("failed to load config {}: {}", common.config, e).into())
-}
-
-/// Load the home server's P2P identity. Prefers `<p2p_data_dir>/node.key`; if it's
-/// absent (full disk loss) and `p2p_deterministic_identity` was used, the identity is
-/// re-derived from the api_secret so storage nodes still accept our tokens.
-fn load_identity(
-    p2p_data_dir: &str,
-    api_secret: &str,
-) -> Result<NodeIdentity, Box<dyn std::error::Error + Send + Sync>> {
-    let path = PathBuf::from(p2p_data_dir).join("node.key");
-    if path.exists() {
-        let bytes = std::fs::read(&path)
-            .map_err(|e| format!("cannot read P2P identity {}: {}", path.display(), e))?;
-        return Ok(NodeIdentity::from_secret_bytes(&bytes)?);
-    }
-    eprintln!("node.key not found at {} — deriving P2P identity from api_secret (deterministic)", path.display());
-    Ok(NodeIdentity::from_secret(api_secret))
 }
 
 async fn build_p2p(
@@ -244,7 +221,7 @@ async fn restore_db_common(
     let seed: Vec<(String, SocketAddr)> = manifest.shards.iter()
         .filter_map(|s| s.addr.parse::<SocketAddr>().ok().map(|a| (s.node_id.clone(), a)))
         .collect();
-    let identity = load_identity(&config.p2p_data_dir, &api_secret)?;
+    let identity = load_cli_identity(&config.p2p_data_dir, &api_secret, config.p2p_identity_kdf.as_deref())?;
     let svc = build_p2p(identity, &seed, &common.nodes).await?;
 
     println!("Fetching shards and reconstructing…");
@@ -263,7 +240,7 @@ async fn fetch_manifest_from_mesh(
     api_secret: &str,
 ) -> Result<DbBackupManifest, Box<dyn std::error::Error + Send + Sync>> {
     println!("No local manifest — discovering storage nodes and fetching manifest from mesh…");
-    let identity = load_identity(&config.p2p_data_dir, api_secret)?;
+    let identity = load_cli_identity(&config.p2p_data_dir, api_secret, config.p2p_identity_kdf.as_deref())?;
     let svc = build_p2p(identity, &[], &common.nodes).await?;
 
     // Listen for LAN broadcast announcements from storage nodes for a few seconds.
@@ -422,7 +399,7 @@ async fn cmd_media(
         }
     }
 
-    let identity = load_identity(&config.p2p_data_dir, &api_secret)?;
+    let identity = load_cli_identity(&config.p2p_data_dir, &api_secret, config.p2p_identity_kdf.as_deref())?;
     let svc = build_p2p(identity, &seed, &common.nodes).await?;
 
     // Determine which files to restore.
@@ -434,25 +411,41 @@ async fn cmd_media(
         return Err("specify --hash <hash>, --all-missing, or --all".into());
     };
 
+    let staging_dir = PathBuf::from(&config.p2p_data_dir).join("restore_staging");
+    std::fs::create_dir_all(&staging_dir)?;
+    let pid = std::process::id();
+
     let cap = limit.unwrap_or(0);
     let mut restored = 0usize;
     let mut failed = 0usize;
 
     for (file_hash, _ext) in targets.iter() {
         if cap > 0 && restored >= cap { break; }
-        match restore_file(&pool, &svc, file_hash, &api_secret, None).await {
-            Ok(restored_file) => {
-                match write_media_to_disk(&config, file_hash, &restored_file) {
+        let prefix: String = file_hash.chars().take(16).filter(|c| c.is_ascii_alphanumeric()).collect();
+        let short = if prefix.is_empty() { "file" } else { &prefix };
+        let stage_path = staging_dir.join(format!(".{}.{}.part", short, pid));
+        match restore_file_to_path(&pool, &svc, file_hash, &api_secret, None, &stage_path).await {
+            Ok(meta) => {
+                match install_restored_media(&config, file_hash, &stage_path, &meta) {
                     Ok(path) => {
-                        println!("Restored {} → {}", &file_hash[..16.min(file_hash.len())], path.display());
+                        println!("Restored {} → {}", short, path.display());
                         restored += 1;
                     }
-                    Err(e) => { eprintln!("Write failed for {}: {}", file_hash, e); failed += 1; }
+                    Err(e) => {
+                        let _ = std::fs::remove_file(&stage_path);
+                        eprintln!("Write failed for {}: {}", file_hash, e);
+                        failed += 1;
+                    }
                 }
             }
-            Err(e) => { eprintln!("Restore failed for {}: {}", &file_hash[..16.min(file_hash.len())], e); failed += 1; }
+            Err(e) => {
+                let _ = std::fs::remove_file(&stage_path);
+                eprintln!("Restore failed for {}: {}", short, e);
+                failed += 1;
+            }
         }
     }
+    let _ = std::fs::remove_dir(&staging_dir);
 
     println!("\nMedia restore complete: {} restored, {} failed", restored, failed);
     Ok(())
@@ -488,19 +481,37 @@ fn media_path(base_dir: &str, hash: &str, ext: &str) -> PathBuf {
     PathBuf::from(base_dir).join(&hash[0..2]).join(format!("{}.{}", hash, ext))
 }
 
-fn write_media_to_disk(
+fn install_restored_media(
     config: &Config,
     hash: &str,
-    restored: &reminisce::p2p_restore::RestoredFile,
+    stage_path: &Path,
+    meta: &RestoredFileMeta,
 ) -> Result<PathBuf, Box<dyn std::error::Error + Send + Sync>> {
-    let base_dir = if restored.media_type == "video" { config.get_videos_dir() } else { config.get_images_dir() };
-    let ext = restored.filename.rsplit('.').next().unwrap_or("bin");
-    let path = media_path(base_dir, hash, ext);
-    if let Some(parent) = path.parent() {
+    let base_dir = if meta.media_type == "video" { config.get_videos_dir() } else { config.get_images_dir() };
+    let ext = meta.filename.rsplit('.').next().unwrap_or("bin");
+    let dest_path = media_path(base_dir, hash, ext);
+    if let Some(parent) = dest_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(&path, &restored.data)?;
-    Ok(path)
+    if std::fs::rename(stage_path, &dest_path).is_err() {
+        // Cross-filesystem fallback: copy to a sibling temp file on the destination mount, then rename.
+        let sibling_tmp = dest_path.with_extension(format!("{}.restore_tmp", ext));
+        if let Err(e) = std::fs::copy(stage_path, &sibling_tmp) {
+            let _ = std::fs::remove_file(&sibling_tmp);
+            return Err(e.into());
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&sibling_tmp, std::fs::Permissions::from_mode(0o600));
+        }
+        if let Err(e) = std::fs::rename(&sibling_tmp, &dest_path) {
+            let _ = std::fs::remove_file(&sibling_tmp);
+            return Err(e.into());
+        }
+        let _ = std::fs::remove_file(stage_path);
+    }
+    Ok(dest_path)
 }
 
 // ── full ──────────────────────────────────────────────────────────────────────

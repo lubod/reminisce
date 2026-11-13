@@ -3,6 +3,16 @@ use log::{info, warn};
 
 use crate::db::GeotaggingDbPool;
 
+/// Validate GPS latitude/longitude coordinates, rejecting Null Island (0, 0)
+/// and out-of-range values produced by missing/corrupted EXIF sensors.
+pub fn is_valid_gps_coords(latitude: f64, longitude: f64) -> bool {
+    latitude.is_finite()
+        && longitude.is_finite()
+        && (-90.0..=90.0).contains(&latitude)
+        && (-180.0..=180.0).contains(&longitude)
+        && (latitude != 0.0 || longitude != 0.0)
+}
+
 /// Extract GPS coordinates (latitude, longitude) from EXIF JSON.
 /// Returns `(latitude, longitude)` as decimal degrees, or `None` if GPS data is absent.
 pub fn extract_gps_coordinates(exif_json: &serde_json::Value) -> Option<(f64, f64)> {
@@ -13,6 +23,10 @@ pub fn extract_gps_coordinates(exif_json: &serde_json::Value) -> Option<(f64, f6
 
     let latitude = parse_gps_coordinate(gps_lat_str, gps_lat_ref)?;
     let longitude = parse_gps_coordinate(gps_lon_str, gps_lon_ref)?;
+
+    if !is_valid_gps_coords(latitude, longitude) {
+        return None;
+    }
 
     Some((latitude, longitude))
 }

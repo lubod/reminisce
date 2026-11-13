@@ -221,6 +221,8 @@ pub async fn process_batch(
         {
             warn!("Duplicate worker: mark checked failed for {}: {}", hash, e);
         }
+
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
 
     // Return Ok(true) → run_worker_loop sleeps min_interval (200 ms) then calls us again

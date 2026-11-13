@@ -796,8 +796,8 @@ info!("Starting face detection for image: {}", hash);
                     let Some(client) = db_client(&pool_clone, &hash).await else { return };
                     info!("Starting quality scoring for image: {}", hash);
                     let file_size = std::fs::metadata(&file_path)
-                        .map(|m| m.len().min(i32::MAX as u64) as i32)
-                        .unwrap_or(0);
+                        .map(|m| m.len().min(i64::MAX as u64) as i64)
+                        .unwrap_or(0i64);
                     match tokio::fs::read(&file_path).await {
                         Ok(image_data) => {
                             // The quality scorer works on a 384px thumbnail — its

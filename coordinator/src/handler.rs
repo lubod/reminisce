@@ -48,6 +48,30 @@ impl RateLimiter {
     }
 }
 
+/// Verifies that the QUIC peer presented a client certificate whose Ed25519
+/// public key hex matches `node_id`.
+pub fn peer_cert_matches_node_id(conn: &quinn::Connection, node_id: &str) -> bool {
+    let Some(peer_identity) = conn.peer_identity() else {
+        return false;
+    };
+    let Some(certs) = peer_identity.downcast_ref::<Vec<rustls_pki_types::CertificateDer<'static>>>() else {
+        return false;
+    };
+    let Some(cert) = certs.first() else {
+        return false;
+    };
+    let Some(pubkey) = np2p::crypto::extract_public_key(cert.as_ref()) else {
+        return false;
+    };
+    let pubkey_hex = hex::encode(pubkey);
+    if pubkey_hex == node_id {
+        true
+    } else {
+        warn!("[COORD] Node ID mismatch: claimed {}…, certificate has {}", &node_id[..node_id.len().min(8)], pubkey_hex);
+        false
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn handle_stream(
     msg: Message,
@@ -75,22 +99,7 @@ pub async fn handle_stream(
     let response = match msg {
         Message::RegisterNode { node_id, quic_port, namespace } => {
             // Verify that the node_id matches the peer certificate's public key (C2)
-            let mut verified = false;
-            if let Some(peer_identity) = conn.peer_identity() {
-                if let Some(certs) = peer_identity.downcast_ref::<Vec<rustls_pki_types::CertificateDer<'static>>>() {
-                    if let Some(cert) = certs.first() {
-                        let cert_bytes: &[u8] = cert.as_ref();
-                        if let Some(pubkey) = np2p::crypto::extract_public_key(cert_bytes) {
-                            let pubkey_hex = hex::encode(pubkey);
-                            if pubkey_hex == node_id {
-                                verified = true;
-                            } else {
-                                warn!("[COORD] Node ID mismatch: claimed {}…, certificate has {}", &node_id[..node_id.len().min(8)], pubkey_hex);
-                            }
-                        }
-                    }
-                }
-            }
+            let verified = peer_cert_matches_node_id(&conn, &node_id);
 
             let mut rejection: Option<Message> = None;
             if !verified {

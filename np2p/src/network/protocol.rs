@@ -102,6 +102,14 @@ pub enum Message {
     RetrieveShardStreamAck { found: bool, total_bytes: u64 },
     RetrieveShardChunk { data: Vec<u8> },
     RetrieveShardStreamFinal { shard_hash: [u8; 32] },
+
+    /// Verify shard integrity on disk via streaming challenge hash (`blake3(challenge || bytes)`).
+    VerifyShardRequest { shard_hash: [u8; 32], challenge: [u8; 32], token: ShardToken },
+    VerifyShardResponse { shard_hash: [u8; 32], proof_hash: Option<[u8; 32]> },
+
+    /// Delete a pinned object from the storage node (e.g., superseded DB backup manifests).
+    DeletePinnedObject { name: String, token: ShardToken },
+    DeletePinnedResponse { success: bool },
 }
 
 /// Hard cap on the size of a single framed protocol message.

@@ -10,19 +10,21 @@ use np2p::network::P2PService;
 
 pub type SharedSystem = Arc<Mutex<System>>;
 
-/// Spawn a background task that refreshes CPU stats every second.
+/// Spawn a background task that refreshes CPU stats every 15 seconds.
 /// `sysinfo` requires two measurements separated by time for accurate CPU %.
 pub fn start_system_monitor() -> SharedSystem {
     let sys = Arc::new(Mutex::new(System::new_all()));
     let sys_bg = sys.clone();
     tokio::spawn(async move {
         loop {
-            {
-                let mut s = sys_bg.lock().unwrap();
+            let sys_ref = sys_bg.clone();
+            let _ = tokio::task::spawn_blocking(move || {
+                let mut s = sys_ref.lock().unwrap_or_else(|e| e.into_inner());
                 s.refresh_cpu();
                 s.refresh_memory();
                 s.refresh_disks();
-            }
+            })
+            .await;
             tokio::time::sleep(std::time::Duration::from_secs(15)).await;
         }
     });
@@ -104,44 +106,56 @@ pub async fn get_system_stats(
         })));
     }
 
-    let cpu_usage;
-    let total_mem;
-    let used_mem;
-    let total_disk;
-    let used_disk;
-    let available_disk;
-    let uptime_seconds;
-    {
-        let sys = shared_sys.lock().unwrap();
+    let sys_ref = shared_sys.get_ref().clone();
+    let (
+        cpu_usage,
+        total_mem,
+        used_mem,
+        total_disk,
+        used_disk,
+        available_disk,
+        uptime_seconds,
+    ) = tokio::task::spawn_blocking(move || {
+        let sys = sys_ref.lock().unwrap_or_else(|e| e.into_inner());
 
-        // CPU — accurate because background task refreshes every second
-        cpu_usage = sys.global_cpu_info().cpu_usage();
+        // CPU — accurate because background task refreshes every 15s
+        let cpu_usage = sys.global_cpu_info().cpu_usage();
 
         // Memory in GB
-        total_mem = sys.total_memory() as f32 / (1024.0 * 1024.0 * 1024.0);
-        used_mem = sys.used_memory() as f32 / (1024.0 * 1024.0 * 1024.0);
+        let total_mem = sys.total_memory() as f32 / (1024.0 * 1024.0 * 1024.0);
+        let used_mem = sys.used_memory() as f32 / (1024.0 * 1024.0 * 1024.0);
 
         // Disk usage (root partition)
-        let mut td = 0.0f32;
-        let mut ud = 0.0f32;
-        let mut ad = 0.0f32;
+        let mut total_disk = 0.0f32;
+        let mut used_disk = 0.0f32;
+        let mut available_disk = 0.0f32;
         for disk in sys.disks() {
             if disk.mount_point() == std::path::Path::new("/")
                 || disk.mount_point().to_str().unwrap_or("").contains("data")
             {
-                td = disk.total_space() as f32 / (1024.0 * 1024.0 * 1024.0);
-                ad = disk.available_space() as f32 / (1024.0 * 1024.0 * 1024.0);
-                ud = td - ad;
+                total_disk = disk.total_space() as f32 / (1024.0 * 1024.0 * 1024.0);
+                available_disk = disk.available_space() as f32 / (1024.0 * 1024.0 * 1024.0);
+                used_disk = total_disk - available_disk;
                 break;
             }
         }
-        total_disk = td;
-        used_disk = ud;
-        available_disk = ad;
-        uptime_seconds = sys.uptime();
-    }
+        (
+            cpu_usage,
+            total_mem,
+            used_mem,
+            total_disk,
+            used_disk,
+            available_disk,
+            sys.uptime(),
+        )
+    })
+    .await
+    .map_err(|e| {
+        log::error!("Blocking system stats snapshot failed: {}", e);
+        actix_web::error::ErrorInternalServerError("Failed to collect system statistics")
+    })?;
 
-    let mem_percent = (used_mem / total_mem) * 100.0;
+    let mem_percent = if total_mem > 0.0 { (used_mem / total_mem) * 100.0 } else { 0.0 };
     let disk_percent = if total_disk > 0.0 { (used_disk / total_disk) * 100.0 } else { 0.0 };
 
     // GPU Load (AMD ROCm)
@@ -159,6 +173,8 @@ pub async fn get_system_stats(
         Err(_) => 0.0,
     };
 
+    let has_amd_gpu = gpu_vram_total > 0.0 || gpu_temp.is_some();
+
     let response = SystemStatsResponse {
         cpu_usage_percent: cpu_usage,
         memory_used_gb: used_mem,
@@ -169,8 +185,8 @@ pub async fn get_system_stats(
         disk_usage_percent: disk_percent,
         disk_available_gb: available_disk,
         uptime_seconds,
-        gpu_info: Some("AMD ROCm".to_string()),
-        gpu_usage_percent: Some(gpu_load as f32),
+        gpu_info: if has_amd_gpu { Some("AMD ROCm".to_string()) } else { None },
+        gpu_usage_percent: if has_amd_gpu { Some(gpu_load as f32) } else { None },
         gpu_memory_used_mb: if gpu_vram_total > 0.0 { Some(gpu_vram_used) } else { None },
         gpu_memory_total_mb: if gpu_vram_total > 0.0 { Some(gpu_vram_total) } else { None },
         cpu_temp_celsius: cpu_temp,

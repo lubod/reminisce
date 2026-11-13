@@ -142,27 +142,16 @@ pub async fn cluster_faces_for_user(
             .map_err(|e| format!("Failed to assign face: {}", e))?;
 
         // Update person stats, representative embedding, and pick the face
-        // closest to the centroid as the thumbnail (most "typical" face)
-        client
-            .execute(
-                "UPDATE persons SET
-                    face_count = (SELECT COUNT(*) FROM faces WHERE person_id = $1),
-                    representative_embedding = (
-                        SELECT AVG(embedding) FROM faces WHERE person_id = $1
-                    ),
-                    representative_face_id = (
-                        SELECT id FROM faces WHERE person_id = $1
-                        ORDER BY embedding <=> (SELECT AVG(embedding) FROM faces WHERE person_id = $1)
-                        LIMIT 1
-                    ),
-                    updated_at = NOW()
-                 WHERE id = $1",
-                &[&person_id],
-            )
+        // closest to the centroid as the thumbnail (most "typical" face),
+        // restricting exclusively to non-deleted images.
+        crate::services::person::recalculate_person_cluster(client, person_id)
             .await
             .map_err(|e| format!("Failed to update person: {}", e))?;
 
         clustered += 1;
+        if clustered % 25 == 0 {
+            tokio::task::yield_now().await;
+        }
     }
 
     info!("Clustered {} faces for user {}", clustered, user_id);

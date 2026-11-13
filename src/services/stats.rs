@@ -94,14 +94,14 @@ pub async fn get_stats(
             (SELECT COUNT(*) FROM users),
             img.images_with_description,
             (SELECT COUNT(DISTINCT si.hash) FROM starred_images si
-                JOIN images i ON i.hash = si.hash WHERE i.deleted_at IS NULL),
+                JOIN images i ON i.hash = si.hash AND i.user_id = si.user_id WHERE i.deleted_at IS NULL),
             (SELECT COUNT(DISTINCT sv.hash) FROM starred_videos sv
-                JOIN videos v ON v.hash = sv.hash WHERE v.deleted_at IS NULL),
+                JOIN videos v ON v.hash = sv.hash AND v.user_id = sv.user_id WHERE v.deleted_at IS NULL),
             img.images_with_embedding,
             img.verified_images,
             vid.verified_videos,
             face_stats.total_faces,
-            (SELECT COUNT(*) FROM persons),
+            (SELECT COUNT(*) FROM persons WHERE face_count > 0),
             face_stats.images_with_faces,
             img.images_face_pending,
             img.images_description_pending,

@@ -170,6 +170,23 @@ EOF
     fi
     chmod 600 config.yaml
     success "config.yaml created (permissions: 600)"
+
+    # Detect Tailscale IPv4 (100.64.0.0/10) if Tailscale is active on this host
+    DETECTED_TS_IP="${TAILSCALE_IP:-}"
+    if [ -z "$DETECTED_TS_IP" ] && command -v tailscale >/dev/null 2>&1; then
+        DETECTED_TS_IP=$(tailscale ip -4 2>/dev/null | head -n1 || true)
+    fi
+    if [ -z "$DETECTED_TS_IP" ]; then
+        DETECTED_TS_IP=$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -E '^100\.(6[4-9]|[7-9][0-9]|1[0-1][0-9]|12[0-7])\.' | head -n1 || true)
+    fi
+    if [ -n "$DETECTED_TS_IP" ]; then
+        cat >> config.yaml <<EOF
+
+# Tailscale URL for Android QR setup (auto-detected on host)
+tailscale_url: "https://${DETECTED_TS_IP}:28443"
+EOF
+        info "Tailscale detected (${DETECTED_TS_IP}) — added tailscale_url to config.yaml"
+    fi
 fi
 
 # ─── 6b. Remove stale DB volumes if .env was newly generated ─────────────────
@@ -259,10 +276,14 @@ echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━
 echo -e "${GREEN}  Reminisce is running!${NC}"
 echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
-HOST_IP=$(hostname -I | tr ' ' '\n' | grep -v '^127\.' | grep -v '^172\.' | grep -v '^::1' | head -1)
+HOST_IP=$(hostname -I | tr ' ' '\n' | grep -v '^127\.' | grep -v '^172\.' | grep -v -E '^100\.(6[4-9]|[7-9][0-9]|1[0-1][0-9]|12[0-7])\.' | grep -v '^::1' | head -1)
 HOST_IP="${HOST_IP:-$(hostname -I | awk '{print $1}')}"
+TS_IP=$(tailscale ip -4 2>/dev/null | head -n1 || hostname -I 2>/dev/null | tr ' ' '\n' | grep -E '^100\.(6[4-9]|[7-9][0-9]|1[0-1][0-9]|12[0-7])\.' | head -n1 || true)
 echo -e "  UI (HTTPS):  ${BLUE}https://${HOST_IP}:28443${NC}"
 echo -e "  UI (HTTP):   ${BLUE}http://${HOST_IP}:28080${NC}"
+if [ -n "$TS_IP" ]; then
+    echo -e "  Tailscale:   ${BLUE}https://${TS_IP}:28443${NC}"
+fi
 echo ""
 echo -e "  On first visit, go through the setup wizard to create your admin account."
 echo ""

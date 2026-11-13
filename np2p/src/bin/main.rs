@@ -29,6 +29,16 @@ struct Args {
     #[arg(long, default_value_t = discovery::DEFAULT_DISCOVERY_PORT)]
     discovery_port: u16,
 
+    /// Direct unicast discovery target(s) to "write-in" to (e.g. home server Tailscale IP 100.x.y.z or 100.x.y.z:5066).
+    /// Can be specified multiple times or comma-separated. Also reads NP2P_ANNOUNCE_ADDR.
+    #[arg(long = "announce-addr", value_delimiter = ',')]
+    announce_addrs: Vec<String>,
+
+    /// Optional IP address to advertise in discovery announcements (auto-detected per target if omitted).
+    /// Also reads NP2P_ADVERTISE_IP.
+    #[arg(long)]
+    advertise_ip: Option<std::net::IpAddr>,
+
     /// Coordinator QUIC address for cross-network discovery and relay (e.g. 1.2.3.4:5055)
     #[arg(long)]
     coordinator_addr: Option<SocketAddr>,
@@ -113,9 +123,39 @@ async fn main() -> anyhow::Result<()> {
     let quic_port = service.node().local_addr()?.port();
     info!("np2p daemon listening on {}", service.node().local_addr()?);
 
-    // LAN broadcast — announces our QUIC port to all nodes on the same subnet
-    discovery::start_broadcaster(Arc::new(identity.clone()), quic_port, args.discovery_port);
-    info!("Broadcasting on discovery port {}", args.discovery_port);
+    // LAN broadcast + optional direct unicast ("write-in") announcements (e.g. over Tailscale)
+    let mut announce_addrs = args.announce_addrs.clone();
+    if announce_addrs.is_empty() {
+        if let Ok(env_targets) = std::env::var("NP2P_ANNOUNCE_ADDR") {
+            announce_addrs.extend(
+                env_targets
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty()),
+            );
+        }
+    }
+    let advertise_ip = args.advertise_ip.or_else(|| {
+        std::env::var("NP2P_ADVERTISE_IP")
+            .ok()
+            .and_then(|s| s.trim().parse().ok())
+    });
+
+    discovery::start_broadcaster_with_targets(
+        Arc::new(identity.clone()),
+        quic_port,
+        args.discovery_port,
+        announce_addrs.clone(),
+        advertise_ip,
+    );
+    if announce_addrs.is_empty() {
+        info!("Broadcasting on discovery port {}", args.discovery_port);
+    } else {
+        info!(
+            "Broadcasting on discovery port {} + unicast write-in to {:?} (advertise_ip={:?})",
+            args.discovery_port, announce_addrs, advertise_ip
+        );
+    }
 
     // Coordinator — for nodes on different networks
     if let Some(addr) = args.coordinator_addr {

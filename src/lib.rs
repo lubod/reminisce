@@ -57,7 +57,6 @@ pub mod services {
     pub mod import_dir;
     pub mod p2p_status;
 pub mod p2p_restore;
-    pub mod proxy_manager;
     pub mod duplicates;
     pub mod quality;
     pub mod maintenance;
@@ -116,7 +115,7 @@ async fn metrics_handler(
     }
 }
 
-pub use crate::services::auth::{user_login, user_login_form, user_logout, get_me, setup_status, setup_admin, Claims};
+pub use crate::services::auth::{user_login, user_login_form, user_refresh, user_logout, get_me, setup_status, setup_admin, Claims};
 pub use crate::services::user_management::{list_users, create_user, update_user, delete_user};
 pub use crate::services::health::{ping, health_check, HealthCheckResponse};
 pub use crate::services::existence_check::{check_image_exists, check_video_exists};
@@ -323,16 +322,44 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
 
         info!("P2P Node ID: {}", hex::encode(identity.node_id()));
 
-        let p2p_service = Arc::new(np2p::network::P2PService::with_allowed_nodes(
+        let mut p2p_service = np2p::network::P2PService::with_allowed_nodes(
             "0.0.0.0:0".parse().unwrap(),
             identity,
             config.p2p_allowed_node_ids.clone(),
-        ).await.expect("Failed to initialize P2P service"));
+        ).await.expect("Failed to initialize P2P service");
         if config.p2p_allowed_node_ids.is_empty() {
             warn!("P2P admission is OPEN — set p2p_allowed_node_ids in config.yaml to restrict which nodes can receive shards");
         } else {
             info!("P2P admission allow-list active with {} node(s)", config.p2p_allowed_node_ids.len());
         }
+
+        if config.p2p_coordinator_addr.is_some() && config.p2p_coordinator_node_id.is_none() {
+            error!("p2p_coordinator_addr is set but p2p_coordinator_node_id is missing — cannot verify coordinator identity; coordinator/tunnel disabled (add p2p_coordinator_node_id to config)");
+        }
+        let resolved_coordinator: Option<(std::net::SocketAddr, String)> =
+            if let (Some(coord_str), Some(coord_node_id)) =
+                (&config.p2p_coordinator_addr, &config.p2p_coordinator_node_id)
+            {
+                match tokio::net::lookup_host(coord_str.as_str()).await {
+                    Ok(mut addrs) => match addrs.next() {
+                        Some(coord_addr) => {
+                            p2p_service.set_coordinator(coord_addr, coord_node_id.clone());
+                            Some((coord_addr, coord_node_id.clone()))
+                        }
+                        None => {
+                            error!("p2p_coordinator_addr '{}' resolved to no addresses", coord_str);
+                            None
+                        }
+                    },
+                    Err(e) => {
+                        error!("Failed to resolve p2p_coordinator_addr '{}': {}", coord_str, e);
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+        let p2p_service = Arc::new(p2p_service);
     
         if let Err(e) = services::ai_settings::load_ai_settings_from_db(&pool, &config).await {
             error!("Failed to load AI settings from database: {}", e);
@@ -411,43 +438,30 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
         );
 
         // Coordinator client — cross-network peer discovery + reverse tunnel
-        if config.p2p_coordinator_addr.is_some() && config.p2p_coordinator_node_id.is_none() {
-            error!("p2p_coordinator_addr is set but p2p_coordinator_node_id is missing — cannot verify coordinator identity; coordinator/tunnel disabled (add p2p_coordinator_node_id to config)");
-        }
-        if let (Some(coord_str), Some(coord_node_id)) =
-            (&config.p2p_coordinator_addr, &config.p2p_coordinator_node_id)
-        {
-            match tokio::net::lookup_host(coord_str.as_str()).await {
-                Ok(mut addrs) => match addrs.next() {
-                    Some(coord_addr) => {
-                        let node_id = hex::encode(p2p_service.identity().node_id());
+        if let Some((coord_addr, ref coord_node_id)) = resolved_coordinator {
+            let node_id = hex::encode(p2p_service.identity().node_id());
 
-                        // Register with coordinator and sync peer list
-                        np2p::network::coordinator::start_coordinator_client(
-                            coord_addr,
-                            coord_node_id,
-                            p2p_service.node().clone(),
-                            node_id.clone(),
-                            None, // home server doesn't expose a storage port
-                            p2p_service.registry.clone(),
-                            config.p2p_namespace.clone(),
-                        );
+            // Register with coordinator and sync peer list
+            np2p::network::coordinator::start_coordinator_client(
+                coord_addr,
+                coord_node_id,
+                p2p_service.node().clone(),
+                node_id.clone(),
+                None, // home server doesn't expose a storage port
+                p2p_service.registry.clone(),
+                config.p2p_namespace.clone(),
+            );
 
-                        // Reverse tunnel — lets Android reach this home server via VPS
-                        if let Some(local_port) = config.p2p_tunnel_local_port {
-                            np2p::network::tunnel::start_tunnel_client(
-                                coord_addr,
-                                coord_node_id,
-                                p2p_service.node().clone(),
-                                (*p2p_service.identity()).clone(),
-                                local_port,
-                            );
-                            info!("Reverse tunnel started → coordinator={} local_port={}", coord_str, local_port);
-                        }
-                    }
-                    None => error!("p2p_coordinator_addr '{}' resolved to no addresses", coord_str),
-                },
-                Err(e) => error!("Failed to resolve p2p_coordinator_addr '{}': {}", coord_str, e),
+            // Reverse tunnel — lets Android reach this home server via VPS
+            if let Some(local_port) = config.p2p_tunnel_local_port {
+                np2p::network::tunnel::start_tunnel_client(
+                    coord_addr,
+                    coord_node_id,
+                    p2p_service.node().clone(),
+                    (*p2p_service.identity()).clone(),
+                    local_port,
+                );
+                info!("Reverse tunnel started → coordinator={} local_port={}", coord_addr, local_port);
             }
         }
 
@@ -485,17 +499,28 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
     let shard_storage = np2p::storage::DiskStorage::new(shard_storage_path).await
         .expect("Failed to initialize shard storage");
 
+    const MAX_P2P_INBOUND_CONNECTIONS: usize = 64;
+    let inbound_conn_sem = Arc::new(tokio::sync::Semaphore::new(MAX_P2P_INBOUND_CONNECTIONS));
+
     tokio::spawn(async move {
         info!("P2P Accept Loop started");
         loop {
             if let Some(incoming) = accept_service.node().accept().await {
+                let Ok(permit) = inbound_conn_sem.clone().try_acquire_owned() else {
+                    warn!("P2P inbound connection cap ({}) reached — dropping incoming connection", MAX_P2P_INBOUND_CONNECTIONS);
+                    drop(incoming);
+                    continue;
+                };
                 let storage = shard_storage.clone();
                 let identity = accept_service.identity().clone();
+                let owner_id = identity.node_id();
 
                 tokio::spawn(async move {
+                    let _permit = permit;
                     match incoming.await {
                         Ok(conn) => {
-                            let handler = np2p::network::ConnectionHandler::new(conn, storage, identity);
+                            let handler = np2p::network::ConnectionHandler::new(conn, storage, identity)
+                                .with_allowed_owner(Some(owner_id));
                             handler.run().await;
                         }
                         Err(e) => error!("Incoming P2P connection failed: {}", e),
@@ -612,6 +637,7 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
                 web::scope("/api")
                     .service(user_login)
                     .service(user_login_form)
+                    .service(user_refresh)
                     .service(user_logout)
                     .service(get_me)
                     .service(setup_status)
@@ -691,7 +717,11 @@ pub async fn run_server(config: Config) -> std::io::Result<()> {
                     .service(services::duplicates::get_duplicate_status)
                     .service(services::duplicates::trigger_duplicate_scan)
                     .service(enhance_image)
-                    .service(save_enhanced_image)
+                    .service(
+                        web::scope("")
+                            .app_data(web::JsonConfig::default().limit(32 * 1024 * 1024))
+                            .service(save_enhanced_image),
+                    )
                     .service(services::observability::get_admin_logs)
                     .service(services::observability::get_admin_errors)
                     .service(services::observability::get_admin_alerts)

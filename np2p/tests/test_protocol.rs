@@ -348,3 +348,45 @@ fn rt_list_shards_response() {
         assert_eq!(available_space_bytes, 1024 * 1024 * 100);
     } else { panic!("wrong variant"); }
 }
+
+#[test]
+fn rt_verify_shard_request_and_response() {
+    let identity = np2p::crypto::NodeIdentity::generate();
+    let shard_hash = [0x77u8; 32];
+    let challenge = [0x88u8; 32];
+    let token = identity.create_shard_token(np2p::crypto::ShardOp::Verify, &shard_hash);
+    let req = Message::VerifyShardRequest { shard_hash, challenge, token: token.clone() };
+    let rt = roundtrip(&req);
+    if let Message::VerifyShardRequest { shard_hash: h, challenge: c, token: t } = rt {
+        assert_eq!(h, shard_hash);
+        assert_eq!(c, challenge);
+        assert_eq!(t.owner_node_id, token.owner_node_id);
+    } else { panic!("wrong variant"); }
+
+    let resp = Message::VerifyShardResponse { shard_hash, proof_hash: Some([0x99u8; 32]) };
+    let rt_resp = roundtrip(&resp);
+    if let Message::VerifyShardResponse { shard_hash: h, proof_hash } = rt_resp {
+        assert_eq!(h, shard_hash);
+        assert_eq!(proof_hash, Some([0x99u8; 32]));
+    } else { panic!("wrong variant"); }
+}
+
+#[test]
+fn rt_delete_pinned_object_and_response() {
+    let identity = np2p::crypto::NodeIdentity::generate();
+    let name = "manifest:old".to_string();
+    let name_hash: [u8; 32] = blake3::hash(name.as_bytes()).into();
+    let token = identity.create_shard_token(np2p::crypto::ShardOp::Delete, &name_hash);
+    let req = Message::DeletePinnedObject { name: name.clone(), token: token.clone() };
+    let rt = roundtrip(&req);
+    if let Message::DeletePinnedObject { name: n, token: t } = rt {
+        assert_eq!(n, name);
+        assert_eq!(t.owner_node_id, token.owner_node_id);
+    } else { panic!("wrong variant"); }
+
+    let resp = Message::DeletePinnedResponse { success: true };
+    let rt_resp = roundtrip(&resp);
+    if let Message::DeletePinnedResponse { success } = rt_resp {
+        assert!(success);
+    } else { panic!("wrong variant"); }
+}

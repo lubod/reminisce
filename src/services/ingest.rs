@@ -191,6 +191,74 @@ fn validate_media_file(
     }
 }
 
+struct StagedMedia {
+    target_path: std::path::PathBuf,
+    filename: String,
+    file_size: u64,
+    exif_json: Option<serde_json::Value>,
+    exif_orientation: Option<i16>,
+}
+
+/// Validate, place on disk, and optionally extract EXIF on a blocking thread.
+async fn stage_media_file(
+    temp_path: &Path,
+    expected_kind: &'static str,
+    ext: &str,
+    hash: &str,
+    base_dir: &str,
+    move_file: bool,
+    extract_exif: bool,
+) -> Result<StagedMedia, Box<dyn std::error::Error + Send + Sync>> {
+    if !crate::media_utils::is_valid_content_hash(hash) {
+        return Err(format!("Invalid content hash: {}", hash).into());
+    }
+
+    let temp_path = temp_path.to_path_buf();
+    let ext = ext.to_string();
+    let hash = hash.to_string();
+    let base_dir = base_dir.to_string();
+
+    tokio::task::spawn_blocking(move || -> Result<StagedMedia, String> {
+        validate_media_file(&temp_path, expected_kind, &ext, &hash)
+            .map_err(|e| e.to_string())?;
+        let filename = format!("{}.{}", hash, ext);
+        let sub_dir = &hash[0..2];
+        let target_dir = Path::new(&base_dir).join(sub_dir);
+        fs::create_dir_all(&target_dir).map_err(|e| e.to_string())?;
+        let target_path = target_dir.join(&filename);
+
+        if move_file {
+            rename_or_copy(&temp_path, &target_path).map_err(|e| e.to_string())?;
+        } else {
+            fs::copy(&temp_path, &target_path).map_err(|e| e.to_string())?;
+        }
+
+        let file_size = fs::metadata(&target_path).map(|m| m.len()).unwrap_or(0);
+        let (exif_json, exif_orientation) = if extract_exif {
+            let exif_json = extract_exif_from_image(&target_path);
+            let exif_orientation = if exif_json.is_some() {
+                crate::media_utils::read_exif_orientation_from_path(&target_path).map(|o| o as i16)
+            } else {
+                None
+            };
+            (exif_json, exif_orientation)
+        } else {
+            (None, None)
+        };
+
+        Ok(StagedMedia {
+            target_path,
+            filename,
+            file_size,
+            exif_json,
+            exif_orientation,
+        })
+    })
+    .await
+    .map_err(|e| format!("Blocking ingest task failed: {}", e))?
+    .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn process_image_file(
     temp_path: &Path,
@@ -206,24 +274,18 @@ pub async fn process_image_file(
 ) -> Result<IngestResult, Box<dyn std::error::Error + Send + Sync>> {
     let raw_ext = Path::new(name).extension().and_then(|s| s.to_str()).unwrap_or("");
     let ext = raw_ext.to_lowercase();
-    validate_media_file(temp_path, "image", &ext, hash)?;
-    let filename = format!("{}.{}", hash, ext);
 
-    // 1. Target Path
-    let images_dir = config.get_images_dir();
-    let sub_dir = &hash[0..2];
-    let target_dir = Path::new(images_dir).join(sub_dir);
-    if !target_dir.exists() {
-        fs::create_dir_all(&target_dir)?;
-    }
-    let target_path = target_dir.join(&filename);
-
-    // 2. Move or copy
-    if move_file {
-        rename_or_copy(temp_path, &target_path)?;
-    } else {
-        fs::copy(temp_path, &target_path)?;
-    }
+    // 1-2 & 4a. Validate, move/copy, stat, and extract EXIF off the Tokio executor.
+    let staged = stage_media_file(
+        temp_path,
+        "image",
+        &ext,
+        hash,
+        config.get_images_dir(),
+        move_file,
+        true,
+    )
+    .await?;
 
     // 3. Database
     let client = pool.0.get().await?;
@@ -245,18 +307,17 @@ pub async fn process_image_file(
     ).await;
 
     // Store file size
-    if let Ok(meta) = fs::metadata(&target_path) {
-        let file_size = meta.len().min(i32::MAX as u64) as i32;
+    if staged.file_size > 0 {
+        let file_size = staged.file_size.min(i64::MAX as u64) as i64;
         let _ = client.execute(
             "UPDATE images SET file_size_bytes = $1 WHERE user_id = $2 AND hash = $3",
             &[&file_size, user_id, &hash],
         ).await;
     }
 
-    // 4. Extract EXIF from the image file and update the DB
+    // 4b. Persist extracted EXIF metadata
     let mut exif_date: Option<chrono::DateTime<Utc>> = None;
-    let mut exif_json_opt: Option<serde_json::Value> = None;
-    if let Some(exif_json) = extract_exif_from_image(&target_path) {
+    if let Some(ref exif_json) = staged.exif_json {
         let exif_str = exif_json.to_string();
 
         // Store EXIF only if not already set (client metadata upload takes priority)
@@ -265,10 +326,7 @@ pub async fn process_image_file(
             &[&exif_str, user_id, &hash],
         ).await;
 
-        // Store orientation — read the raw Short value directly from EXIF rather than
-        // parsing display_value() which returns descriptive strings like
-        // "row 0 at right and column 0 at top" that can never be parsed as i16.
-        if let Some(orient) = crate::media_utils::read_exif_orientation_from_path(&target_path).map(|o| o as i16) {
+        if let Some(orient) = staged.exif_orientation {
             let _ = client.execute(
                 "UPDATE images SET orientation = $1 WHERE user_id = $2 AND hash = $3 AND orientation IS NULL",
                 &[&orient, user_id, &hash],
@@ -280,7 +338,6 @@ pub async fn process_image_file(
                 exif_date = Some(ndt.and_utc());
             }
         }
-        exif_json_opt = Some(exif_json);
     }
 
     // 5. Pick best date: EXIF > filename > client (apply only if created_at is still upload time)
@@ -298,7 +355,7 @@ pub async fn process_image_file(
     }
 
     // 6. Extract GPS and update location + place (only if not already set)
-    if let Some(ref exif_json) = exif_json_opt {
+    if let Some(ref exif_json) = staged.exif_json {
         if let Some((lat, lon)) = utils::extract_gps_coordinates(exif_json) {
             let updated = client.execute(
                 "UPDATE images SET location = ST_SetSRID(ST_MakePoint($1, $2), 4326) \
@@ -322,16 +379,16 @@ pub async fn process_image_file(
     }
 
     FILE_UPLOADS_TOTAL.inc();
-    if let Ok(meta) = fs::metadata(&target_path) {
-        BYTES_UPLOADED_TOTAL.inc_by(meta.len());
+    if staged.file_size > 0 {
+        BYTES_UPLOADED_TOTAL.inc_by(staged.file_size);
     }
 
     Ok(IngestResult {
         hash: hash.to_string(),
         status: "success".to_string(),
         name: name.to_string(),
-        filename,
-        path: target_path.to_string_lossy().to_string(),
+        filename: staged.filename,
+        path: staged.target_path.to_string_lossy().to_string(),
         thumbnail: false,
         thumbnail_generated: false,
     })
@@ -351,22 +408,17 @@ pub async fn process_video_file(
 ) -> Result<IngestResult, Box<dyn std::error::Error + Send + Sync>> {
     let raw_ext = Path::new(name).extension().and_then(|s| s.to_str()).unwrap_or("");
     let ext = raw_ext.to_lowercase();
-    validate_media_file(temp_path, "video", &ext, hash)?;
-    let filename = format!("{}.{}", hash, ext);
 
-    let videos_dir = config.get_videos_dir();
-    let sub_dir = &hash[0..2];
-    let target_dir = Path::new(videos_dir).join(sub_dir);
-    if !target_dir.exists() {
-        fs::create_dir_all(&target_dir)?;
-    }
-    let target_path = target_dir.join(&filename);
-
-    if move_file {
-        rename_or_copy(temp_path, &target_path)?;
-    } else {
-        fs::copy(temp_path, &target_path)?;
-    }
+    let staged = stage_media_file(
+        temp_path,
+        "video",
+        &ext,
+        hash,
+        config.get_videos_dir(),
+        move_file,
+        false,
+    )
+    .await?;
 
     let client = pool.0.get().await?;
     client.execute(
@@ -385,8 +437,8 @@ pub async fn process_video_file(
     ).await;
 
     // Store file size
-    if let Ok(meta) = fs::metadata(&target_path) {
-        let file_size = meta.len() as i64;
+    if staged.file_size > 0 {
+        let file_size = staged.file_size.min(i64::MAX as u64) as i64;
         let _ = client.execute(
             "UPDATE videos SET file_size_bytes = $1 WHERE user_id = $2 AND hash = $3",
             &[&file_size, user_id, &hash],
@@ -407,16 +459,16 @@ pub async fn process_video_file(
     }
 
     FILE_UPLOADS_TOTAL.inc();
-    if let Ok(meta) = fs::metadata(&target_path) {
-        BYTES_UPLOADED_TOTAL.inc_by(meta.len());
+    if staged.file_size > 0 {
+        BYTES_UPLOADED_TOTAL.inc_by(staged.file_size);
     }
 
     Ok(IngestResult {
         hash: hash.to_string(),
         status: "success".to_string(),
         name: name.to_string(),
-        filename,
-        path: target_path.to_string_lossy().to_string(),
+        filename: staged.filename,
+        path: staged.target_path.to_string_lossy().to_string(),
         thumbnail: false,
         thumbnail_generated: false,
     })

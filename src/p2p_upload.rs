@@ -20,20 +20,21 @@ pub const SHARD_COUNT: usize = 5;
 pub const MIN_NODES_REQUIRED: usize = 1;
 /// Files larger than this are uploaded via segmented streaming (caps peak RAM).
 pub const SEGMENT_THRESHOLD: usize = 256 * 1024 * 1024; // 256 MB
+static RECENT_STORES: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<(String, String), std::time::Instant>>> = std::sync::OnceLock::new();
+const RECENT_STORE_GRACE: Duration = Duration::from_secs(15 * 60);
+
+fn recent_stores_map() -> &'static std::sync::Mutex<std::collections::HashMap<(String, String), std::time::Instant>> {
+    RECENT_STORES.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
 /// Recently completed remote shard stores, used by the audit sweep's orphan GC
 /// as a grace period: a shard uploaded moments ago may not be committed to
 /// `p2p_shards` yet (upload ACK precedes the DB transaction), and the sweep
 /// would otherwise delete it as an "orphan". Bounded by prune-on-insert.
 pub fn note_recent_store(node_id: &str, shard_hash_hex: &str) {
-    use std::collections::HashMap;
-    use std::sync::Mutex;
-    use std::time::{Duration, Instant};
-    static RECENT: std::sync::OnceLock<Mutex<HashMap<(String, String), Instant>>> = std::sync::OnceLock::new();
-    const GRACE: Duration = Duration::from_secs(15 * 60);
-    let map = RECENT.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut g = map.lock().unwrap_or_else(|e| e.into_inner());
-    let now = Instant::now();
-    g.retain(|_, t| now.duration_since(*t) < GRACE);
+    let mut g = recent_stores_map().lock().unwrap_or_else(|e| e.into_inner());
+    let now = std::time::Instant::now();
+    g.retain(|_, t| now.duration_since(*t) < RECENT_STORE_GRACE);
     if g.len() > 50_000 {
         return; // bound memory under pathological load; sweep just runs conservative
     }
@@ -43,16 +44,53 @@ pub fn note_recent_store(node_id: &str, shard_hash_hex: &str) {
 /// True when (node, hash) was stored recently enough that the audit sweep must
 /// not treat it as an orphan.
 pub fn is_recently_stored(node_id: &str, shard_hash_hex: &str) -> bool {
-    use std::collections::HashMap;
-    use std::sync::Mutex;
-    use std::time::{Duration, Instant};
-    static RECENT: std::sync::OnceLock<Mutex<HashMap<(String, String), Instant>>> = std::sync::OnceLock::new();
-    const GRACE: Duration = Duration::from_secs(15 * 60);
-    let map = RECENT.get_or_init(|| Mutex::new(HashMap::new()));
-    let g = map.lock().unwrap_or_else(|e| e.into_inner());
+    let g = recent_stores_map().lock().unwrap_or_else(|e| e.into_inner());
     match g.get(&(node_id.to_string(), shard_hash_hex.to_string())) {
-        Some(t) => t.elapsed() < GRACE,
+        Some(t) => t.elapsed() < RECENT_STORE_GRACE,
         None => false,
+    }
+}
+
+/// Opens a bi-directional stream, sends a signed `StoreShardStreamInit`, and waits for ready Ack.
+async fn begin_shard_stream(
+    conn: &np2p::quinn::Connection,
+    identity: &np2p::crypto::NodeIdentity,
+    file_hash_bytes: [u8; 32],
+    shard_index: u8,
+    total_shard_bytes: u64,
+    segment_count: u32,
+) -> Result<(np2p::quinn::SendStream, np2p::quinn::RecvStream), String> {
+    let (mut send, mut recv) = conn.open_bi().await.map_err(|e| format!("open_bi failed: {}", e))?;
+    let binding: [u8; 32] = blake3::hash(&[file_hash_bytes.as_slice(), &[shard_index]].concat()).into();
+    let token = identity.create_shard_token(np2p::crypto::ShardOp::Store, &binding);
+    Protocol::send(&mut send, &Message::StoreShardStreamInit {
+        file_hash: file_hash_bytes,
+        shard_index,
+        total_shard_bytes,
+        segment_count,
+        token,
+    }).await.map_err(|e| e.to_string())?;
+    match Protocol::receive(&mut recv).await.map_err(|e| e.to_string())? {
+        Message::StoreShardStreamAck { ready: true } => Ok((send, recv)),
+        other => Err(format!("unexpected stream ack: {:?}", other)),
+    }
+}
+
+/// Finalizes a chunked shard stream, records peer write health, and returns node acceptance.
+async fn finish_shard_stream(
+    send: &mut np2p::quinn::SendStream,
+    recv: &mut np2p::quinn::RecvStream,
+    node_id: &str,
+    shard_hash: [u8; 32],
+) -> Result<bool, String> {
+    Protocol::send(send, &Message::StoreShardStreamFinal { shard_hash })
+        .await.map_err(|e| e.to_string())?;
+    match Protocol::receive(recv).await.map_err(|e| e.to_string())? {
+        Message::StoreShardStreamResponse { success, available_space_bytes } => {
+            crate::metrics::record_peer_write(node_id, success, Some(available_space_bytes));
+            Ok(success)
+        }
+        other => Err(format!("unexpected response: {:?}", other)),
     }
 }
 
@@ -102,9 +140,11 @@ pub async fn store_shard(
 ) -> Result<String, String> {
     let shard_hash_bytes: [u8; 32] = blake3::hash(shard_data).into();
     let shard_hash_hex = blake3::Hash::from(shard_hash_bytes).to_hex().to_string();
-    let binding: [u8; 32] = blake3::hash(
-        &[file_hash_bytes.as_slice(), &[shard_index]].concat()
-    ).into();
+    let declared_bytes = if (shard_data.len() as u64) <= (np2p::network::protocol::MAX_MESSAGE_LEN as u64 - 1024) {
+        shard_data.len() as u64
+    } else {
+        0
+    };
     let mut last_err = String::new();
     let node_id = p2p_service.registry.find_by_addr(addr)
         .unwrap_or_else(|| addr.to_string());
@@ -117,24 +157,17 @@ pub async fn store_shard(
             Ok(c) => c,
             Err(e) => { last_err = format!("connect failed: {}", e); continue; }
         };
-        let (mut send, mut recv) = match conn.open_bi().await {
-            Ok(s) => s,
-            Err(e) => { last_err = format!("open_bi failed: {}", e); conn.close(0u32.into(), b"error"); continue; }
-        };
 
-        let token = p2p_service.identity().create_shard_token(np2p::crypto::ShardOp::Store, &binding);
         let attempt_result: Result<bool, String> = async {
-            Protocol::send(&mut send, &Message::StoreShardStreamInit {
-                file_hash: file_hash_bytes,
+            let (mut send, mut recv) = begin_shard_stream(
+                &conn,
+                &p2p_service.identity(),
+                file_hash_bytes,
                 shard_index,
-                total_shard_bytes: 0,
-                segment_count: 0,
-                token,
-            }).await.map_err(|e| e.to_string())?;
-            match Protocol::receive(&mut recv).await.map_err(|e| e.to_string())? {
-                Message::StoreShardStreamAck { ready: true } => {}
-                other => return Err(format!("unexpected stream ack: {:?}", other)),
-            }
+                declared_bytes,
+                0,
+            ).await?;
+
             let mut hasher = blake3::Hasher::new();
             for chunk in shard_data.chunks(CHUNK_MSG_SIZE) {
                 hasher.update(chunk);
@@ -142,26 +175,15 @@ pub async fn store_shard(
                     .await.map_err(|e| e.to_string())?;
             }
             let shard_hash: [u8; 32] = hasher.finalize().into();
-            Protocol::send(&mut send, &Message::StoreShardStreamFinal { shard_hash })
-                .await.map_err(|e| e.to_string())?;
-            match Protocol::receive(&mut recv).await.map_err(|e| e.to_string())? {
-                Message::StoreShardStreamResponse { success, available_space_bytes } => {
-                    crate::metrics::record_peer_write(&node_id, success, Some(available_space_bytes));
-                    Ok(success)
-                },
-                other => Err(format!("unexpected response: {:?}", other)),
-            }
+            let res = finish_shard_stream(&mut send, &mut recv, &node_id, shard_hash).await;
+            let _ = send.finish();
+            res
         }.await;
 
-        let _ = send.finish();
         match attempt_result {
             Ok(true) => {
                 conn.close(0u32.into(), b"done");
-                // Record for the audit sweep grace period (node_id falls back to
-                // addr string when unresolved — sweep compares the same way).
-                let owner = p2p_service.registry.find_by_addr(addr)
-                    .unwrap_or_else(|| addr.to_string());
-                note_recent_store(&owner, &shard_hash_hex);
+                note_recent_store(&node_id, &shard_hash_hex);
                 return Ok(shard_hash_hex);
             }
             Ok(false) => last_err = "node rejected shard".to_string(),
@@ -172,17 +194,38 @@ pub async fn store_shard(
     Err(last_err)
 }
 
-/// Retrieve a shard from a specific node by its 64-hex hash.
-///
-/// Shared by the audit, rebalance and restore paths: identity-authenticated
-/// RetrieveShardRequest, verifying the token is bound to the shard hash, then
-/// returning the raw bytes. Errors if the shard is missing or the token/query
-/// fails.
-pub async fn retrieve_shard(
+enum ShardSink<'a> {
+    Vec(&'a mut Vec<u8>),
+    File(&'a mut tokio::fs::File),
+    HashOnly,
+}
+
+impl ShardSink<'_> {
+    fn reserve_hint(&mut self, bytes: u64) {
+        if let ShardSink::Vec(v) = self {
+            v.reserve(bytes.min(256 * 1024 * 1024) as usize);
+        }
+    }
+
+    async fn write_chunk(&mut self, chunk: &[u8]) -> Result<(), String> {
+        match self {
+            ShardSink::Vec(v) => v.extend_from_slice(chunk),
+            ShardSink::File(f) => {
+                use tokio::io::AsyncWriteExt;
+                f.write_all(chunk).await.map_err(|e| format!("Write shard chunk failed: {}", e))?;
+            }
+            ShardSink::HashOnly => {}
+        }
+        Ok(())
+    }
+}
+
+async fn retrieve_shard_into(
     p2p_service: &Arc<P2PService>,
     addr: SocketAddr,
     shard_hash_hex: &str,
-) -> Result<Vec<u8>, String> {
+    mut sink: ShardSink<'_>,
+) -> Result<(), String> {
     let shard_hash_bytes: [u8; 32] = hex::decode(shard_hash_hex)
         .map_err(|e| crate::p2p_error::P2pError::InvalidShardHash { hash: shard_hash_hex.to_string(), message: e.to_string() })?
         .try_into()
@@ -197,7 +240,7 @@ pub async fn retrieve_shard(
         .identity()
         .create_shard_token(np2p::crypto::ShardOp::Retrieve, &shard_hash_bytes);
 
-    // Attempt 1: Streaming retrieval (chunked, bypasses 128 MB frame limit for large shards)
+    // Attempt 1: Streaming retrieval (chunked, bypasses 128 MB frame limit and bounds RAM).
     let stream_attempt = async {
         let (mut send, mut recv) = conn
             .open_bi()
@@ -213,20 +256,21 @@ pub async fn retrieve_shard(
 
         match Protocol::receive(&mut recv).await {
             Ok(Message::RetrieveShardStreamAck { found: true, total_bytes }) => {
-                let mut data = Vec::with_capacity(total_bytes as usize);
+                sink.reserve_hint(total_bytes);
                 let mut hasher = blake3::Hasher::new();
                 loop {
                     match Protocol::receive(&mut recv).await {
                         Ok(Message::RetrieveShardChunk { data: chunk }) => {
                             hasher.update(&chunk);
-                            data.extend_from_slice(&chunk);
+                            sink.write_chunk(&chunk).await
+                                .map_err(|e| crate::p2p_error::P2pError::Receive { message: e })?;
                         }
                         Ok(Message::RetrieveShardStreamFinal { shard_hash: expected_hash }) => {
                             let actual_hash: [u8; 32] = hasher.finalize().into();
                             let _ = send.finish();
                             if actual_hash == expected_hash && actual_hash == shard_hash_bytes {
                                 conn.close(0u32.into(), b"done");
-                                return Ok(Some(data));
+                                return Ok(true);
                             } else {
                                 conn.close(1u32.into(), b"hash_mismatch");
                                 return Err(crate::p2p_error::P2pError::Receive { message: "Hash mismatch in stream".to_string() });
@@ -250,16 +294,18 @@ pub async fn retrieve_shard(
             }
             _ => {
                 let _ = send.finish();
-                // Peer may not support streaming (older node) -> fallback
-                Ok(None)
+                Ok(false)
             }
         }
     }.await;
 
     match stream_attempt {
-        Ok(Some(data)) => return Ok(data),
+        Ok(true) => return Ok(()),
         Err(crate::p2p_error::P2pError::ShardNotFound) => {
             return Err(crate::p2p_error::P2pError::ShardNotFound.to_string());
+        }
+        Err(e) if matches!(e, crate::p2p_error::P2pError::Receive { ref message } if message == "Hash mismatch in stream") => {
+            return Err(e.to_string());
         }
         _ => {} // Fall through to legacy attempt
     }
@@ -278,13 +324,297 @@ pub async fn retrieve_shard(
     .map_err(|e| crate::p2p_error::P2pError::Send { message: e.to_string() })?;
 
     let result = match Protocol::receive(&mut recv2).await {
-        Ok(Message::RetrieveShardResponse { data: Some(data), .. }) => Ok(data),
-        Ok(_) => Err(crate::p2p_error::P2pError::ShardNotFound),
-        Err(e) => Err(crate::p2p_error::P2pError::Receive { message: e.to_string() }),
+        Ok(Message::RetrieveShardResponse { data: Some(data), .. }) => {
+            let actual: [u8; 32] = blake3::hash(&data).into();
+            if actual != shard_hash_bytes {
+                Err(crate::p2p_error::P2pError::Receive { message: "Hash mismatch in legacy retrieve".to_string() }.to_string())
+            } else {
+                sink.write_chunk(&data).await
+            }
+        }
+        Ok(_) => Err(crate::p2p_error::P2pError::ShardNotFound.to_string()),
+        Err(e) => Err(crate::p2p_error::P2pError::Receive { message: e.to_string() }.to_string()),
     };
     let _ = send2.finish();
     conn.close(0u32.into(), if result.is_ok() { b"done" } else { b"error" });
-    result.map_err(|e| e.to_string())
+    result
+}
+
+/// Retrieve a shard from a specific node by its 64-hex hash.
+pub async fn retrieve_shard(
+    p2p_service: &Arc<P2PService>,
+    addr: SocketAddr,
+    shard_hash_hex: &str,
+) -> Result<Vec<u8>, String> {
+    let mut data = Vec::new();
+    retrieve_shard_into(p2p_service, addr, shard_hash_hex, ShardSink::Vec(&mut data)).await?;
+    Ok(data)
+}
+
+/// Stream a shard into `out_path` and BLAKE3-verify it with O(1) RAM.
+pub async fn retrieve_shard_to_file(
+    p2p_service: &Arc<P2PService>,
+    addr: SocketAddr,
+    shard_hash_hex: &str,
+    out_path: &Path,
+) -> Result<(), String> {
+    let mut file = tokio::fs::File::create(out_path).await
+        .map_err(|e| format!("Failed to create shard file {}: {}", out_path.display(), e))?;
+    let res = retrieve_shard_into(p2p_service, addr, shard_hash_hex, ShardSink::File(&mut file)).await;
+    if res.is_err() {
+        drop(file);
+        let _ = tokio::fs::remove_file(out_path).await;
+    } else {
+        use tokio::io::AsyncWriteExt;
+        file.flush().await.map_err(|e| e.to_string())?;
+    }
+    res
+}
+
+/// Verify a shard's integrity on a remote node without allocating the shard in RAM
+/// and, on updated nodes, without transferring shard bytes over the network.
+pub async fn verify_shard_proof(
+    p2p_service: &Arc<P2PService>,
+    addr: SocketAddr,
+    shard_hash_hex: &str,
+) -> Result<bool, String> {
+    let shard_hash_bytes: [u8; 32] = hex::decode(shard_hash_hex)
+        .map_err(|e| format!("Invalid shard hash hex '{}': {}", shard_hash_hex, e))?
+        .try_into()
+        .map_err(|_| format!("Invalid shard hash hex length '{}'", shard_hash_hex))?;
+
+    let conn = p2p_service.connect_to_addr(addr).await.map_err(|e| e.to_string())?;
+    let (mut send, mut recv) = conn.open_bi().await.map_err(|e| e.to_string())?;
+    let token = p2p_service.identity().create_shard_token(np2p::crypto::ShardOp::Verify, &shard_hash_bytes);
+
+    let send_res = Protocol::send(&mut send, &Message::VerifyShardRequest {
+        shard_hash: shard_hash_bytes,
+        challenge: [0u8; 32],
+        token,
+    }).await;
+    if let Err(e) = send_res {
+        conn.close(0u32.into(), b"error");
+        return Err(e.to_string());
+    }
+
+    let recv_res = Protocol::receive(&mut recv).await;
+    let _ = send.finish();
+    conn.close(0u32.into(), b"done");
+
+    match recv_res {
+        Ok(Message::VerifyShardResponse { proof_hash: Some(proof), .. }) => {
+            Ok(proof == shard_hash_bytes)
+        }
+        Ok(Message::VerifyShardResponse { proof_hash: None, .. }) => Ok(false),
+        Ok(Message::Error { code: 400, .. })
+        | Err(np2p::error::Np2pError::UnknownMessage(_)) => {
+            // Backward compatibility: older storage node doesn't understand VerifyShardRequest.
+            // Stream & hash in O(1) RAM instead of failing or pulling multi-GB Vec<u8>.
+            match retrieve_shard_into(p2p_service, addr, shard_hash_hex, ShardSink::HashOnly).await {
+                Ok(()) => Ok(true),
+                Err(e) if e.contains("not found") || e.contains("Hash mismatch") => Ok(false),
+                Err(e) => Err(e),
+            }
+        }
+        Ok(Message::Error { code, message }) => Err(format!("Node verify error {}: {}", code, message)),
+        Ok(other) => Err(format!("Unexpected verify response: {:?}", other)),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// Locates a media file on local disk across configured image and video directories.
+pub fn find_local_media_path(config: &crate::config::Config, file_hash: &str, ext: &str) -> Option<std::path::PathBuf> {
+    if file_hash.len() < 2 {
+        return None;
+    }
+    for dir in [config.get_images_dir(), config.get_videos_dir()] {
+        let candidate = std::path::PathBuf::from(dir)
+            .join(&file_hash[0..2])
+            .join(format!("{}.{}", file_hash, ext));
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+/// Streams a shard file from local disk to `addr` in bounded 16 MiB chunks (O(1) RAM).
+pub async fn store_shard_from_file(
+    p2p_service: &Arc<P2PService>,
+    addr: SocketAddr,
+    file_hash_bytes: [u8; 32],
+    shard_index: u8,
+    shard_path: &Path,
+) -> Result<String, String> {
+    let meta = tokio::fs::metadata(shard_path).await.map_err(|e| e.to_string())?;
+    let declared_bytes = if meta.len() <= (np2p::network::protocol::MAX_MESSAGE_LEN as u64 - 1024) {
+        meta.len()
+    } else {
+        0
+    };
+    let node_id = p2p_service.registry.find_by_addr(addr)
+        .unwrap_or_else(|| addr.to_string());
+    let conn = p2p_service.connect_to_addr(addr).await.map_err(|e| e.to_string())?;
+
+    let result: Result<String, String> = async {
+        let (mut send, mut recv) = begin_shard_stream(
+            &conn,
+            &p2p_service.identity(),
+            file_hash_bytes,
+            shard_index,
+            declared_bytes,
+            0,
+        ).await?;
+
+        let mut f = tokio::fs::File::open(shard_path).await.map_err(|e| e.to_string())?;
+        let mut buf = vec![0u8; CHUNK_MSG_SIZE];
+        let mut hasher = blake3::Hasher::new();
+        loop {
+            let n = read_full(&mut f, &mut buf).await.map_err(|e| e.to_string())?;
+            if n == 0 {
+                break;
+            }
+            hasher.update(&buf[..n]);
+            Protocol::send(&mut send, &Message::StoreShardChunk { data: buf[..n].to_vec() })
+                .await.map_err(|e| e.to_string())?;
+        }
+        let shard_hash: [u8; 32] = hasher.finalize().into();
+        let success = finish_shard_stream(&mut send, &mut recv, &node_id, shard_hash).await?;
+        let _ = send.finish();
+        if success {
+            let hash_hex = blake3::Hash::from(shard_hash).to_hex().to_string();
+            note_recent_store(&node_id, &hash_hex);
+            Ok(hash_hex)
+        } else {
+            Err("node rejected streamed shard file (success=false)".to_string())
+        }
+    }.await;
+
+    conn.close(0u32.into(), if result.is_ok() { b"done" } else { b"error" });
+    result
+}
+
+/// Re-shards a local media file (single- or multi-segment) and streams ONLY `shard_index`
+/// to `addr` without materializing multi-GB shards in memory. Verifies local file BLAKE3
+/// matches `expected_file_hash` before touching the network.
+#[allow(clippy::too_many_arguments)]
+pub async fn stream_reshard_single_index(
+    p2p_service: &Arc<P2PService>,
+    addr: SocketAddr,
+    file_path: &Path,
+    expected_file_hash: &str,
+    key: &[u8],
+    segment_count: i32,
+    shard_index: usize,
+    data_shards: usize,
+    parity_shards: usize,
+) -> Result<String, String> {
+    let total_shards = data_shards + parity_shards;
+    if shard_index >= total_shards {
+        return Err(format!("Shard index {} out of range (total {})", shard_index, total_shards));
+    }
+
+    // Stream file first in O(1) RAM to verify local file still matches expected content hash.
+    {
+        let mut f = tokio::fs::File::open(file_path).await.map_err(|e| e.to_string())?;
+        let mut hasher = blake3::Hasher::new();
+        let mut buf = vec![0u8; 1024 * 1024];
+        loop {
+            let n = f.read(&mut buf).await.map_err(|e| e.to_string())?;
+            if n == 0 { break; }
+            hasher.update(&buf[..n]);
+        }
+        let local_hash = hasher.finalize().to_hex().to_string();
+        if local_hash != expected_file_hash {
+            return Err(format!(
+                "Local file hash mismatch ({} != {}) — refusing to reshard modified file",
+                &local_hash[..16.min(local_hash.len())],
+                &expected_file_hash[..16.min(expected_file_hash.len())]
+            ));
+        }
+    }
+
+    let file_hash_bytes: [u8; 32] = hex::decode(expected_file_hash)
+        .map_err(|e| format!("Invalid file hash '{}': {}", expected_file_hash, e))?
+        .try_into()
+        .map_err(|_| format!("Invalid file hash length '{}'", expected_file_hash))?;
+
+    let is_segmented = segment_count > 1;
+
+    if !is_segmented {
+        let file_data = tokio::fs::read(file_path).await.map_err(|e| e.to_string())?;
+        let (shards, _) = StorageEngine::process_for_backup(&file_data, key, key, data_shards, parity_shards)
+            .map_err(|e| e.to_string())?;
+        return store_shard(p2p_service, addr, file_hash_bytes, shard_index as u8, &shards[shard_index]).await;
+    }
+
+    let node_id = p2p_service.registry.find_by_addr(addr)
+        .unwrap_or_else(|| addr.to_string());
+    let conn = p2p_service.connect_to_addr(addr).await.map_err(|e| e.to_string())?;
+
+    let result: Result<String, String> = async {
+        let (mut send, mut recv) = begin_shard_stream(
+            &conn,
+            &p2p_service.identity(),
+            file_hash_bytes,
+            shard_index as u8,
+            0,
+            segment_count.max(1) as u32,
+        ).await?;
+
+        let mut file_handle = tokio::fs::File::open(file_path).await.map_err(|e| e.to_string())?;
+        let mut buf = vec![0u8; SEGMENT_THRESHOLD];
+        let mut shard_hasher = blake3::Hasher::new();
+        let mut seg_idx: u32 = 0;
+
+        loop {
+            let total = read_full(&mut file_handle, &mut buf).await.map_err(|e| e.to_string())?;
+            if total == 0 {
+                break;
+            }
+            let nonce_ctx: Vec<u8> = key.iter().chain(seg_idx.to_le_bytes().iter()).cloned().collect();
+            let (sub_shards, _) = StorageEngine::process_for_backup(&buf[..total], key, &nonce_ctx, data_shards, parity_shards)
+                .map_err(|e| e.to_string())?;
+            let sub = &sub_shards[shard_index];
+            for chunk in sub.chunks(CHUNK_MSG_SIZE) {
+                shard_hasher.update(chunk);
+                Protocol::send(&mut send, &Message::StoreShardChunk { data: chunk.to_vec() })
+                    .await.map_err(|e| e.to_string())?;
+            }
+            seg_idx += 1;
+        }
+
+        let shard_hash: [u8; 32] = shard_hasher.finalize().into();
+        let success = finish_shard_stream(&mut send, &mut recv, &node_id, shard_hash).await?;
+        let _ = send.finish();
+        if success {
+            let hash_hex = blake3::Hash::from(shard_hash).to_hex().to_string();
+            note_recent_store(&node_id, &hash_hex);
+            Ok(hash_hex)
+        } else {
+            Err("node rejected streamed reshard (success=false)".to_string())
+        }
+    }.await;
+
+    conn.close(0u32.into(), if result.is_ok() { b"done" } else { b"error" });
+    result
+}
+
+/// Delete a named pinned object on a peer node (best-effort across older nodes).
+pub async fn delete_pinned_remote(
+    p2p_service: &Arc<P2PService>,
+    node_id: &str,
+    name: &str,
+) -> Result<bool, String> {
+    let name_hash: [u8; 32] = blake3::hash(name.as_bytes()).into();
+    let token = p2p_service.identity().create_shard_token(np2p::crypto::ShardOp::Delete, &name_hash);
+    let msg = Message::DeletePinnedObject { name: name.to_string(), token };
+    match p2p_service.send_message(node_id, &msg).await {
+        Ok(Message::DeletePinnedResponse { success }) => Ok(success),
+        Ok(Message::Error { code: 400, .. }) | Err(np2p::error::Np2pError::UnknownMessage(_)) => Ok(false),
+        Ok(other) => Err(format!("Unexpected delete pinned response: {:?}", other)),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 /// Upload already-in-memory shards to rendezvous-selected nodes in parallel.
@@ -398,27 +728,16 @@ async fn stream_one_shard(
     let node_id = p2p_service.registry.find_by_addr(addr)
         .unwrap_or_else(|| addr.to_string());
     let conn = p2p_service.connect_to_addr(addr).await.map_err(|e| e.to_string())?;
-    let (mut send, mut recv) = conn.open_bi().await.map_err(|e| e.to_string())?;
-
-    // Token binds the stream to (file_hash, shard_index) — the storage node verifies
-    // it before accepting any chunk, matching the non-streamed StoreShardRequest auth.
-    let binding: [u8; 32] = blake3::hash(
-        &[file_hash_bytes.as_slice(), &[idx as u8]].concat()
-    ).into();
-    let token = p2p_service.identity().create_shard_token(np2p::crypto::ShardOp::Store, &binding);
 
     let result: Result<String, String> = async {
-        Protocol::send(&mut send, &Message::StoreShardStreamInit {
-            file_hash: file_hash_bytes,
-            shard_index: idx as u8,
-            total_shard_bytes: 0,
-            segment_count: 0,
-            token,
-        }).await.map_err(|e| e.to_string())?;
-        match Protocol::receive(&mut recv).await.map_err(|e| e.to_string())? {
-            Message::StoreShardStreamAck { ready: true } => {}
-            other => return Err(format!("unexpected stream ack: {:?}", other)),
-        }
+        let (mut send, mut recv) = begin_shard_stream(
+            &conn,
+            &p2p_service.identity(),
+            file_hash_bytes,
+            idx as u8,
+            0,
+            0,
+        ).await?;
 
         let mut hasher = blake3::Hasher::new();
         while let Some(chunk) = rx.recv().await {
@@ -426,21 +745,17 @@ async fn stream_one_shard(
             Protocol::send(&mut send, &Message::StoreShardChunk { data: chunk }).await.map_err(|e| e.to_string())?;
         }
         let shard_hash: [u8; 32] = hasher.finalize().into();
-        Protocol::send(&mut send, &Message::StoreShardStreamFinal { shard_hash }).await.map_err(|e| e.to_string())?;
-        match Protocol::receive(&mut recv).await.map_err(|e| e.to_string())? {
-            Message::StoreShardStreamResponse { success, available_space_bytes } => {
-                crate::metrics::record_peer_write(&node_id, success, Some(available_space_bytes));
-                if success {
-                    Ok(blake3::Hash::from(shard_hash).to_hex().to_string())
-                } else {
-                    Err("node rejected shard stream (success=false)".to_string())
-                }
-            },
-            other => Err(format!("node rejected shard stream: {:?}", other)),
+        let success = finish_shard_stream(&mut send, &mut recv, &node_id, shard_hash).await?;
+        let _ = send.finish();
+        if success {
+            let hash_hex = blake3::Hash::from(shard_hash).to_hex().to_string();
+            note_recent_store(&node_id, &hash_hex);
+            Ok(hash_hex)
+        } else {
+            Err("node rejected shard stream (success=false)".to_string())
         }
     }.await;
 
-    let _ = send.finish();
     conn.close(0u32.into(), if result.is_ok() { b"done" } else { b"error" });
     result
 }
@@ -501,4 +816,39 @@ pub async fn list_remote_shards(
         Message::Error { message, .. } => Err(message),
         other => Err(format!("unexpected list shards response: {:?}", other)),
     }
+}
+
+/// Streams a verified shard from `from_addr` through a 0600 scratch file onto `to_addr`
+/// with O(1) RAM (no multi-GB in-memory shard buffer).
+pub async fn copy_shard_between_nodes(
+    p2p_service: &Arc<P2PService>,
+    from_addr: SocketAddr,
+    to_addr: SocketAddr,
+    shard_hash_hex: &str,
+    shard_index: u8,
+) -> Result<String, String> {
+    let shard_hash_bytes: [u8; 32] = hex::decode(shard_hash_hex)
+        .map_err(|e| format!("Invalid shard hash hex '{}': {}", shard_hash_hex, e))?
+        .try_into()
+        .map_err(|_| format!("Invalid shard hash hex length '{}'", shard_hash_hex))?;
+
+    let tmp_name = format!(
+        "reminisce_shard_xfer_{}_{}_{}.part",
+        std::process::id(),
+        shard_index,
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+    );
+    let tmp_path = std::env::temp_dir().join(tmp_name);
+    retrieve_shard_to_file(p2p_service, from_addr, shard_hash_hex, &tmp_path).await?;
+    let upload_res = store_shard_from_file(p2p_service, to_addr, shard_hash_bytes, shard_index, &tmp_path).await;
+    let _ = tokio::fs::remove_file(&tmp_path).await;
+    let uploaded_hash = upload_res?;
+    if uploaded_hash != shard_hash_hex {
+        return Err(format!(
+            "Shard transfer hash mismatch ({} != {})",
+            &uploaded_hash[..16.min(uploaded_hash.len())],
+            &shard_hash_hex[..16.min(shard_hash_hex.len())]
+        ));
+    }
+    Ok(uploaded_hash)
 }

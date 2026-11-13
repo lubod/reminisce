@@ -186,12 +186,11 @@ impl ConnectionHandler {
                 // Retrieval ships the shard as ONE protocol frame capped at
                 // MAX_MESSAGE_LEN — anything larger can be stored but never
                 // retrieved. Refuse at store time instead of stranding bytes.
-                const MAX_RETRIEVABLE: u64 = (crate::network::protocol::MAX_MESSAGE_LEN as u64) - 1024;
-                if total_shard_bytes > MAX_RETRIEVABLE {
-                    warn!("[CONN] Shard {} declares {} bytes > retrievable cap {} — rejecting", shard_index, total_shard_bytes, MAX_RETRIEVABLE);
+                if total_shard_bytes > crate::storage::MAX_SHARD_BYTES {
+                    warn!("[CONN] Shard {} declares {} bytes > MAX_SHARD_BYTES {} — rejecting", shard_index, total_shard_bytes, crate::storage::MAX_SHARD_BYTES);
                     let _ = Protocol::send(&mut send, &Message::Error {
                         code: 413,
-                        message: format!("Shard exceeds retrievable size cap ({} MB)", MAX_RETRIEVABLE / (1024 * 1024)),
+                        message: format!("Shard exceeds MAX_SHARD_BYTES ({} GB)", crate::storage::MAX_SHARD_BYTES / (1024 * 1024 * 1024)),
                     }).await;
                     return Ok(());
                 }
@@ -371,6 +370,30 @@ impl ConnectionHandler {
                     };
                     Protocol::send(&mut send, &response).await?;
                 }
+            }
+
+            Message::VerifyShardRequest { shard_hash, challenge, token } => {
+                if !crate::crypto::verify_shard_token(&token, crate::crypto::ShardOp::Verify, &shard_hash, allowed_owner_id.as_ref()) {
+                    warn!("VerifyShardRequest: token verification failed for shard {}", hex::encode(shard_hash));
+                    Protocol::send(&mut send, &Message::Error {
+                        code: 401,
+                        message: "Unauthorized shard verification".to_string(),
+                    }).await?;
+                } else {
+                    let proof_hash = storage.hash_shard_with_challenge(shard_hash, challenge).await?;
+                    Protocol::send(&mut send, &Message::VerifyShardResponse { shard_hash, proof_hash }).await?;
+                }
+            }
+
+            Message::DeletePinnedObject { name, token } => {
+                let name_hash: [u8; 32] = blake3::hash(name.as_bytes()).into();
+                let success = if crate::crypto::verify_shard_token(&token, crate::crypto::ShardOp::Delete, &name_hash, allowed_owner_id.as_ref()) {
+                    storage.delete_pinned(&name).await.is_ok()
+                } else {
+                    warn!("DeletePinnedObject: token verification failed for '{}'", name);
+                    false
+                };
+                Protocol::send(&mut send, &Message::DeletePinnedResponse { success }).await?;
             }
 
             _ => {

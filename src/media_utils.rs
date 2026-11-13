@@ -301,8 +301,6 @@ fn splice_orientation_into_app1(
     if tiff.len() < 8 {
         return None;
     }
-    #[cfg(test)]
-    eprintln!("DBG enter: pos={} total={} jlen={}", app1_pos, app1_total, jpeg.len());
     let endian = Endian::parse(&tiff[0..2])?;
     if endian.u16(&tiff[2..4])? != 42 {
         return None;
@@ -456,13 +454,8 @@ fn splice_orientation_into_app1(
 
     // Everything after the original IFD0 block moves verbatim, except marked
     // pointer fields. Old TIFF offset p maps to new TIFF offset p + 12.
-    #[cfg(test)]
-    eprintln!("DBG parts: marker2+len2={} exif6={} hdr={} cnt2={} entries={} orient12={} nxt4={} rest={}",
-        4, 6, ifd0_off, 2, count*12, 12, 4, tiff.len()-e4);
     let rest_start_out = out.len();
     out.extend_from_slice(&tiff[e4..]);
-    #[cfg(test)]
-    eprintln!("DBG mid_out={} expected_final={} jlen={}", out.len(), jpeg.len()+12, jpeg.len());
     for &m in &marks {
         if m >= e4 && m + 4 <= tiff.len() {
             let old = endian.u32(&tiff[m..m + 4])? as usize;
@@ -741,6 +734,97 @@ pub async fn check_if_exists(
 
 // ---- Thumbnail Listing ------------------------------------------------------
 
+struct ThumbnailFilterOpts<'a> {
+    device_id: Option<&'a str>,
+    media_type: &'a str,
+    starred_only: bool,
+    start_date: Option<&'a str>,
+    end_date: Option<&'a str>,
+    location_lat: Option<f64>,
+    location_lon: Option<f64>,
+    location_radius_km: Option<f64>,
+    label_id: Option<i32>,
+    apply_user_id_filter: bool,
+    no_exif: bool,
+}
+
+fn configure_media_builder(
+    builder: &mut MediaQueryBuilder,
+    opts: &ThumbnailFilterOpts<'_>,
+    require_has_thumbnail: bool,
+) -> (Option<usize>, Option<usize>) {
+    if require_has_thumbnail {
+        builder.with_has_thumbnail();
+    }
+    builder.with_user_id();
+    if opts.apply_user_id_filter {
+        builder.with_user_id_filter();
+    }
+    if opts.device_id.is_some() {
+        builder.with_device_id();
+    }
+    // The `type` column is unpopulated, so media type must be scoped by table:
+    // `all` keeps both tables, `image`/`video` keep only their own and zero out
+    // the other (postgres `type` column cannot be trusted for this filter).
+    let wrong_table = (opts.media_type == media::TYPE_IMAGE && !builder.is_images_table())
+        || (opts.media_type == media::TYPE_VIDEO && !builder.is_videos_table());
+    if wrong_table {
+        builder.add_custom_condition("1 = 0".to_string());
+    }
+    if opts.starred_only {
+        builder.with_starred_only();
+    }
+    if opts.label_id.is_some() {
+        builder.with_label_id();
+    }
+    if opts.start_date.is_some() {
+        builder.with_start_date();
+    }
+    if opts.end_date.is_some() {
+        builder.with_end_date();
+    }
+    if opts.no_exif && builder.is_images_table() {
+        builder.with_no_exif();
+    }
+
+    let has_location_filter = opts.location_lat.is_some() && opts.location_lon.is_some();
+    if has_location_filter && builder.is_images_table() {
+        let radius_km = opts.location_radius_km.unwrap_or(10.0);
+        let radius_meters = radius_km * 1000.0;
+        let lon_param = builder.param_count() + 1;
+        let lat_param = builder.param_count() + 2;
+        builder.add_custom_condition("t.location IS NOT NULL".to_string());
+        builder.add_custom_condition(format!(
+            "ST_DWithin(t.location, ST_MakePoint(${}, ${})::geography, {})",
+            lon_param, lat_param, radius_meters
+        ));
+        (Some(lon_param), Some(lat_param))
+    } else {
+        (None, None)
+    }
+}
+
+fn parse_thumbnail_date_range(
+    start_date: Option<&str>,
+    end_date: Option<&str>,
+) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
+    use chrono::TimeZone;
+    let start_datetime = start_date.and_then(|d| {
+        NaiveDate::parse_from_str(d, "%Y-%m-%d")
+            .ok()
+            .and_then(|nd| nd.and_hms_opt(0, 0, 0))
+            .map(|ndt| Utc.from_utc_datetime(&ndt))
+    });
+    let end_datetime = end_date.and_then(|d| {
+        NaiveDate::parse_from_str(d, "%Y-%m-%d")
+            .ok()
+            .and_then(|nd| nd.and_hms_opt(23, 59, 59))
+            .and_then(|ndt| ndt.checked_add_signed(chrono::Duration::seconds(1)))
+            .map(|ndt| Utc.from_utc_datetime(&ndt))
+    });
+    (start_datetime, end_datetime)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn list_thumbnails(
     user_id: &str,
@@ -772,122 +856,80 @@ pub async fn list_thumbnails(
         Box::new(e) as Box<dyn std::error::Error>
     })?;
 
-    let apply_filters = |builder: &mut MediaQueryBuilder| {
-        builder.with_user_id();
-        if apply_user_id_filter {
-            builder.with_user_id_filter();
-        }
-        if device_id.is_some() {
-            builder.with_device_id();
-        }
-        // The `type` column is unpopulated, so media type must be scoped by table:
-        // `all` keeps both tables, `image`/`video` keep only their own and zero out
-        // the other (postgres `type` column cannot be trusted for this filter).
-        let wrong_table = (media_type == media::TYPE_IMAGE && !builder.is_images_table())
-            || (media_type == media::TYPE_VIDEO && !builder.is_videos_table());
-        if wrong_table {
-            builder.add_custom_condition("1 = 0".to_string());
-        }
-        if starred_only {
-            builder.with_starred_only();
-        }
-        if label_id.is_some() {
-            builder.with_label_id();
-        }
-        if start_date.is_some() {
-            builder.with_start_date();
-        }
-        if end_date.is_some() {
-            builder.with_end_date();
-        }
-        if no_exif && builder.is_images_table() {
-            builder.with_no_exif();
-        }
+    let opts = ThumbnailFilterOpts {
+        device_id,
+        media_type,
+        starred_only,
+        start_date,
+        end_date,
+        location_lat,
+        location_lon,
+        location_radius_km,
+        label_id,
+        apply_user_id_filter,
+        no_exif,
     };
-
-    let query_string;
     let has_location_filter = location_lat.is_some() && location_lon.is_some();
-    let limit_param;
-    let offset_param;
-    let mut lon_param_idx = None;
-    let mut lat_param_idx = None;
 
-    if table == "all" {
+    let (query_string, limit_param, offset_param, lon_param_idx) = if table == "all" {
         let mut img_builder = MediaQueryBuilder::new("images");
-        apply_filters(&mut img_builder);
-
-        if has_location_filter {
-            let radius_km = location_radius_km.unwrap_or(10.0);
-            let radius_meters = radius_km * 1000.0;
-            let lon_param = img_builder.param_count() + 1;
-            let lat_param = img_builder.param_count() + 2;
-            img_builder.add_custom_condition("t.location IS NOT NULL".to_string());
-            img_builder.add_custom_condition(format!(
-                "ST_DWithin(t.location, ST_MakePoint(${}, ${})::geography, {})",
-                lon_param, lat_param, radius_meters
-            ));
-            lon_param_idx = Some(lon_param);
-            lat_param_idx = Some(lat_param);
-        }
+        let (lon_param_idx, lat_param_idx) = configure_media_builder(&mut img_builder, &opts, false);
 
         let mut vid_builder = MediaQueryBuilder::new("videos");
-        apply_filters(&mut vid_builder);
+        let _ = configure_media_builder(&mut vid_builder, &opts, false);
         if has_location_filter {
             vid_builder.add_custom_condition("1 = 0".to_string());
         }
 
         let max_param =
             img_builder.param_count() + (if has_location_filter { 2 } else { 0 });
-        limit_param = max_param + 1;
-        offset_param = max_param + 2;
+        let limit_param = max_param + 1;
+        let offset_param = max_param + 2;
 
         let img_body = img_builder.build_select_body(lon_param_idx, lat_param_idx);
         let vid_body = vid_builder.build_select_body(None, None);
 
         let dir = if sort_order == Some("asc") { "ASC" } else { "DESC" };
-        let order_clause = if sort_by == Some("size") {
-            format!("ORDER BY file_size_bytes {} NULLS LAST, hash {}", dir, dir)
-        } else if sort_by == Some("quality") {
-            format!("ORDER BY aesthetic_score {} NULLS LAST, hash {}", dir, dir)
-        } else {
-            format!("ORDER BY created_at {}, hash {}", dir, dir)
+        let (img_order, vid_order, order_clause) = match sort_by {
+            Some("size") => (
+                format!("ORDER BY t.file_size_bytes {dir} NULLS LAST, t.hash {dir}"),
+                format!("ORDER BY t.file_size_bytes {dir} NULLS LAST, t.hash {dir}"),
+                format!("ORDER BY file_size_bytes {dir} NULLS LAST, hash {dir}"),
+            ),
+            Some("quality") => (
+                format!("ORDER BY t.aesthetic_score {dir} NULLS LAST, t.hash {dir}"),
+                format!("ORDER BY t.hash {dir}"),
+                format!("ORDER BY aesthetic_score {dir} NULLS LAST, hash {dir}"),
+            ),
+            _ => (
+                format!("ORDER BY t.created_at {dir}, t.hash {dir}"),
+                format!("ORDER BY t.created_at {dir}, t.hash {dir}"),
+                format!("ORDER BY created_at {dir}, hash {dir}"),
+            ),
         };
 
-        query_string = format!(
+        // Push top-(limit + offset) ordering into each branch so PostgreSQL uses
+        // per-table indexes instead of sorting all rows before deduplication.
+        let sql = format!(
             "SELECT * FROM (\
                 SELECT DISTINCT ON (hash) hash, name, created_at, place, deviceid, starred, \
                     distance_km, media_type, file_size_bytes, aesthetic_score \
-                FROM ({} UNION ALL {}) combined \
+                FROM ((\
+                    {img_body} {img_order} LIMIT (${limit_param}::bigint + ${offset_param}::bigint)\
+                ) UNION ALL (\
+                    {vid_body} {vid_order} LIMIT (${limit_param}::bigint + ${offset_param}::bigint)\
+                )) combined \
                 ORDER BY hash, aesthetic_score DESC NULLS LAST\
-            ) deduped {} LIMIT ${} OFFSET ${}",
-            img_body, vid_body, order_clause, limit_param, offset_param
+            ) deduped {order_clause} LIMIT ${limit_param} OFFSET ${offset_param}"
         );
+        (sql, limit_param, offset_param, lon_param_idx)
     } else {
         let mut builder = MediaQueryBuilder::new(table);
-        apply_filters(&mut builder);
-
-        if has_location_filter && table == "images" {
-            let radius_km = location_radius_km.unwrap_or(10.0);
-            let radius_meters = radius_km * 1000.0;
-            let lon_param = builder.param_count() + 1;
-            let lat_param = builder.param_count() + 2;
-            builder.add_custom_condition("t.location IS NOT NULL".to_string());
-            builder.add_custom_condition(format!(
-                "ST_DWithin(t.location, ST_MakePoint(${}, ${})::geography, {})",
-                lon_param, lat_param, radius_meters
-            ));
-            lon_param_idx = Some(lon_param);
-            lat_param_idx = Some(lat_param);
-        }
-
-        limit_param = builder.param_count()
-            + 1
-            + (if has_location_filter && table == "images" { 2 } else { 0 });
-        offset_param = builder.param_count()
-            + 2
-            + (if has_location_filter && table == "images" { 2 } else { 0 });
-
-        query_string = builder.build_select_query(
+        let (lon_param_idx, lat_param_idx) = configure_media_builder(&mut builder, &opts, false);
+        let loc_params = if lon_param_idx.is_some() { 2 } else { 0 };
+        let limit_param = builder.param_count() + 1 + loc_params;
+        let offset_param = builder.param_count() + 2 + loc_params;
+        let sql = builder.build_select_query(
             limit_param,
             offset_param,
             lon_param_idx,
@@ -895,25 +937,12 @@ pub async fn list_thumbnails(
             sort_by,
             sort_order,
         );
-    }
+        (sql, limit_param, offset_param, lon_param_idx)
+    };
 
     let limit_i64 = limit as i64;
     let offset_i64 = offset as i64;
-
-    use chrono::TimeZone;
-    let start_datetime: Option<DateTime<Utc>> = start_date.and_then(|d| {
-        NaiveDate::parse_from_str(d, "%Y-%m-%d")
-            .ok()
-            .and_then(|nd| nd.and_hms_opt(0, 0, 0))
-            .map(|ndt| Utc.from_utc_datetime(&ndt))
-    });
-    let end_datetime: Option<DateTime<Utc>> = end_date.and_then(|d| {
-        NaiveDate::parse_from_str(d, "%Y-%m-%d")
-            .ok()
-            .and_then(|nd| nd.and_hms_opt(23, 59, 59))
-            .and_then(|ndt| ndt.checked_add_signed(chrono::Duration::seconds(1)))
-            .map(|ndt| Utc.from_utc_datetime(&ndt))
-    });
+    let (start_datetime, end_datetime) = parse_thumbnail_date_range(start_date, end_date);
 
     let device_id_value;
     let label_id_value;
@@ -944,6 +973,7 @@ pub async fn list_thumbnails(
         params.push(&lat_value as &(dyn tokio_postgres::types::ToSql + Sync));
     }
 
+    let _ = (limit_param, offset_param);
     params.push(&limit_i64 as &(dyn tokio_postgres::types::ToSql + Sync));
     params.push(&offset_i64 as &(dyn tokio_postgres::types::ToSql + Sync));
 
@@ -1016,104 +1046,41 @@ pub async fn total_thumbnails(
         }
     };
 
-    let apply_filters = |builder: &mut MediaQueryBuilder| {
-        builder.with_has_thumbnail();
-        builder.with_user_id();
-        if apply_user_id_filter {
-            builder.with_user_id_filter();
-        }
-        if device_id.is_some() {
-            builder.with_device_id();
-        }
-        // The `type` column is unpopulated, so media type must be scoped by table:
-        // `all` keeps both tables, `image`/`video` keep only their own and zero out
-        // the other (postgres `type` column cannot be trusted for this filter).
-        let wrong_table = (media_type == media::TYPE_IMAGE && !builder.is_images_table())
-            || (media_type == media::TYPE_VIDEO && !builder.is_videos_table());
-        if wrong_table {
-            builder.add_custom_condition("1 = 0".to_string());
-        }
-        if starred_only {
-            builder.with_starred_only();
-        }
-        if label_id.is_some() {
-            builder.with_label_id();
-        }
-        if start_date.is_some() {
-            builder.with_start_date();
-        }
-        if end_date.is_some() {
-            builder.with_end_date();
-        }
-        if no_exif && builder.is_images_table() {
-            builder.with_no_exif();
-        }
+    let opts = ThumbnailFilterOpts {
+        device_id,
+        media_type,
+        starred_only,
+        start_date,
+        end_date,
+        location_lat,
+        location_lon,
+        location_radius_km,
+        label_id,
+        apply_user_id_filter,
+        no_exif,
     };
-
-    let query_string;
     let has_location_filter = location_lat.is_some() && location_lon.is_some();
-    let mut lon_param_idx = None;
 
-    if table == "all" {
+    let (query_string, lon_param_idx) = if table == "all" {
         let mut img_builder = MediaQueryBuilder::new("images");
-        apply_filters(&mut img_builder);
-
-        if has_location_filter {
-            let radius_km = location_radius_km.unwrap_or(10.0);
-            let radius_meters = radius_km * 1000.0;
-            let lon_param = img_builder.param_count() + 1;
-            let lat_param = img_builder.param_count() + 2;
-            img_builder.add_custom_condition("t.location IS NOT NULL".to_string());
-            img_builder.add_custom_condition(format!(
-                "ST_DWithin(t.location, ST_MakePoint(${}, ${})::geography, {})",
-                lon_param, lat_param, radius_meters
-            ));
-            lon_param_idx = Some(lon_param);
-        }
+        let (lon_param_idx, _) = configure_media_builder(&mut img_builder, &opts, true);
 
         let mut vid_builder = MediaQueryBuilder::new("videos");
-        apply_filters(&mut vid_builder);
+        let _ = configure_media_builder(&mut vid_builder, &opts, true);
         if has_location_filter {
             vid_builder.add_custom_condition("1 = 0".to_string());
         }
 
         let img_count_query = img_builder.build_count_query(starred_only);
         let vid_count_query = vid_builder.build_count_query(starred_only);
-        query_string = format!("SELECT ({}) + ({})", img_count_query, vid_count_query);
+        (format!("SELECT ({}) + ({})", img_count_query, vid_count_query), lon_param_idx)
     } else {
         let mut builder = MediaQueryBuilder::new(table);
-        apply_filters(&mut builder);
+        let (lon_param_idx, _) = configure_media_builder(&mut builder, &opts, true);
+        (builder.build_count_query(starred_only), lon_param_idx)
+    };
 
-        if has_location_filter && table == "images" {
-            let radius_km = location_radius_km.unwrap_or(10.0);
-            let radius_meters = radius_km * 1000.0;
-            let lon_param = builder.param_count() + 1;
-            let lat_param = builder.param_count() + 2;
-            builder.add_custom_condition("t.location IS NOT NULL".to_string());
-            builder.add_custom_condition(format!(
-                "ST_DWithin(t.location, ST_MakePoint(${}, ${})::geography, {})",
-                lon_param, lat_param, radius_meters
-            ));
-            lon_param_idx = Some(lon_param);
-        }
-
-        query_string = builder.build_count_query(starred_only);
-    }
-
-    use chrono::TimeZone;
-    let start_datetime: Option<DateTime<Utc>> = start_date.and_then(|d| {
-        NaiveDate::parse_from_str(d, "%Y-%m-%d")
-            .ok()
-            .and_then(|nd| nd.and_hms_opt(0, 0, 0))
-            .map(|ndt| Utc.from_utc_datetime(&ndt))
-    });
-    let end_datetime: Option<DateTime<Utc>> = end_date.and_then(|d| {
-        NaiveDate::parse_from_str(d, "%Y-%m-%d")
-            .ok()
-            .and_then(|nd| nd.and_hms_opt(23, 59, 59))
-            .and_then(|ndt| ndt.checked_add_signed(chrono::Duration::seconds(1)))
-            .map(|ndt| Utc.from_utc_datetime(&ndt))
-    });
+    let (start_datetime, end_datetime) = parse_thumbnail_date_range(start_date, end_date);
 
     let device_id_value;
     let label_id_value;
