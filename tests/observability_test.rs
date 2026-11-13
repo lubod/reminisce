@@ -139,3 +139,39 @@ async fn test_observability_series() {
     let body_90d: serde_json::Value = test::read_body_json(resp_90d).await;
     assert_eq!(body_90d["range"], "90d");
 }
+
+#[actix_web::test]
+#[serial]
+async fn test_configure_api_routes_admin_endpoints_not_shadowed() {
+    let (pool, _test_db) = setup_test_database_with_instance().await;
+    let main_pool = common::utils::wrap_main_pool(pool.clone());
+    let geotagging_pool = common::utils::create_geotagging_pool().await;
+    let config = common::utils::create_test_config();
+    let shared_sys: services::system_stats::SharedSystem =
+        Arc::new(Mutex::new(sysinfo::System::new_all()));
+
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(main_pool))
+            .app_data(web::Data::new(geotagging_pool))
+            .app_data(web::Data::new(config))
+            .app_data(web::Data::new(shared_sys))
+            .service(web::scope("/api").configure(reminisce::configure_api_routes))
+    ).await;
+    let token = common::utils::create_test_jwt_token().await;
+
+    for uri in ["/api/admin/alerts", "/api/admin/logs", "/api/admin/errors", "/api/admin/pipeline"] {
+        let resp = authed_get!(&app, uri, &token).await;
+        assert_eq!(resp.status(), http::StatusCode::OK, "route {uri} was shadowed or missing");
+    }
+
+    let req = test::TestRequest::post()
+        .uri("/api/image/does-not-exist/save-enhanced")
+        .insert_header(("Authorization", format!("Bearer {}", token)))
+        .set_json(serde_json::json!({ "image": "AAAA" }))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), http::StatusCode::NOT_FOUND);
+    let body: serde_json::Value = test::read_body_json(resp).await;
+    assert_eq!(body["error"], "Original image not found");
+}

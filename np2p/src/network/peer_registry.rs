@@ -36,25 +36,49 @@ impl AdmissionPolicy {
     }
 }
 
+/// How long a freshly-seen LAN address holds primary priority before yielding
+/// to a newer Tailscale/CGNAT announcement when LAN goes silent.
+const LAN_PRIMARY_HOLD_SECS: u64 = 60;
+
+#[derive(Default)]
+struct RegistryState {
+    peers: HashMap<String, PeerInfo>,
+    primary_seen: HashMap<String, Instant>,
+    known_addrs: HashMap<SocketAddr, (String, Instant)>,
+}
+
 /// Thread-safe map of discovered peers, keyed by node_id hex string.
 #[derive(Clone, Default)]
 pub struct PeerRegistry {
-    peers: Arc<RwLock<HashMap<String, PeerInfo>>>,
+    state: Arc<RwLock<RegistryState>>,
     admission: Arc<AdmissionPolicy>,
 }
 
-fn is_private_ip(ip: std::net::IpAddr) -> bool {
+fn ip_tier(ip: std::net::IpAddr) -> u8 {
     match ip {
         std::net::IpAddr::V4(v4) => {
             let octets = v4.octets();
             let is_cgnat = octets[0] == 100 && (octets[1] & 0b1100_0000) == 64;
-            v4.is_private() || v4.is_loopback() || v4.is_link_local() || is_cgnat
+            if v4.is_private() || v4.is_loopback() || v4.is_link_local() {
+                2
+            } else if is_cgnat {
+                1
+            } else {
+                0
+            }
         }
         std::net::IpAddr::V6(v6) => {
-            let first_seg = v6.segments()[0];
-            let is_ula = (first_seg & 0xfe00) == 0xfc00;
-            let is_link_local = (first_seg & 0xffc0) == 0xfe80;
-            v6.is_loopback() || is_ula || is_link_local
+            let segs = v6.segments();
+            let is_tailscale_v6 = segs[0] == 0xfd7a && segs[1] == 0x115c && segs[2] == 0xa1e0;
+            let is_ula = (segs[0] & 0xfe00) == 0xfc00;
+            let is_link_local = (segs[0] & 0xffc0) == 0xfe80;
+            if is_tailscale_v6 {
+                1
+            } else if v6.is_loopback() || is_ula || is_link_local {
+                2
+            } else {
+                0
+            }
         }
     }
 }
@@ -67,7 +91,7 @@ impl PeerRegistry {
     /// Registry that refuses to admit node IDs outside `allowed`.
     pub fn with_allow_list(allowed: Vec<String>) -> Self {
         Self {
-            peers: Arc::new(RwLock::new(HashMap::new())),
+            state: Arc::new(RwLock::new(RegistryState::default())),
             admission: Arc::new(AdmissionPolicy::AllowList(allowed)),
         }
     }
@@ -84,55 +108,92 @@ impl PeerRegistry {
             );
             return;
         }
-        let mut peers = self.peers.write().unwrap_or_else(|e| e.into_inner());
-        if let Some(existing) = peers.get_mut(&node_id) {
-            if is_private_ip(existing.addr.ip()) && !is_private_ip(addr.ip()) {
-                // Keep the working LAN address; only refresh last_seen so the
-                // entry does not expire while the coordinator keeps pinging.
-                existing.last_seen = Instant::now();
-                return;
+        let now = Instant::now();
+        let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
+        state.known_addrs.insert(addr, (node_id.clone(), now));
+
+        let replace_primary = match state.peers.get(&node_id) {
+            Some(existing) => {
+                let existing_tier = ip_tier(existing.addr.ip());
+                let new_tier = ip_tier(addr.ip());
+                if existing.addr == addr || new_tier >= existing_tier {
+                    true
+                } else if new_tier == 0 {
+                    // Never overwrite a private or Tailscale primary IP with a public one.
+                    false
+                } else {
+                    // Tailscale vs LAN: keep fresh LAN primary to avoid 10s oscillation,
+                    // failing over automatically if LAN went silent.
+                    state
+                        .primary_seen
+                        .get(&node_id)
+                        .is_none_or(|t| now.duration_since(*t).as_secs() >= LAN_PRIMARY_HOLD_SECS)
+                }
             }
+            None => true,
+        };
+
+        if let Some(existing) = state.peers.get_mut(&node_id) {
+            existing.last_seen = now;
+            if replace_primary {
+                existing.addr = addr;
+                state.primary_seen.insert(node_id, now);
+            }
+            return;
         }
-        peers.insert(
+
+        state.primary_seen.insert(node_id.clone(), now);
+        state.peers.insert(
             node_id.clone(),
             PeerInfo {
                 node_id,
                 addr,
-                last_seen: Instant::now(),
+                last_seen: now,
             },
         );
     }
 
     pub fn remove_stale(&self, timeout_secs: u64) {
-        let mut peers = self.peers.write().unwrap_or_else(|e| e.into_inner());
+        let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
+        let RegistryState {
+            peers,
+            primary_seen,
+            known_addrs,
+        } = &mut *state;
         peers.retain(|_, p| p.last_seen.elapsed().as_secs() < timeout_secs);
+        known_addrs.retain(|_, (nid, seen)| {
+            seen.elapsed().as_secs() < timeout_secs && peers.contains_key(nid)
+        });
+        primary_seen.retain(|nid, _| peers.contains_key(nid));
     }
 
     pub fn get(&self, node_id: &str) -> Option<PeerInfo> {
-        self.peers.read().unwrap_or_else(|e| e.into_inner()).get(node_id).cloned()
+        self.state.read().unwrap_or_else(|e| e.into_inner()).peers.get(node_id).cloned()
     }
 
     /// Reverse lookup: return the node_id registered at `addr`, if any.
-    /// Used to resolve the expected Node ID before dialing a peer address so the
-    /// QUIC connection can be bound to the peer's certificate.
+    /// Matches both the current primary address and any recently verified alternate interface address.
     pub fn find_by_addr(&self, addr: SocketAddr) -> Option<String> {
-        self.peers
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
+        let state = self.state.read().unwrap_or_else(|e| e.into_inner());
+        if let Some((node_id, _)) = state.known_addrs.get(&addr) {
+            return Some(node_id.clone());
+        }
+        state
+            .peers
             .iter()
             .find(|(_, p)| p.addr == addr)
             .map(|(node_id, _)| node_id.clone())
     }
 
     pub fn all(&self) -> Vec<PeerInfo> {
-        self.peers.read().unwrap_or_else(|e| e.into_inner()).values().cloned().collect()
+        self.state.read().unwrap_or_else(|e| e.into_inner()).peers.values().cloned().collect()
     }
 
     pub fn len(&self) -> usize {
-        self.peers.read().unwrap_or_else(|e| e.into_inner()).len()
+        self.state.read().unwrap_or_else(|e| e.into_inner()).peers.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.peers.read().unwrap_or_else(|e| e.into_inner()).is_empty()
+        self.state.read().unwrap_or_else(|e| e.into_inner()).peers.is_empty()
     }
 }

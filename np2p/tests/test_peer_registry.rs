@@ -213,3 +213,18 @@ fn mixed_concurrent_reads_and_writes_are_safe() {
     // No panic = concurrency is safe
     assert!(r.len() <= 50);
 }
+
+#[test]
+fn lan_and_tailscale_dual_path_retains_both_for_reverse_lookup() {
+    let r = PeerRegistry::new();
+    let lan_addr: SocketAddr = "192.168.1.155:5051".parse().unwrap();
+    let ts_addr: SocketAddr = "100.64.0.6:5051".parse().unwrap();
+
+    r.upsert("node_dual".into(), ts_addr);
+    r.upsert("node_dual".into(), lan_addr);
+    r.upsert("node_dual".into(), ts_addr);
+
+    assert_eq!(r.get("node_dual").unwrap().addr, lan_addr);
+    assert_eq!(r.find_by_addr(lan_addr).as_deref(), Some("node_dual"));
+    assert_eq!(r.find_by_addr(ts_addr).as_deref(), Some("node_dual"));
+}

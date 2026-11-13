@@ -1,6 +1,7 @@
 use actix_files;
 use actix_web::{ get, post, web, HttpRequest, HttpResponse };
 use base64::{Engine as _, engine::general_purpose};
+use futures_util::StreamExt;
 use log::{ error, info, warn };
 use serde::{Serialize, Deserialize};
 use serde_json;
@@ -1605,10 +1606,43 @@ pub async fn enhance_image(
 
 // ── Save enhanced image to library ───────────────────────────────────────────
 
+const MAX_ENHANCED_JSON_BYTES: usize = 32 * 1024 * 1024;
+
 #[derive(Deserialize, ToSchema)]
 pub struct SaveEnhancedRequest {
     /// Base64-encoded JPEG of the enhanced image (from the /enhance endpoint)
     pub image: String,
+}
+
+/// Stream a request payload into JSON up to `limit` bytes without a route-shadowing `web::scope("")`.
+async fn read_bounded_json_body<T: serde::de::DeserializeOwned>(
+    req: &HttpRequest,
+    mut payload: web::Payload,
+    limit: usize,
+) -> Result<T, actix_web::Error> {
+    if let Some(len) = req
+        .headers()
+        .get(actix_web::http::header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<usize>().ok())
+    {
+        if len > limit {
+            return Err(actix_web::error::ErrorPayloadTooLarge("Payload exceeds size limit"));
+        }
+    }
+    let mut buf = web::BytesMut::new();
+    while let Some(chunk) = payload.next().await {
+        let chunk = chunk.map_err(|e| {
+            actix_web::error::ErrorBadRequest(format!("Failed to read request body: {}", e))
+        })?;
+        if buf.len() + chunk.len() > limit {
+            return Err(actix_web::error::ErrorPayloadTooLarge("Payload exceeds size limit"));
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    serde_json::from_slice(&buf).map_err(|e| {
+        actix_web::error::ErrorBadRequest(format!("Invalid JSON payload: {}", e))
+    })
 }
 
 #[utoipa::path(
@@ -1625,7 +1659,7 @@ pub struct SaveEnhancedRequest {
 pub async fn save_enhanced_image(
     req: HttpRequest,
     path: web::Path<String>,
-    body: web::Json<SaveEnhancedRequest>,
+    payload: web::Payload,
     pool: web::Data<MainDbPool>,
     geotagging_pool: web::Data<GeotaggingDbPool>,
     config: web::Data<Config>,
@@ -1654,6 +1688,8 @@ pub async fn save_enhanced_image(
             serde_json::json!({"error": "Original image not found"})
         )),
     };
+
+    let body: SaveEnhancedRequest = read_bounded_json_body(&req, payload, MAX_ENHANCED_JSON_BYTES).await?;
 
     // Decode the base64 JPEG sent by the browser
     let image_bytes = general_purpose::STANDARD.decode(&body.image).map_err(|_| {
@@ -1766,5 +1802,41 @@ mod resolution_label_tests {
     #[test]
     fn resolution_none_without_dimensions() {
         assert_eq!(resolution_label(None, None, None), None);
+    }
+}
+
+#[cfg(test)]
+mod bounded_json_tests {
+    use super::{read_bounded_json_body, SaveEnhancedRequest};
+    use actix_web::{http::StatusCode, test, web, App, HttpRequest, HttpResponse};
+
+    async fn echo_json(req: HttpRequest, payload: web::Payload) -> Result<HttpResponse, actix_web::Error> {
+        let parsed: SaveEnhancedRequest = read_bounded_json_body(&req, payload, 128 * 1024).await?;
+        Ok(HttpResponse::Ok().json(serde_json::json!({ "len": parsed.image.len() })))
+    }
+
+    #[actix_web::test]
+    async fn accepts_large_json_above_default_32kb_and_rejects_over_limit() {
+        let app = test::init_service(App::new().route("/json", web::post().to(echo_json))).await;
+
+        let big = serde_json::json!({ "image": "A".repeat(64 * 1024) }).to_string();
+        let req = test::TestRequest::post()
+            .uri("/json")
+            .insert_header(("Content-Type", "application/json"))
+            .set_payload(big)
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: serde_json::Value = test::read_body_json(resp).await;
+        assert_eq!(body["len"], 64 * 1024);
+
+        let too_big = serde_json::json!({ "image": "A".repeat(130 * 1024) }).to_string();
+        let req2 = test::TestRequest::post()
+            .uri("/json")
+            .insert_header(("Content-Type", "application/json"))
+            .set_payload(too_big)
+            .to_request();
+        let resp2 = test::call_service(&app, req2).await;
+        assert_eq!(resp2.status(), StatusCode::PAYLOAD_TOO_LARGE);
     }
 }
