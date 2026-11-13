@@ -69,8 +69,10 @@ COPY --from=builder /app/bin/reminisce /usr/local/bin/reminisce
 COPY --from=builder /app/bin/disaster_recovery /usr/local/bin/disaster_recovery
 COPY --from=builder /app/bin/p2p_restore /usr/local/bin/p2p_restore
 
-# Set permissions
-RUN chown -R reminisce:reminisce /app
+# Pre-create runtime/volume mountpoints and set ownership so fresh named volumes
+# inherit reminisce:reminisce (uid/gid 10001) instead of root:root.
+RUN mkdir -p /app/data/p2p /app/uploaded_images /app/uploaded_videos /app/logs && \
+    chown -R reminisce:reminisce /app
 
 EXPOSE 8080
 EXPOSE 5050/udp

@@ -340,6 +340,7 @@ describe("MediaStore browsing + search actions", () => {
 
     it("clearAllFilters restores all defaults", () => {
         const s = makeStore();
+        s.searchMode = true;
         s.searchQuery = "x";
         s.filters.startDate = "a";
         s.filters.endDate = "b";
@@ -353,9 +354,11 @@ describe("MediaStore browsing + search actions", () => {
         s.filters.locationRadiusKm = 99;
         s.sortBy = "size";
         s.sortOrder = "asc";
+        api.get.mockClear();
 
         s.clearAllFilters();
 
+        expect(s.searchMode).toBe(false);
         expect(s.searchQuery).toBe("");
         expect(s.filters.startDate).toBe("");
         expect(s.filters.endDate).toBe("");
@@ -369,6 +372,7 @@ describe("MediaStore browsing + search actions", () => {
         expect(s.filters.locationRadiusKm).toBe(10);
         expect(s.sortBy).toBe("date");
         expect(s.sortOrder).toBe("desc");
+        expect(api.get.mock.calls.some(c => String(c[0]).includes("/media_thumbnails"))).toBe(true);
     });
 
     it("setMinSimilarity debounces a re-search in search mode", async () => {

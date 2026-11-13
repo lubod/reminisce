@@ -113,6 +113,7 @@ services:
       - reminisce_dev_p2p_data:/app/data/p2p
     environment:
       - RUST_LOG=info
+      - API_SECRET_KEY=${API_SECRET_KEY:-}
     command: ["/app/config.yaml"]
     restart: unless-stopped
 

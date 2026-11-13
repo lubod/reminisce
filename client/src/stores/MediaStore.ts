@@ -377,6 +377,14 @@ export class MediaStore {
     };
 
     clearAllFilters = () => {
+        if (this.similarityDebounceTimer) {
+            clearTimeout(this.similarityDebounceTimer);
+            this.similarityDebounceTimer = null;
+        }
+        if (this.locationDebounceTimer) {
+            clearTimeout(this.locationDebounceTimer);
+            this.locationDebounceTimer = null;
+        }
         runInAction(() => {
             this.searchQuery = "";
             this.filters.startDate = "";
@@ -392,6 +400,7 @@ export class MediaStore {
             this.sortBy = 'date';
             this.sortOrder = 'desc';
         });
+        this.applyFilters();
     };
 
     clearSearch = () => {
