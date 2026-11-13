@@ -261,30 +261,40 @@ async fn test_find_undersharded_respects_custom_data_shards() {
     let (pool, _db) = setup_test_database_with_instance().await;
     let client = pool.get().await.unwrap();
 
-    // Image with p2p_data_shards = 1 and a single shard -> not undersharded.
+    // Image with p2p_data_shards = 1, p2p_parity_shards = 0 and a single shard -> meets target (not undersharded).
     let uid = Uuid::parse_str(TEST_USER_ID).unwrap();
     let hash = "undersharded_override_001";
     client.execute(
-        "INSERT INTO images (user_id, deviceid, hash, name, ext, type, has_thumbnail, p2p_synced_at, p2p_data_shards)
-         VALUES ($1, 'test', $2, $3, 'jpg', 'camera', false, NOW(), 1)",
+        "INSERT INTO images (user_id, deviceid, hash, name, ext, type, has_thumbnail, p2p_synced_at, p2p_data_shards, p2p_parity_shards)
+         VALUES ($1, 'test', $2, $3, 'jpg', 'camera', false, NOW(), 1, 0)",
         &[&uid, &hash, &format!("{}.jpg", hash)],
     ).await.unwrap();
     insert_shard(&client, hash, 0).await;
 
     let results = find_undersharded_files(&pool, 100).await.expect("query should succeed");
-    assert!(!results.contains(&hash.to_string()), "1 shard meets its data_shards of 1");
+    assert!(!results.contains(&hash.to_string()), "1 shard meets its data+parity target of 1");
 
-    // Same again but with 2 required shards + 1 present -> undersharded.
-    let hash2 = "undersharded_override_002";
+    // Image with p2p_data_shards = 1, default p2p_parity_shards = 2 and 1 shard -> missing parity shards -> undersharded.
+    let hash_degraded = "undersharded_override_001b";
     client.execute(
         "INSERT INTO images (user_id, deviceid, hash, name, ext, type, has_thumbnail, p2p_synced_at, p2p_data_shards)
-         VALUES ($1, 'test', $2, $3, 'jpg', 'camera', false, NOW(), 2)",
+         VALUES ($1, 'test', $2, $3, 'jpg', 'camera', false, NOW(), 1)",
+        &[&uid, &hash_degraded, &format!("{}.jpg", hash_degraded)],
+    ).await.unwrap();
+    insert_shard(&client, hash_degraded, 0).await;
+
+    // Same again but with 2 required data shards, 0 parity + 1 present -> undersharded.
+    let hash2 = "undersharded_override_002";
+    client.execute(
+        "INSERT INTO images (user_id, deviceid, hash, name, ext, type, has_thumbnail, p2p_synced_at, p2p_data_shards, p2p_parity_shards)
+         VALUES ($1, 'test', $2, $3, 'jpg', 'camera', false, NOW(), 2, 0)",
         &[&uid, &hash2, &format!("{}.jpg", hash2)],
     ).await.unwrap();
     insert_shard(&client, hash2, 0).await;
 
     let results2 = find_undersharded_files(&pool, 100).await.expect("query should succeed");
-    assert!(results2.contains(&hash2.to_string()), "1 shard is below its data_shards of 2");
+    assert!(results2.contains(&hash_degraded.to_string()), "1 shard is below data+parity target of 3");
+    assert!(results2.contains(&hash2.to_string()), "1 shard is below its data+parity target of 2");
 }
 
 #[tokio::test]
