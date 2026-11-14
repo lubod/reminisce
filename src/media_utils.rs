@@ -746,6 +746,7 @@ struct ThumbnailFilterOpts<'a> {
     label_id: Option<i32>,
     apply_user_id_filter: bool,
     no_exif: bool,
+    wrong_orientation: bool,
 }
 
 fn configure_media_builder(
@@ -785,6 +786,9 @@ fn configure_media_builder(
     }
     if opts.no_exif && builder.is_images_table() {
         builder.with_no_exif();
+    }
+    if opts.wrong_orientation && builder.is_images_table() {
+        builder.with_wrong_orientation();
     }
 
     let has_location_filter = opts.location_lat.is_some() && opts.location_lon.is_some();
@@ -842,6 +846,7 @@ pub async fn list_thumbnails(
     label_id: Option<i32>,
     apply_user_id_filter: bool,
     no_exif: bool,
+    wrong_orientation: bool,
     sort_by: Option<&str>,
     sort_order: Option<&str>,
     pool: &web::Data<MainDbPool>,
@@ -868,6 +873,7 @@ pub async fn list_thumbnails(
         label_id,
         apply_user_id_filter,
         no_exif,
+        wrong_orientation,
     };
     let has_location_filter = location_lat.is_some() && location_lon.is_some();
 
@@ -913,7 +919,7 @@ pub async fn list_thumbnails(
         let sql = format!(
             "SELECT * FROM (\
                 SELECT DISTINCT ON (hash) hash, name, created_at, place, deviceid, starred, \
-                    distance_km, media_type, file_size_bytes, aesthetic_score \
+                    distance_km, media_type, file_size_bytes, aesthetic_score, orientation \
                 FROM ((\
                     {img_body} {img_order} LIMIT (${limit_param}::bigint + ${offset_param}::bigint)\
                 ) UNION ALL (\
@@ -1006,6 +1012,7 @@ pub async fn list_thumbnails(
                 thumbnail_url: format!("/api/thumbnail/{}", hash),
                 file_size_bytes: row.try_get("file_size_bytes").unwrap_or(None),
                 aesthetic_score: row.try_get("aesthetic_score").unwrap_or(None),
+                orientation: row.try_get("orientation").unwrap_or(None),
             }
         })
         .collect();
@@ -1028,6 +1035,7 @@ pub async fn total_thumbnails(
     label_id: Option<i32>,
     apply_user_id_filter: bool,
     no_exif: bool,
+    wrong_orientation: bool,
     pool: &web::Data<MainDbPool>,
 ) -> i64 {
     let client = match pool.0.get().await {
@@ -1058,6 +1066,7 @@ pub async fn total_thumbnails(
         label_id,
         apply_user_id_filter,
         no_exif,
+        wrong_orientation,
     };
     let has_location_filter = location_lat.is_some() && location_lon.is_some();
 

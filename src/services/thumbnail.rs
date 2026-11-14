@@ -410,6 +410,9 @@ pub struct PaginationQuery {
     /// EXIF orientation available, so these rely on AI detect / manual review).
     #[serde(default)]
     pub no_exif: bool,
+    /// Only images with non-normal orientation (`orientation IS NOT NULL AND orientation > 1`).
+    #[serde(default)]
+    pub wrong_orientation: bool,
 }
 
 fn default_page() -> usize {
@@ -447,6 +450,7 @@ pub struct ThumbnailItem {
     pub thumbnail_url: String,
     pub file_size_bytes: Option<i64>,
     pub aesthetic_score: Option<f32>,
+    pub orientation: Option<i16>,
 }
 
 #[derive(Serialize, Deserialize, ToSchema)]
@@ -513,6 +517,7 @@ async fn list_media_thumbnails(
         query.label_id,
         apply_user_id_filter,
         query.no_exif,
+        query.wrong_orientation,
         &pool
     ).await;
 
@@ -533,6 +538,7 @@ async fn list_media_thumbnails(
             query.label_id,
             apply_user_id_filter,
             query.no_exif,
+            query.wrong_orientation,
             query.sort_by.as_deref(),
             query.sort_order.as_deref(),
             &pool

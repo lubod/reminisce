@@ -103,6 +103,14 @@ impl MediaQueryBuilder {
         self.conditions.push("t.exif IS NULL".to_string());
     }
 
+    /// Only include images whose detected/stored orientation is non-normal (> 1).
+    /// Valid EXIF-style orientation values are 1..=8 where 1 is upright; values > 1
+    /// indicate a rotated or flipped photo needing review or transform. Images table only.
+    pub fn with_wrong_orientation(&mut self) {
+        self.conditions
+            .push("t.orientation IS NOT NULL AND t.orientation > 1".to_string());
+    }
+
     /// True when this builder targets the images table (only images have an `exif` column).
     pub fn is_images_table(&self) -> bool {
         self.table == tables::IMAGES
@@ -158,7 +166,7 @@ impl MediaQueryBuilder {
                      CASE WHEN s.hash IS NOT NULL THEN true ELSE false END as starred, \
                      ST_Distance(t.location, ST_MakePoint(${}, ${})::geography) / 1000.0 as distance_km, \
                      'image' as media_type, t.file_size_bytes::bigint as file_size_bytes, \
-                     t.aesthetic_score",
+                     t.aesthetic_score, t.orientation",
                     lon_p, lat_p
                 )
             } else {
@@ -166,14 +174,14 @@ impl MediaQueryBuilder {
                  CASE WHEN s.hash IS NOT NULL THEN true ELSE false END as starred, \
                  NULL::double precision as distance_km, \
                  'image' as media_type, t.file_size_bytes::bigint as file_size_bytes, \
-                 t.aesthetic_score".to_string()
+                 t.aesthetic_score, t.orientation".to_string()
             }
         } else {
             "SELECT t.hash, t.name, t.created_at, NULL as place, t.deviceid, \
              CASE WHEN s.hash IS NOT NULL THEN true ELSE false END as starred, \
              NULL::double precision as distance_km, \
              'video' as media_type, t.file_size_bytes as file_size_bytes, \
-             NULL::real as aesthetic_score".to_string()
+             NULL::real as aesthetic_score, NULL::smallint as orientation".to_string()
         };
 
         let where_clause = self.build_where_clause();
@@ -421,6 +429,21 @@ mod tests {
         assert!(query.contains("t.created_at < $3"));
         assert!(query.contains("t.exif IS NULL"));
         assert!(query.contains("LIMIT $4 OFFSET $5"));
+    }
+
+    #[test]
+    fn test_wrong_orientation_filter() {
+        let mut builder = MediaQueryBuilder::new(tables::IMAGES);
+        builder.with_user_id();
+        builder.with_no_exif();
+        builder.with_wrong_orientation();
+        let query = builder.build_select_query(2, 3, None, None, None, None);
+        assert!(query.contains("t.exif IS NULL"));
+        assert!(query.contains("t.orientation IS NOT NULL AND t.orientation > 1"));
+        assert!(query.contains("t.orientation"));
+
+        let count = builder.build_count_query(false);
+        assert!(count.contains("t.orientation IS NOT NULL AND t.orientation > 1"));
     }
 
     #[test]

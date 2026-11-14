@@ -25,7 +25,7 @@ Backend (Rust) ──HTTP POST / :8081 (X-API-Key)──▶ Flask (ai_service.py
 ## Hardware & Acceleration Auto-Detection
 The service automatically detects and configures available hardware accelerators upon startup:
 1. NVIDIA GPU via PyTorch CUDA.
-2. AMD GPU via ROCm (`hipblas_v2_shim.c`).
+2. AMD GPU natively via ROCm (`gfx1150` / RDNA3.5+ without `HSA_OVERRIDE_GFX_VERSION`; InsightFace runs on CPU `onnxruntime`).
 3. Apple Silicon GPU via Metal Performance Shaders (MPS).
 4. CPU fallback with multi-threading.
 
@@ -44,7 +44,7 @@ HTTP is kept **only** for container healthchecks. All inference moved to gRPC.
 |-----|---------|----------------|
 | `EmbedImage` | Image vector embedding (1152-dim) | SigLIP2 |
 | `EmbedText` | Text query vector embedding (1152-dim) | SigLIP2 |
-| `DescribeImage` | Visual scene description (`use_qwen` selects model) | SmolVLM / Qwen2.5-VL |
+| `DescribeImage` | Visual scene description (`use_qwen` or `ENABLE_QWEN_VLM=true` selects Qwen VLM) | Qwen3-VL-2B / SmolVLM |
 | `DetectFaces` | Face detection, bounding box & embeddings | InsightFace |
 | `QualityScore` | Aesthetic quality & sharpness scoring | SigLIP2 + OpenCV |
 | `EnhanceImage` | Photo enhancement (exposure, denoise, restore, sharpen) | OpenCV |

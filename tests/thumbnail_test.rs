@@ -818,3 +818,86 @@ async fn test_get_thumbnail_http_endpoint() {
     let resp = test::call_service(&app, req).await;
     assert_eq!(resp.status(), http::StatusCode::NOT_FOUND);
 }
+
+#[actix_web::test]
+#[serial]
+async fn test_list_image_thumbnails_wrong_orientation_filter() {
+    let (pool, _test_db) = setup_test_database_with_instance().await;
+    let client = pool.get().await.expect("Failed to get client from pool");
+    let config = common::utils::create_test_config();
+    let user_id = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+    let now = chrono::Utc::now();
+
+    let rows: [(&str, Option<&str>, Option<i16>); 4] = [
+        ("wo_no_exif_upright", None, Some(1)),
+        ("wo_no_exif_rotated", None, Some(6)),
+        ("wo_no_exif_unscanned", None, None),
+        ("wo_has_exif_rotated", Some("{\"Orientation\":6}"), Some(6)),
+    ];
+    for (hash, exif, orientation) in &rows {
+        client
+            .execute("DELETE FROM images WHERE hash = $1", &[hash])
+            .await
+            .ok();
+        client
+            .execute(
+                "INSERT INTO images (user_id, hash, name, exif, orientation, created_at, type, deviceid, ext, has_thumbnail) \
+                 VALUES ($1, $2, $3, $4, $5, $6, 'camera', 'dev1', 'jpg', true)",
+                &[&user_id, hash, hash, exif, orientation, &now],
+            )
+            .await
+            .expect("Failed to insert test row");
+    }
+
+    let main_pool = common::utils::wrap_main_pool(pool.clone());
+    let geotagging_pool = common::utils::create_geotagging_pool().await;
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(main_pool))
+            .app_data(web::Data::new(geotagging_pool))
+            .app_data(web::Data::new(config))
+            .service(list_image_thumbnails),
+    )
+    .await;
+    let token = common::utils::create_test_jwt_token().await;
+
+    // Without wrong_orientation: all 3 EXIF-less images are returned
+    let req = test::TestRequest::get()
+        .uri("/image_thumbnails?page=1&limit=50&no_exif=true")
+        .insert_header(("Authorization", format!("Bearer {}", token)))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), http::StatusCode::OK);
+    let body: serde_json::Value = test::read_body_json(resp).await;
+    let all_hashes: Vec<&str> = body["thumbnails"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|t| t["hash"].as_str())
+        .collect();
+    assert!(all_hashes.contains(&"wo_no_exif_upright"));
+    assert!(all_hashes.contains(&"wo_no_exif_rotated"));
+    assert!(all_hashes.contains(&"wo_no_exif_unscanned"));
+    assert!(!all_hashes.contains(&"wo_has_exif_rotated"));
+
+    // With wrong_orientation=true: only the EXIF-less image with orientation > 1
+    let req = test::TestRequest::get()
+        .uri("/image_thumbnails?page=1&limit=50&no_exif=true&wrong_orientation=true")
+        .insert_header(("Authorization", format!("Bearer {}", token)))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), http::StatusCode::OK);
+    let body: serde_json::Value = test::read_body_json(resp).await;
+    assert_eq!(body["total"], 1);
+    let filtered = body["thumbnails"].as_array().unwrap();
+    assert_eq!(filtered.len(), 1);
+    assert_eq!(filtered[0]["hash"], "wo_no_exif_rotated");
+    assert_eq!(filtered[0]["orientation"], 6);
+
+    for (hash, _, _) in &rows {
+        client
+            .execute("DELETE FROM images WHERE hash = $1", &[hash])
+            .await
+            .ok();
+    }
+}

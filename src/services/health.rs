@@ -44,10 +44,17 @@ pub async fn health_check(
     geo_pool: web::Data<GeotaggingDbPool>,
     config: web::Data<Config>,
 ) -> impl Responder {
-    // Check if the requester is authenticated as admin
-    let is_admin = match crate::auth_utils::authenticate_request(&req, "health_check", config.get_api_key()).await {
-        Ok(claims) => claims.role == "admin",
-        Err(_) => false,
+    // Check if the requester is authenticated as admin. Only validate credentials
+    // when provided so Docker HEALTHCHECK and unauthenticated probes don't spam WARN logs.
+    let has_credentials = req.headers().contains_key(actix_web::http::header::AUTHORIZATION)
+        || req.cookie("access_token").is_some();
+    let is_admin = if has_credentials {
+        match crate::auth_utils::authenticate_request(&req, "health_check", config.get_api_key()).await {
+            Ok(claims) => claims.role == "admin",
+            Err(_) => false,
+        }
+    } else {
+        false
     };
 
     let database = match main_pool.0.get().await {

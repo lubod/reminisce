@@ -121,7 +121,12 @@ beforeEach(() => {
             const limit = Number(u.searchParams.get("limit") || 50);
             const start = (page - 1) * limit;
             if (u.searchParams.get("no_exif") === "true") {
-                return { data: { thumbnails: api.state.noExifPool.slice(start, start + limit), total: api.state.totalNoExif, page, limit }, status: 200 };
+                const wrongOnly = u.searchParams.get("wrong_orientation") === "true";
+                const pool = wrongOnly
+                    ? api.state.noExifPool.filter(i => (i.orientation ?? 1) > 1)
+                    : api.state.noExifPool;
+                const total = wrongOnly ? pool.length : api.state.totalNoExif;
+                return { data: { thumbnails: pool.slice(start, start + limit), total, page, limit }, status: 200 };
             }
             return { data: { thumbnails: api.state.imagePool.slice(start, start + limit), total: api.state.totalImage, page, limit }, status: 200 };
         } },
@@ -188,20 +193,62 @@ describe("MediaStore all-media fetches", () => {
 });
 
 describe("MediaStore no-EXIF + loadMore", () => {
-    it("fetchNoExifImages requests the no_exif page and tracks hasMore", async () => {
-        api.state.noExifPool = [item({}), item({})];
-        api.state.totalNoExif = 2;
+    it("fetchNoExifImages defaults to wrong_orientation=true and tracks hasMore", async () => {
+        api.state.noExifPool = [
+            item({ hash: "rot1", orientation: 6 }),
+            item({ hash: "upright1", orientation: 1 }),
+            item({ hash: "rot2", orientation: 3 }),
+        ];
+        api.state.totalNoExif = 3;
         const s = makeStore();
+        expect(s.noExifWrongOrientationOnly).toBe(true);
         await s.fetchNoExifImages(1, 1);
         const called = api.get.mock.calls.find(c => String(c[0]).includes("/image_thumbnails"))!;
-        expect(new URL(String(called[0]), "http://localhost").searchParams.get("no_exif")).toBe("true");
-        expect(s.noExifImages).toHaveLength(1);
+        const sp = new URL(String(called[0]), "http://localhost").searchParams;
+        expect(sp.get("no_exif")).toBe("true");
+        expect(sp.get("wrong_orientation")).toBe("true");
+        expect(s.noExifImages.map(i => i.hash)).toEqual(["rot1"]);
+        expect(s.totalNoExif).toBe(2);
         expect(s.noExifHasMore).toBe(true);
 
         await s.fetchNoExifImages(2, 1, true);
-        expect(s.noExifImages).toHaveLength(2);
+        expect(s.noExifImages.map(i => i.hash)).toEqual(["rot1", "rot2"]);
         expect(s.noExifHasMore).toBe(false);
         expect(s.isLoadingNoExif).toBe(false);
+    });
+
+    it("setNoExifWrongOrientationOnly toggles filter and omits wrong_orientation when disabled", async () => {
+        api.state.noExifPool = [
+            item({ hash: "rot1", orientation: 6 }),
+            item({ hash: "upright1", orientation: 1 }),
+        ];
+        api.state.totalNoExif = 2;
+        const s = makeStore();
+        await s.setNoExifWrongOrientationOnly(false);
+        expect(s.noExifWrongOrientationOnly).toBe(false);
+        const called = api.get.mock.calls.find(c => String(c[0]).includes("/image_thumbnails"))!;
+        const sp = new URL(String(called[0]), "http://localhost").searchParams;
+        expect(sp.get("no_exif")).toBe("true");
+        expect(sp.has("wrong_orientation")).toBe(false);
+        expect(s.noExifImages.map(i => i.hash)).toEqual(["rot1", "upright1"]);
+        expect(s.totalNoExif).toBe(2);
+    });
+
+    it("fetchNoExifImages discards stale out-of-order responses", async () => {
+        let resolveFirst!: (val: unknown) => void;
+        const firstPromise = new Promise(r => { resolveFirst = r; });
+        api.get.mockImplementationOnce(() => firstPromise as never);
+        api.state.noExifPool = [item({ hash: "new1", orientation: 1 })];
+        api.state.totalNoExif = 1;
+
+        const s = makeStore();
+        const req1 = s.fetchNoExifImages(1, 50, false);
+        const req2 = s.setNoExifWrongOrientationOnly(false);
+        await req2;
+        resolveFirst({ data: { thumbnails: [item({ hash: "stale1", orientation: 6 })], total: 1, page: 1, limit: 50 }, status: 200 });
+        await req1;
+
+        expect(s.noExifImages.map(i => i.hash)).toEqual(["new1"]);
     });
 
     it("fetchNoExifImages failure surfaces an error", async () => {
@@ -640,12 +687,15 @@ describe("MediaStore updateImageOrientation and updateImagePlace", () => {
             orientation: 1,
             orientation_label: "Landscape",
         };
-        s.allMedia = [item({ hash: "h1", thumbnailUrl: "/api/thumbnail/h1" })];
+        s.allMedia = [item({ hash: "h1", orientation: 1, thumbnailUrl: "/api/thumbnail/h1" })];
+        s.noExifImages = [item({ hash: "h1", orientation: 1, thumbnailUrl: "/api/thumbnail/h1" })];
 
         const res = await s.updateImageOrientation("h1", "cw");
         expect(res.orientation).toBe(6);
         expect(s.imageMetadata.orientation).toBe(6);
         expect(s.imageMetadata.orientation_label).toBe("Portrait");
+        expect(s.allMedia[0].orientation).toBe(6);
+        expect(s.noExifImages[0].orientation).toBe(6);
         expect(s.allMedia[0].thumbnailUrl).toContain("/api/thumbnail/h1");
         expect(s.allMedia[0].thumbnailUrl).toContain("v=");
         expect(s.fullMediaUrl).toContain("/api/image/h1");

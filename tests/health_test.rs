@@ -77,6 +77,36 @@ async fn test_health_check_response_structure() {
     assert!(timestamp.contains("T"), "Timestamp should be in ISO 8601 format");
 }
 
+/// Test unauthenticated health check (e.g. Docker HEALTHCHECK) succeeds and omits admin-only fields
+#[actix_web::test]
+#[serial]
+async fn test_health_check_unauthenticated() {
+    common::init_log();
+    let (pool, _test_db) = setup_test_database_with_instance().await;
+    let main_pool = common::utils::wrap_main_pool(pool.clone());
+    let geotagging_pool = common::utils::create_geotagging_pool().await;
+    let config = common::utils::create_test_config();
+
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(main_pool))
+            .app_data(web::Data::new(geotagging_pool))
+            .app_data(web::Data::new(config))
+            .service(health_check)
+    ).await;
+
+    let req = test::TestRequest::get().uri("/health").to_request();
+    let response = test::call_service(&app, req).await;
+    assert_eq!(response.status(), http::StatusCode::OK);
+
+    let body: serde_json::Value = test::read_body_json(response).await;
+    assert_eq!(body["status"], "healthy");
+    assert!(body["timestamp"].is_string());
+    assert!(body.get("database").is_none(), "Unauthenticated /health must omit database details");
+    assert!(body.get("geotagging_database").is_none(), "Unauthenticated /health must omit geotagging_database details");
+    assert!(body.get("ai_service").is_none(), "Unauthenticated /health must omit ai_service details");
+}
+
 /// Test ping endpoint returns OK
 #[actix_web::test]
 #[serial]

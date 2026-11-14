@@ -13,7 +13,9 @@ services:
       - "render"   # Standard Linux render group for bare-metal / VM hosts
       - "video"    # Standard Linux video group for bare-metal / VM hosts
     environment:
-      # Use gfx1100 precompiled kernels for RDNA 3 / 3.5 APUs (Radeon 890M / gfx1150)
-      - HSA_OVERRIDE_GFX_VERSION=11.0.0
+      # Native ROCm gfx1150 works directly on ROCm 7.2+ without HSA_OVERRIDE_GFX_VERSION
       - TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1
       - ROCBLAS_USE_HIPBLASLT=1
+      # Optional: use higher-accuracy Qwen3-VL-2B-Instruct (~4.3 GB) instead of SmolVLM-500M
+      # - ENABLE_QWEN_VLM=true
+      # - VLM_MODEL_NAME=Qwen/Qwen3-VL-2B-Instruct

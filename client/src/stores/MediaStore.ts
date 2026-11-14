@@ -33,6 +33,7 @@ export interface MediaItem {
     thumbnail_url?: string;
     file_size_bytes?: number;
     aesthetic_score?: number;
+    orientation?: number | null;
 }
 
 export type SearchType = 'semantic' | 'text' | 'hybrid';
@@ -90,6 +91,7 @@ export class MediaStore {
     // starts we bump it, and any in-flight response whose captured seq is stale is
     // discarded so out-of-order responses can't overwrite newer results.
     private requestSeq = 0;
+    private noExifRequestSeq = 0;
     private locationRequestSeq = 0;
     private metadataRequestSeq = 0;
     
@@ -115,6 +117,7 @@ export class MediaStore {
     totalNoExif: number = 0;
     noExifHasMore: boolean = true;
     isLoadingNoExif: boolean = false;
+    noExifWrongOrientationOnly: boolean = true;
 
     // View Preferences
     allMediaGroupBy: 'day' | 'place' = 'day';
@@ -548,10 +551,20 @@ export class MediaStore {
     };
 
     // "Orientation check" tab — images with no EXIF metadata
+    setNoExifWrongOrientationOnly = async (wrongOnly: boolean) => {
+        if (this.noExifWrongOrientationOnly === wrongOnly) return;
+        this.noExifWrongOrientationOnly = wrongOnly;
+        this.noExifImages = [];
+        this.noExifCurrentPage = 1;
+        this.totalNoExif = 0;
+        this.noExifHasMore = true;
+        await this.fetchNoExifImages(1, 50, false);
+    };
+
     fetchNoExifImages = async (page: number = 1, limit: number = 50, append: boolean = false) => {
-        const seq = this.requestSeq;
-        if (append) this.isLoadingNoExif = true;
-        else this.rootStore.uiStore.setLoading(true);
+        const seq = ++this.noExifRequestSeq;
+        this.isLoadingNoExif = true;
+        if (!append) this.rootStore.uiStore.setLoading(true);
 
         try {
             const params = new URLSearchParams({
@@ -559,12 +572,15 @@ export class MediaStore {
                 limit: limit.toString(),
                 no_exif: "true"
             });
+            if (this.noExifWrongOrientationOnly) {
+                params.set("wrong_orientation", "true");
+            }
             const response = await axios.get<ThumbnailsResponse>(`/image_thumbnails?${params}`);
             const withUrls = this.attachThumbnails(response.data.thumbnails.map(t => ({
                 ...t,
                 thumbnailUrl: t.thumbnail_url ?? undefined
             })));
-            if (seq !== this.requestSeq) return;
+            if (seq !== this.noExifRequestSeq) return;
 
             runInAction(() => {
                 this.noExifImages = append ? [...this.noExifImages, ...withUrls] : withUrls;
@@ -573,12 +589,16 @@ export class MediaStore {
                 this.noExifHasMore = this.noExifImages.length < response.data.total;
             });
         } catch {
-            this.rootStore.uiStore.setError("Failed to fetch no-EXIF images");
+            if (seq === this.noExifRequestSeq) {
+                this.rootStore.uiStore.setError("Failed to fetch no-EXIF images");
+            }
         } finally {
-            runInAction(() => {
-                this.isLoadingNoExif = false;
-                this.rootStore.uiStore.setLoading(false);
-            });
+            if (seq === this.noExifRequestSeq) {
+                runInAction(() => {
+                    this.isLoadingNoExif = false;
+                    if (!append) this.rootStore.uiStore.setLoading(false);
+                });
+            }
         }
     };
 
@@ -726,6 +746,7 @@ export class MediaStore {
                 const updateList = (list: MediaItem[]) => {
                     for (const item of list) {
                         if (item.hash === hash) {
+                            item.orientation = orientation;
                             item.thumbnailUrl = `/api/thumbnail/${hash}?v=${v}`;
                         }
                     }

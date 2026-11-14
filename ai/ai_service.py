@@ -2,19 +2,11 @@
 """
 Unified AI Service
 
-Provides REST API endpoints for:
+HTTP (:8081) is kept for container healthchecks; inference is served over gRPC (:50051):
 - Image and text embeddings using SigLIP2
-- Image descriptions using Qwen2.5-VL-3B-Instruct (quality) or SmolVLM-500M (fast)
-- Face detection using InsightFace
-
-Endpoints:
-- POST /embed/image  - Generate embedding from base64 encoded image
-- POST /embed/text   - Generate embedding from text query
-- POST /describe      - Generate image description (SmolVLM-500M, ~5.6s)
-- POST /describe/qwen - Generate image description (Qwen2.5-VL-3B, ~29s, higher quality)
-- POST /detect       - Detect faces in image
-- GET  /health       - Health check endpoint
-- GET  /gpu-metrics  - ROCm GPU metrics (used by the app's /system page)
+- Image descriptions using Qwen VLM (default Qwen3-VL-2B-Instruct when enabled) or SmolVLM-500M
+- Face detection using InsightFace (CPUExecutionProvider)
+- Image orientation classification using BEiT-Base
 """
 
 import hmac
@@ -47,12 +39,22 @@ siglip_model = None
 siglip_processor = None
 vlm_model = None
 vlm_processor = None
+vlm_model_name = os.environ.get("VLM_MODEL_NAME", "Qwen/Qwen3-VL-2B-Instruct")
 smolvlm_model = None
 smolvlm_processor = None
+smolvlm_model_name = os.environ.get("SMOLVLM_MODEL_NAME", "HuggingFaceTB/SmolVLM-500M-Instruct")
+prefer_qwen = False
 face_app = None
 orientation_model = None
 orientation_processor = None
 device = None
+
+
+def _parse_bool_env(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
 def detect_device():
@@ -84,7 +86,8 @@ models_loaded = False
 
 def load_models():
     """Load all AI models on startup"""
-    global models_loaded, siglip_model, siglip_processor, vlm_model, vlm_processor, smolvlm_model, smolvlm_processor, face_app, device
+    global models_loaded, siglip_model, siglip_processor, vlm_model, vlm_processor, vlm_model_name
+    global smolvlm_model, smolvlm_processor, smolvlm_model_name, prefer_qwen, face_app, device
     global orientation_model, orientation_processor
     if models_loaded:
         return
@@ -147,17 +150,17 @@ def load_models():
         logger.error(f"Failed to load SigLIP2 model: {e}")
         raise
 
-    # Gate heavy Qwen2.5-VL-3B (~6 GB) behind ENABLE_QWEN_VLM=true so CPU/small hosts don't OOM;
-    # SmolVLM-500M serves all default captions unless Qwen is explicitly enabled.
-    enable_qwen = os.environ.get("ENABLE_QWEN_VLM", "").strip().lower() in ("1", "true", "yes")
+    # Gate Qwen VLM behind ENABLE_QWEN_VLM=true so CPU/small hosts stay lightweight with SmolVLM-500M.
+    enable_qwen = _parse_bool_env("ENABLE_QWEN_VLM", default=False)
+    vlm_model_name = os.environ.get("VLM_MODEL_NAME", "Qwen/Qwen3-VL-2B-Instruct")
     if enable_qwen:
-        logger.info("Loading Qwen2.5-VL-3B-Instruct model for descriptions...")
-        vlm_model_name = os.environ.get("VLM_MODEL_NAME", "Qwen/Qwen2.5-VL-3B-Instruct")
+        logger.info(f"Loading Qwen VLM model for descriptions: {vlm_model_name}...")
         try:
-            from transformers import Qwen2_5_VLForConditionalGeneration
-            vlm_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+            from transformers import AutoModelForImageTextToText
+            vlm_dtype = torch.float16 if device == "cuda" else torch.float32
+            vlm_model = AutoModelForImageTextToText.from_pretrained(
                 vlm_model_name,
-                torch_dtype=torch.float16 if device == "cuda" else torch.float32,
+                torch_dtype=vlm_dtype,
                 attn_implementation="sdpa",
             ).to(device)
             # Cap visual tokens aggressively: 256 tokens max (~200K pixels)
@@ -168,29 +171,37 @@ def load_models():
                 max_pixels=256 * 28 * 28,
             )
             vlm_model.eval()
-            logger.info(f"Qwen2.5-VL-3B-Instruct loaded on {device} (bfloat16, sdpa, max_pixels=256)")
+            logger.info(f"{vlm_model_name} loaded on {device} (dtype={vlm_dtype}, sdpa, max_pixels=256)")
         except Exception as e:
-            logger.error(f"Failed to load Qwen2.5-VL model: {e}")
+            vlm_model = None
+            vlm_processor = None
+            logger.error(f"Failed to load Qwen VLM model {vlm_model_name}: {e}", exc_info=True)
     else:
-        logger.info("Skipping Qwen2.5-VL-3B load (set ENABLE_QWEN_VLM=true to enable)")
+        logger.info("Skipping Qwen VLM load (set ENABLE_QWEN_VLM=true to enable)")
 
-    # Load SmolVLM-500M for fast descriptions
-    # 500M params — ~64 visual tokens per patch, target <5s per image
-    logger.info("Loading SmolVLM-500M-Instruct model for fast descriptions...")
+    prefer_qwen = _parse_bool_env("PREFER_QWEN_VLM", default=(vlm_model is not None))
+
+    # Load SmolVLM-500M for fast/lightweight descriptions unless Qwen VLM is already loaded and
+    # ENABLE_SMOLVLM wasn't explicitly requested. Still loads automatically as fallback if Qwen fails.
     smolvlm_model_name = os.environ.get("SMOLVLM_MODEL_NAME", "HuggingFaceTB/SmolVLM-500M-Instruct")
-    try:
-        smolvlm_dtype = torch.float16 if device == "cuda" else torch.float32
-        smolvlm_model = SmolVLMForConditionalGeneration.from_pretrained(
-            smolvlm_model_name,
-            torch_dtype=smolvlm_dtype,
-        ).to(device)
-        smolvlm_processor = AutoProcessor.from_pretrained(smolvlm_model_name)
-        smolvlm_model.eval()
-        logger.info(f"SmolVLM-500M-Instruct loaded successfully on {device} (dtype={smolvlm_dtype})")
-    except Exception as e:
-        smolvlm_model = None
-        smolvlm_processor = None
-        logger.error(f"Failed to load SmolVLM model: {e}", exc_info=True)
+    enable_smolvlm = _parse_bool_env("ENABLE_SMOLVLM", default=(vlm_model is None))
+    if enable_smolvlm:
+        logger.info(f"Loading SmolVLM model for fast descriptions: {smolvlm_model_name}...")
+        try:
+            smolvlm_dtype = torch.float16 if device == "cuda" else torch.float32
+            smolvlm_model = SmolVLMForConditionalGeneration.from_pretrained(
+                smolvlm_model_name,
+                torch_dtype=smolvlm_dtype,
+            ).to(device)
+            smolvlm_processor = AutoProcessor.from_pretrained(smolvlm_model_name)
+            smolvlm_model.eval()
+            logger.info(f"{smolvlm_model_name} loaded successfully on {device} (dtype={smolvlm_dtype})")
+        except Exception as e:
+            smolvlm_model = None
+            smolvlm_processor = None
+            logger.error(f"Failed to load SmolVLM model: {e}", exc_info=True)
+    else:
+        logger.info("Skipping SmolVLM load (Qwen VLM active and ENABLE_SMOLVLM is not true)")
 
     # Load InsightFace for face detection
     # Use CPU provider — ROCm ONNX crashes with SIGSEGV on gfx1150 (RDNA3 iGPU)
@@ -260,7 +271,8 @@ def health():
     return jsonify({
         'status': 'healthy',
         'embedding_model': 'google/siglip2-so400m-patch14-384',
-        'vlm_model': 'Qwen/Qwen2.5-VL-3B-Instruct',
+        'vlm_model': vlm_model_name,
+        'smolvlm_model': smolvlm_model_name,
         'face_model': 'insightface/buffalo_l',
         'orientation_model': 'amaye15/Beit-Base-Image-Orientation-Fixer',
         'device': device,
@@ -268,6 +280,7 @@ def health():
         'face_embedding_dimension': 512,
         'models_loaded': {
             'siglip2': siglip_model is not None,
+            'qwen_vl': vlm_model is not None,
             'qwen25_vl': vlm_model is not None,
             'smolvlm': smolvlm_model is not None,
             'insightface': face_app is not None,
@@ -343,7 +356,7 @@ def gpu_metrics():
 def index():
     """API information endpoint"""
     return jsonify({
-        'service': 'Unified AI Service (SigLIP2 + Qwen2.5-VL + InsightFace)',
+        'service': 'Unified AI Service (SigLIP2 + Qwen VLM / SmolVLM + InsightFace + BEiT)',
         'version': '3.0.0',
         'note': 'Inference is served over gRPC on port 50051 (see proto/ai_service.proto). HTTP is kept only for health checks.',
         'endpoints': {
@@ -352,7 +365,7 @@ def index():
         'grpc': {
             'EmbedImage': 'Image embedding (1152-dim)',
             'EmbedText': 'Text embedding (1152-dim)',
-            'DescribeImage': 'Image description (SmolVLM / Qwen2.5-VL)',
+            'DescribeImage': 'Image description (Qwen VLM / SmolVLM)',
             'DetectFaces': 'Face detection + embeddings (512-dim)',
             'QualityScore': 'Aesthetic + sharpness scoring',
             'EnhanceImage': 'Fix exposure, denoise, restore old photos',

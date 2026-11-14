@@ -124,7 +124,7 @@ The backend talks to the AI service over **gRPC (`:50051`)** for all inference (
 
 ### Model Inventory
 - **SigLIP 2** (`google/siglip2-so400m-patch14-384`): Generates 1152-dimensional multi-modal vector embeddings for image-to-text and image-to-image semantic search.
-- **SmolVLM-500M & Qwen2.5-VL-3B**: Generates visual scene descriptions (captions). Visual tokens are capped at 256 (`max_pixels=256*28*28`) for fast processing.
+- **SmolVLM-500M & Qwen VLM (`Qwen3-VL-2B-Instruct` default when `ENABLE_QWEN_VLM=true`)**: Generates visual scene descriptions (captions). Visual tokens are capped at 256 (`max_pixels=256*28*28`) for fast processing.
 - **InsightFace** (`buffalo_l`): Extracts bounding boxes `[x, y, w, h]` and 512-dimensional face recognition vectors on CPU.
 
 ### Description Processing Resilience (`ai_worker.rs` / `ai_client.rs`)

@@ -222,20 +222,20 @@ class AIServiceServicer(ai_service_pb2_grpc.AIServiceServicer):
         if image.mode != 'RGB':
             image = image.convert('RGB')
 
-        use_qwen = request.use_qwen
         _ai = get_ai_service()
+        use_qwen = request.use_qwen or (_ai.prefer_qwen and _ai.vlm_model is not None)
         if not use_qwen and _ai.smolvlm_model is None:
-            # Fast-description model unavailable (e.g. its startup load failed).
-            # Transparently fall back to Qwen2.5-VL rather than failing the request.
+            # Fast-description model unavailable (e.g. skipped or startup load failed).
+            # Transparently fall back to Qwen VLM rather than failing the request.
             if _ai.vlm_model is None:
                 context.abort(grpc.StatusCode.UNAVAILABLE, "SmolVLM model not loaded")
-            logger.warning("SmolVLM unavailable — falling back to Qwen2.5-VL for this description")
+            logger.warning("SmolVLM unavailable — falling back to Qwen VLM for this description")
             use_qwen = True
         if use_qwen:
             if _ai.vlm_model is None:
                 context.abort(grpc.StatusCode.UNAVAILABLE, "Qwen VLM model not loaded")
         else:
-            if get_ai_service().smolvlm_model is None:
+            if _ai.smolvlm_model is None:
                 context.abort(grpc.StatusCode.UNAVAILABLE, "SmolVLM model not loaded")
 
         _INFERENCE_SEMAPHORE.acquire()
@@ -252,25 +252,25 @@ class AIServiceServicer(ai_service_pb2_grpc.AIServiceServicer):
                     }
                 ]
                 with _CAPTION_LOCK:
-                    text = get_ai_service().vlm_processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+                    text = _ai.vlm_processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
                     image_inputs, video_inputs = process_vision_info(messages)
-                    inputs = get_ai_service().vlm_processor(
+                    inputs = _ai.vlm_processor(
                         text=[text],
                         images=image_inputs,
                         videos=video_inputs,
                         padding=True,
                         return_tensors="pt"
-                    ).to(get_ai_service().device)
+                    ).to(_ai.device)
 
                     with torch.no_grad():
-                        generated_ids = get_ai_service().vlm_model.generate(**inputs, max_new_tokens=128)
+                        generated_ids = _ai.vlm_model.generate(**inputs, max_new_tokens=128)
                         generated_ids_trimmed = [
                             out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
                         ]
-                        output_text = get_ai_service().vlm_processor.batch_decode(
+                        output_text = _ai.vlm_processor.batch_decode(
                             generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
                         )[0]
-                model_used = "Qwen2.5-VL-3B"
+                model_used = _ai.vlm_model_name.rsplit("/", 1)[-1] if getattr(_ai, "vlm_model_name", None) else "Qwen-VL"
             else:
                 messages = [
                     {
@@ -282,12 +282,12 @@ class AIServiceServicer(ai_service_pb2_grpc.AIServiceServicer):
                     }
                 ]
                 with _CAPTION_LOCK:
-                    prompt = get_ai_service().smolvlm_processor.apply_chat_template(messages, add_generation_prompt=True)
-                    inputs = get_ai_service().smolvlm_processor(text=prompt, images=image, return_tensors="pt").to(get_ai_service().device)
+                    prompt = _ai.smolvlm_processor.apply_chat_template(messages, add_generation_prompt=True)
+                    inputs = _ai.smolvlm_processor(text=prompt, images=image, return_tensors="pt").to(_ai.device)
 
                     with torch.no_grad():
-                        generated_ids = get_ai_service().smolvlm_model.generate(**inputs, max_new_tokens=128)
-                        output_text = get_ai_service().smolvlm_processor.batch_decode(
+                        generated_ids = _ai.smolvlm_model.generate(**inputs, max_new_tokens=128)
+                        output_text = _ai.smolvlm_processor.batch_decode(
                             generated_ids, skip_special_tokens=True
                         )[0]
                         if "Assistant:" in output_text:
