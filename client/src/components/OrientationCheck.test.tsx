@@ -91,4 +91,38 @@ describe("OrientationCheck", () => {
         await user.click(screen.getByRole("button", { name: "Show all photos without EXIF" }));
         expect(emptyFiltered.setNoExifWrongOrientationOnly).toHaveBeenCalledWith(false);
     });
+
+    it("keeps rotation controls pinned in a bounded viewer header and triggers orientation updates", async () => {
+        const updateImageOrientation = vi.fn().mockResolvedValue({ status: "success", orientation: 1 });
+        const longName = "very_long_filename_without_spaces_that_must_not_hide_buttons_1234567890.jpg";
+        const mediaStore = makeMediaStore({
+            noExifWrongOrientationOnly: true,
+            totalNoExif: 1,
+            noExifImages: [
+                { hash: "h_tall", name: longName, created_at: "2024-01-01", thumbnailUrl: "/api/thumbnail/h_tall?o=6", orientation: 6 },
+            ],
+            updateImageOrientation,
+        });
+
+        renderOrientation(mediaStore);
+        const user = userEvent.setup();
+        await user.click(screen.getByRole("button", { name: `Open ${longName}` }));
+
+        const dialog = screen.getByRole("dialog", { name: "Image orientation viewer" });
+        const ccwBtn = screen.getByRole("button", { name: "Rotate 90° CCW" });
+        const cwBtn = screen.getByRole("button", { name: "Rotate 90° CW" });
+        expect(ccwBtn.parentElement?.className).toContain("shrink-0");
+        expect(ccwBtn.parentElement?.parentElement?.className).toContain("z-20");
+
+        const fullImg = dialog.querySelector("img") as HTMLImageElement;
+        expect(fullImg).toBeTruthy();
+        expect(fullImg.parentElement?.className).toContain("w-full h-full");
+        expect(fullImg.parentElement?.parentElement?.className).toContain("overflow-hidden");
+
+        await user.click(ccwBtn);
+        expect(updateImageOrientation).toHaveBeenCalledWith("h_tall", "ccw");
+        await user.click(cwBtn);
+        expect(updateImageOrientation).toHaveBeenCalledWith("h_tall", "cw");
+        expect(fullImg.getAttribute("src")).toMatch(/^\/api\/image\/h_tall\?v=\d+$/);
+    });
 });

@@ -991,10 +991,51 @@ async fn process_face_detection(
 /// near-random (~0.4), so gating prevents wrongly rotating non-photos.
 const ORIENTATION_MIN_CONFIDENCE: f32 = 0.5;
 
+/// Regenerate the shared `{hash}.thumb.jpg` atomically for a newly oriented image.
+/// On success sets `has_thumbnail = true`; on failure removes any stale un-rotated
+/// thumbnail on disk so `verification_worker` retries without serving stale bytes.
+async fn regenerate_rotated_thumbnail(
+    file_path: &std::path::Path,
+    hash: &str,
+    user_id: &uuid::Uuid,
+    orientation: i16,
+    config: &Config,
+    client: &tokio_postgres::Client,
+) {
+    let sub_dir = crate::utils::get_subdirectory_path(config.get_images_dir(), hash);
+    let thumb_path = sub_dir.join(format!("{}.thumb.jpg", hash));
+    let tmp_thumb_path = sub_dir.join(format!("{}.{}.thumb.tmp.jpg", hash, uuid::Uuid::new_v4()));
+    let _ = tokio::fs::create_dir_all(&sub_dir).await;
+
+    let result = match crate::services::thumbnail::generate_thumbnail_for_image(
+        file_path,
+        &tmp_thumb_path,
+        500,
+        Some(orientation),
+    ).await {
+        Ok(()) => tokio::fs::rename(&tmp_thumb_path, &thumb_path).await.map_err(|e| e.to_string()),
+        Err(e) => Err(e.to_string()),
+    };
+
+    match result {
+        Ok(()) => {
+            let _ = client.execute(
+                "UPDATE images SET has_thumbnail = true WHERE hash = $1 AND user_id = $2 AND orientation = $3",
+                &[&hash, user_id, &orientation],
+            ).await;
+        }
+        Err(e) => {
+            warn!("Failed to regenerate rotated thumbnail for {}: {}", hash, e);
+            let _ = tokio::fs::remove_file(&tmp_thumb_path).await;
+            let _ = tokio::fs::remove_file(&thumb_path).await;
+        }
+    }
+}
+
 /// Detect the rotation of an image that carries no EXIF orientation, using the AI
 /// image-classifier fallback, and store the equivalent EXIF orientation value
 /// (1/3/6/8) so `get_image`/thumbnail generation right the photo. Race-safe: the
-/// UPDATE only writes when `orientation IS NULL` (ingest may have set it meanwhile).
+/// UPDATE only writes when `orientation` is NULL/invalid.
 async fn process_orientation_detection(
     file_path: &PathBuf,
     hash: &str,
@@ -1018,35 +1059,34 @@ async fn process_orientation_detection(
 
     // Mark the attempt complete regardless (below-min-confidence results are treated
     // as "checked, nothing to fix") so EXIF-less images aren't re-sent every cycle.
-if let Some(o) = stored {
-        // One statement: only invalidate the thumbnail when this call actually
-        // won the orientation write (rows_affected > 0), so a lost race never
-        // drops a healthy thumbnail that another worker just regenerated.
-        let updated = client.execute(
-            "UPDATE images SET orientation = $1, orientation_detected_at = NOW(), has_thumbnail = false \
-             WHERE hash = $2 AND user_id = $3 AND orientation IS NULL AND has_thumbnail = true",
+    let mut updated = 0u64;
+    if let Some(o) = stored {
+        updated = client.execute(
+            "UPDATE images \
+             SET orientation = $1, \
+                 orientation_detected_at = NOW(), \
+                 has_thumbnail = CASE WHEN $1 = 1 THEN has_thumbnail ELSE false END \
+             WHERE hash = $2 AND user_id = $3 AND (orientation IS NULL OR orientation NOT BETWEEN 1 AND 8)",
             &[&o, &hash, user_id],
         ).await
             .map_err(|e| format!("Failed to store orientation: {}", e))?;
-        if updated == 0 {
-            // Lost the race or nothing to invalidate — still mark the attempt
-            // so the row leaves the queue.
-            client.execute(
-                "UPDATE images SET orientation_detected_at = NOW() WHERE hash = $1 AND user_id = $2 AND orientation IS NULL",
-                &[&hash, user_id],
-            ).await
-                .map_err(|e| format!("Failed to mark orientation attempt: {}", e))?;
+
+        if updated > 0 && o > 1 {
+            regenerate_rotated_thumbnail(file_path, hash, user_id, o, config, client).await;
         }
         info!("Stored AI-detected orientation {} for image {} (label={}, conf={:.3})",
               o, hash, detection.label, detection.confidence);
     } else {
+        info!("Orientation detection inconclusive for {} (label={}, conf={:.3}) — leaving unrotated",
+              hash, detection.label, detection.confidence);
+    }
+
+    if updated == 0 {
         client.execute(
             "UPDATE images SET orientation_detected_at = NOW() WHERE hash = $1 AND user_id = $2",
             &[&hash, user_id],
         ).await
             .map_err(|e| format!("Failed to mark orientation detection attempt: {}", e))?;
-        info!("Orientation detection inconclusive for {} (label={}, conf={:.3}) — leaving unrotated",
-              hash, detection.label, detection.confidence);
     }
 
     Ok(())

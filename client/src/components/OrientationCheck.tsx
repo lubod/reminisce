@@ -223,62 +223,68 @@ export const OrientationCheck = observer(() => {
                     aria-label="Image orientation viewer"
                     className="fixed inset-0 z-50 bg-black/90 flex flex-col overscroll-contain"
                 >
-                    <div className="flex items-center justify-between p-3 bg-black/80">
-                        <span className="text-sm text-gray-300 truncate flex-1">
-                            {selected + 1} / {images.length} — {images[selected]?.name}
+                    <div className="flex items-center justify-between gap-2 p-3 bg-black/80 shrink-0 relative z-20">
+                        <div className="flex items-center gap-2 flex-1 min-w-0">
+                            <span className="text-sm text-gray-300 truncate min-w-0">
+                                {selected + 1} / {images.length} — {images[selected]?.name}
+                            </span>
                             {formatOrientationBadge(images[selected]?.orientation) && (
-                                <span className="ml-2 px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 text-xs">
+                                <span className="shrink-0 px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 text-xs">
                                     {formatOrientationBadge(images[selected]?.orientation)}
                                 </span>
                             )}
-                        </span>
-                        <button
-                            onClick={async () => {
-                                const item = images[selected];
-                                if (!item) return;
-                                await mediaStore.updateImageOrientation(item.hash, "ccw");
-                                setFullUrl(`/api/image/${item.hash}?v=${Date.now()}`);
-                            }}
-                            className="p-2 rounded-md hover:bg-gray-700 text-gray-300 mr-1"
-                            title="Rotate 90° CCW"
-                            aria-label="Rotate 90° CCW"
-                        >
-                            <RotateCcw size={20} />
-                        </button>
-                        <button
-                            onClick={async () => {
-                                const item = images[selected];
-                                if (!item) return;
-                                await mediaStore.updateImageOrientation(item.hash, "cw");
-                                setFullUrl(`/api/image/${item.hash}?v=${Date.now()}`);
-                            }}
-                            className="p-2 rounded-md hover:bg-gray-700 text-gray-300 mr-1"
-                            title="Rotate 90° CW"
-                            aria-label="Rotate 90° CW"
-                        >
-                            <RotateCw size={20} />
-                        </button>
-                        {isAdmin && (
-                            <button onClick={handleDelete} className="p-2 rounded-md hover:bg-red-900/60 text-red-400 mr-1" title="Delete" aria-label="Delete image">
-                                <Trash2 size={20} />
+                        </div>
+                        <div className="flex items-center gap-1 shrink-0">
+                            <button
+                                type="button"
+                                onClick={async () => {
+                                    const item = images[selected];
+                                    if (!item) return;
+                                    await mediaStore.updateImageOrientation(item.hash, "ccw");
+                                    setFullUrl(`/api/image/${item.hash}?v=${Date.now()}`);
+                                }}
+                                className="p-2 rounded-md hover:bg-gray-700 text-gray-300"
+                                title="Rotate 90° CCW"
+                                aria-label="Rotate 90° CCW"
+                            >
+                                <RotateCcw size={20} />
                             </button>
-                        )}
-                        <button onClick={closeFull} className="p-2 rounded-md hover:bg-gray-700 text-gray-300" title="Close (Esc)" aria-label="Close viewer">
-                            <X size={24} />
-                        </button>
+                            <button
+                                type="button"
+                                onClick={async () => {
+                                    const item = images[selected];
+                                    if (!item) return;
+                                    await mediaStore.updateImageOrientation(item.hash, "cw");
+                                    setFullUrl(`/api/image/${item.hash}?v=${Date.now()}`);
+                                }}
+                                className="p-2 rounded-md hover:bg-gray-700 text-gray-300"
+                                title="Rotate 90° CW"
+                                aria-label="Rotate 90° CW"
+                            >
+                                <RotateCw size={20} />
+                            </button>
+                            {isAdmin && (
+                                <button type="button" onClick={handleDelete} className="p-2 rounded-md hover:bg-red-900/60 text-red-400" title="Delete" aria-label="Delete image">
+                                    <Trash2 size={20} />
+                                </button>
+                            )}
+                            <button type="button" onClick={closeFull} className="p-2 rounded-md hover:bg-gray-700 text-gray-300" title="Close (Esc)" aria-label="Close viewer">
+                                <X size={24} />
+                            </button>
+                        </div>
                     </div>
-                    <div className="flex items-center justify-center flex-1 min-h-0 relative">
-                        <button onClick={() => nav(-1)} className="absolute left-3 p-2 rounded-full bg-black/50 hover:bg-black/80 text-white" title="Previous" aria-label="Previous image">
+                    <div className="flex items-center justify-center flex-1 min-h-0 overflow-hidden relative">
+                        <button type="button" onClick={() => nav(-1)} className="absolute left-3 z-10 p-2 rounded-full bg-black/50 hover:bg-black/80 text-white" title="Previous" aria-label="Previous image">
                             <ChevronLeft size={28} />
                         </button>
-                        <div className="max-h-full max-w-full flex items-center justify-center p-4">
+                        <div className="w-full h-full min-h-0 min-w-0 flex items-center justify-center p-4">
                             {fullUrl ? (
                                 <img src={fullUrl} alt={images[selected]?.name} className="max-h-full max-w-full object-contain rounded shadow-2xl" />
                             ) : (
                                 <Loader className="w-8 h-8 text-blue-500 animate-spin" />
                             )}
                         </div>
-                        <button type="button" onClick={() => nav(1)} className="absolute right-3 p-2 rounded-full bg-black/50 hover:bg-black/80 text-white" title="Next" aria-label="Next image">
+                        <button type="button" onClick={() => nav(1)} className="absolute right-3 z-10 p-2 rounded-full bg-black/50 hover:bg-black/80 text-white" title="Next" aria-label="Next image">
                             <ChevronRight size={28} aria-hidden="true" />
                         </button>
                     </div>

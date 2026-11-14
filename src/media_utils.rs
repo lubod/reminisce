@@ -609,6 +609,15 @@ pub fn orient_image_to_jpeg(image_data: &[u8], orientation: u16) -> Result<Vec<u
     Ok(output.into_inner())
 }
 
+/// Build a thumbnail URL whose query string encodes valid EXIF orientations (`1..=8`),
+/// preventing stale browser caches from serving pre-AI or pre-rotation thumbnails.
+pub fn format_thumbnail_url(hash: &str, orientation: Option<i16>) -> String {
+    match orientation.filter(|o| (1..=8).contains(o)) {
+        Some(o) => format!("/api/thumbnail/{}?o={}", hash, o),
+        None => format!("/api/thumbnail/{}", hash),
+    }
+}
+
 /// Generates a two-character subdirectory path from the first two characters of a hash.
 pub fn get_subdirectory_path(base_dir: &str, hash: &str) -> PathBuf {
     if hash.len() < 2 {
@@ -1000,6 +1009,7 @@ pub async fn list_thumbnails(
                 }
             });
             let hash: String = row.get("hash");
+            let orientation: Option<i16> = row.try_get("orientation").unwrap_or(None);
             ThumbnailItem {
                 hash: hash.clone(),
                 name: row.get("name"),
@@ -1009,10 +1019,10 @@ pub async fn list_thumbnails(
                 starred: row.get("starred"),
                 distance_km: distance_km.map(|d| d as f32),
                 media_type: final_media_type,
-                thumbnail_url: format!("/api/thumbnail/{}", hash),
+                thumbnail_url: format_thumbnail_url(&hash, orientation),
                 file_size_bytes: row.try_get("file_size_bytes").unwrap_or(None),
                 aesthetic_score: row.try_get("aesthetic_score").unwrap_or(None),
-                orientation: row.try_get("orientation").unwrap_or(None),
+                orientation,
             }
         })
         .collect();
@@ -1790,5 +1800,15 @@ mod exif_orientation_tests {
         let dummy_png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
         let out = rotate_png_bytes(&dummy_png, 1);
         assert_eq!(out, Some(dummy_png));
+    }
+
+    #[test]
+    fn format_thumbnail_url_encodes_valid_orientation() {
+        use super::format_thumbnail_url;
+        assert_eq!(format_thumbnail_url("abc", None), "/api/thumbnail/abc");
+        assert_eq!(format_thumbnail_url("abc", Some(0)), "/api/thumbnail/abc");
+        assert_eq!(format_thumbnail_url("abc", Some(9)), "/api/thumbnail/abc");
+        assert_eq!(format_thumbnail_url("abc", Some(1)), "/api/thumbnail/abc?o=1");
+        assert_eq!(format_thumbnail_url("abc", Some(6)), "/api/thumbnail/abc?o=6");
     }
 }

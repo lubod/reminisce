@@ -691,7 +691,7 @@ pub async fn get_thumbnail(
         Ok(data) => {
             return Ok(HttpResponse::Ok()
                 .content_type("image/jpeg")
-                .insert_header(("Cache-Control", "private, max-age=31536000, immutable"))
+                .insert_header(("Cache-Control", "private, max-age=3600, must-revalidate"))
                 .body(data));
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
