@@ -17,6 +17,15 @@ object MediaSessionHolder {
     /** Hashes deleted in RemoteMediaDetailActivity */
     var deletedHashes: MutableSet<String> = mutableSetOf()
 
+    /** Hashes whose orientation was rotated in RemoteMediaDetailActivity: hash -> new orientation (1..8) */
+    var rotatedOrientations: MutableMap<String, Int> = mutableMapOf()
+
+    /** Hashes whose place was updated/cleared in MediaInfoBottomSheetFragment: hash -> new place (or null) */
+    var placeUpdates: MutableMap<String, String?> = mutableMapOf()
+
+    /** Set to true when a new derived copy (e.g. AI-enhanced image) is saved to the server library */
+    var reloadRequested: Boolean = false
+
     fun clearMediaSession() {
         hashes = emptyList()
         imageInfos = emptyList()
@@ -26,5 +35,8 @@ object MediaSessionHolder {
         clearMediaSession()
         starredUpdates.clear()
         deletedHashes.clear()
+        rotatedOrientations.clear()
+        placeUpdates.clear()
+        reloadRequested = false
     }
 }

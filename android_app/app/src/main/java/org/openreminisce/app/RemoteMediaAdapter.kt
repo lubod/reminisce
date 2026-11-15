@@ -10,15 +10,15 @@ import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
 import com.bumptech.glide.Glide
 import com.bumptech.glide.load.engine.DiskCacheStrategy
-import org.openreminisce.app.model.ThumbnailInfo
-import org.openreminisce.app.util.PreferenceHelper
 import org.openreminisce.app.model.ImageInfo
+import org.openreminisce.app.model.ThumbnailInfo
 import org.openreminisce.app.util.MediaSessionHolder
+import org.openreminisce.app.util.PreferenceHelper
 import java.text.SimpleDateFormat
 import java.util.*
 
 sealed class RemoteMediaItem {
-    data class DateHeader(val date: String, val place: String?) : RemoteMediaItem()
+    data class DateHeader(val date: String, val place: String?, val count: Int) : RemoteMediaItem()
     data class Media(val thumbnailInfo: ThumbnailInfo, val position: Int) : RemoteMediaItem()
 }
 
@@ -38,6 +38,7 @@ class RemoteMediaAdapter(
     private val items = mutableListOf<RemoteMediaItem>()
     private val dateFormat = SimpleDateFormat("MMM dd, yyyy", Locale.getDefault())
     private var groupByPlace: Boolean = false
+    private var sortBy: String = "date"
 
     init {
         rebuildItems()
@@ -53,6 +54,13 @@ class RemoteMediaAdapter(
         if (groupByPlace != byPlace) {
             groupByPlace = byPlace
             rebuildItems()
+            notifyDataSetChanged()
+        }
+    }
+
+    fun setSortBy(newSortBy: String) {
+        if (sortBy != newSortBy) {
+            sortBy = newSortBy
             notifyDataSetChanged()
         }
     }
@@ -103,7 +111,7 @@ class RemoteMediaAdapter(
         }
 
         grouped.forEach { (date, pairs) ->
-            items.add(RemoteMediaItem.DateHeader(date, pairs.first().first.place))
+            items.add(RemoteMediaItem.DateHeader(date, pairs.first().first.place, pairs.size))
             pairs.forEach { (thumb, globalIndex) ->
                 items.add(RemoteMediaItem.Media(thumb, globalIndex))
             }
@@ -118,7 +126,7 @@ class RemoteMediaAdapter(
         }
 
         grouped.forEach { (place, pairs) ->
-            items.add(RemoteMediaItem.DateHeader(place, null))
+            items.add(RemoteMediaItem.DateHeader(place, null, pairs.size))
             pairs.forEach { (thumb, globalIndex) ->
                 items.add(RemoteMediaItem.Media(thumb, globalIndex))
             }
@@ -145,7 +153,7 @@ class RemoteMediaAdapter(
 
     override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
         when (val item = items[position]) {
-            is RemoteMediaItem.DateHeader -> (holder as DateHeaderViewHolder).bind(item.date, item.place)
+            is RemoteMediaItem.DateHeader -> (holder as DateHeaderViewHolder).bind(item.date, item.place, item.count)
             is RemoteMediaItem.Media -> (holder as MediaViewHolder).bind(item.thumbnailInfo, item.position)
         }
     }
@@ -154,10 +162,12 @@ class RemoteMediaAdapter(
 
     inner class DateHeaderViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
         private val dateText: TextView = itemView.findViewById(R.id.dateHeaderText)
+        private val itemCountText: TextView = itemView.findViewById(R.id.itemCountText)
         private val placeText: TextView = itemView.findViewById(R.id.placeHeaderText)
 
-        fun bind(date: String, place: String?) {
+        fun bind(date: String, place: String?, count: Int) {
             dateText.text = date
+            itemCountText.text = if (count == 1) "1 item" else "$count items"
             if (!place.isNullOrEmpty()) {
                 placeText.text = if (place.length > 40) place.substring(0, 37) + "..." else place
                 placeText.visibility = View.VISIBLE
@@ -172,10 +182,17 @@ class RemoteMediaAdapter(
         private val videoIndicator: ImageView = itemView.findViewById(R.id.mediaTypeIcon)
         private val starButton: ImageButton = itemView.findViewById(R.id.starIcon)
         private val similarityBadge: TextView = itemView.findViewById(R.id.similarityBadge)
+        private val placeBadgeText: TextView = itemView.findViewById(R.id.placeBadgeText)
 
         fun bind(thumbnailInfo: ThumbnailInfo, position: Int) {
             val baseUrl = PreferenceHelper.getServerUrl(context).trimEnd('/')
-            val thumbnailUrl = "$baseUrl/api/thumbnail/${thumbnailInfo.hash}"
+            val rawThumbUrl = thumbnailInfo.thumbnailUrl
+            val thumbnailUrl = when {
+                rawThumbUrl != null && (rawThumbUrl.startsWith("http://") || rawThumbUrl.startsWith("https://")) -> rawThumbUrl
+                rawThumbUrl != null && rawThumbUrl.startsWith("/") -> "$baseUrl$rawThumbUrl"
+                rawThumbUrl != null && rawThumbUrl.isNotEmpty() -> "$baseUrl/$rawThumbUrl"
+                else -> "$baseUrl/api/thumbnail/${thumbnailInfo.hash}"
+            }
 
             // Auth headers and 401 token refresh are handled lazily on the OkHttp layer
             // by ThumbnailAuthInterceptor so bind() never blocks UI scrolling on IPC.
@@ -199,17 +216,35 @@ class RemoteMediaAdapter(
                 onStarClick(thumbnailInfo.hash, thumbnailInfo.mediaType)
             }
 
-            // Similarity badge
+            // Similarity or Quality score badge (top-left)
             val sim = thumbnailInfo.similarity
-            if (sim != null) {
-                similarityBadge.text = "${(sim * 100).toInt()}%"
-                similarityBadge.visibility = View.VISIBLE
+            val quality = thumbnailInfo.aestheticScore
+            when {
+                sim != null -> {
+                    similarityBadge.text = "${(sim * 100).toInt()}%"
+                    similarityBadge.setTextColor(0xFFFFFFFF.toInt())
+                    similarityBadge.visibility = View.VISIBLE
+                }
+                sortBy == "quality" && quality != null -> {
+                    similarityBadge.text = String.format(Locale.US, "★ %.1f", quality)
+                    similarityBadge.setTextColor(0xFFFFD54F.toInt())
+                    similarityBadge.visibility = View.VISIBLE
+                }
+                else -> {
+                    similarityBadge.visibility = View.GONE
+                }
+            }
+
+            // Place badge (bottom-left)
+            val place = thumbnailInfo.place
+            if (!place.isNullOrBlank()) {
+                placeBadgeText.text = place
+                placeBadgeText.visibility = View.VISIBLE
             } else {
-                similarityBadge.visibility = View.GONE
+                placeBadgeText.visibility = View.GONE
             }
 
             itemView.setOnClickListener {
-                // Populate MediaSessionHolder for the detail activity
                 MediaSessionHolder.hashes = allThumbnails.map { it.hash }
                 MediaSessionHolder.imageInfos = allThumbnails.map { t ->
                     ImageInfo(

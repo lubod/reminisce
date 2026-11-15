@@ -46,18 +46,37 @@
             android:src="@drawable/ic_star_outline"
             android:padding="2dp" />
 
-        <!-- Similarity badge (bottom-left) -->
+        <!-- Similarity or aesthetic quality badge (top-left) -->
         <TextView
             android:id="@+id/similarityBadge"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_gravity="bottom|start"
+            android:layout_gravity="top|start"
             android:layout_margin="4dp"
             android:background="#AA000000"
-            android:paddingStart="4dp"
-            android:paddingEnd="4dp"
+            android:paddingStart="5dp"
+            android:paddingEnd="5dp"
             android:paddingTop="2dp"
             android:paddingBottom="2dp"
+            android:textColor="#FFFFFF"
+            android:textSize="10sp"
+            android:textStyle="bold"
+            android:visibility="gone" />
+
+        <!-- Place label badge (bottom-left) -->
+        <TextView
+            android:id="@+id/placeBadgeText"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom|start"
+            android:layout_margin="4dp"
+            android:background="@drawable/bg_place_badge"
+            android:paddingStart="5dp"
+            android:paddingEnd="5dp"
+            android:paddingTop="2dp"
+            android:paddingBottom="2dp"
+            android:maxLines="1"
+            android:ellipsize="end"
             android:textColor="#FFFFFF"
             android:textSize="10sp"
             android:visibility="gone" />

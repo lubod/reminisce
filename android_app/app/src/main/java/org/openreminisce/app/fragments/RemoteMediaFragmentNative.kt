@@ -1,5 +1,6 @@
 package org.openreminisce.app.fragments
 
+import android.annotation.SuppressLint
 import android.content.Intent
 import android.os.Bundle
 import android.text.Editable
@@ -10,6 +11,8 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
+import android.webkit.JavascriptInterface
+import android.webkit.WebView
 import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.ProgressBar
@@ -22,21 +25,29 @@ import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
-import com.google.android.material.chip.Chip
 import com.google.android.material.chip.ChipGroup
 import com.google.android.material.floatingactionbutton.FloatingActionButton
 import com.google.android.material.textfield.TextInputEditText
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import org.json.JSONArray
+import org.json.JSONObject
 import org.openreminisce.app.R
 import org.openreminisce.app.RemoteMediaAdapter
 import org.openreminisce.app.RemoteMediaDetailActivity
+import org.openreminisce.app.model.ImageInfo
+import org.openreminisce.app.model.MapPoint
 import org.openreminisce.app.model.MediaFilter
 import org.openreminisce.app.model.MediaTypeFilter
 import org.openreminisce.app.model.SearchMode
 import org.openreminisce.app.model.ThumbnailInfo
 import org.openreminisce.app.repository.RemoteMediaRepository
 import org.openreminisce.app.util.MediaSessionHolder
+import java.text.NumberFormat
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
 
 class RemoteMediaFragmentNative : Fragment(), FilterBottomSheetFragment.OnFiltersApplied {
 
@@ -47,27 +58,25 @@ class RemoteMediaFragmentNative : Fragment(), FilterBottomSheetFragment.OnFilter
     private lateinit var refreshFab: FloatingActionButton
     private lateinit var searchEditText: TextInputEditText
     private lateinit var filterButton: ImageButton
-    private lateinit var filterChipGroup: ChipGroup
-    private lateinit var chipAll: Chip
-    private lateinit var chipImages: Chip
-    private lateinit var chipVideos: Chip
+    private lateinit var filterBadge: TextView
+    private lateinit var searchOptionsContainer: LinearLayout
     private lateinit var searchModeChipGroup: ChipGroup
-    private lateinit var chipSemantic: Chip
-    private lateinit var chipText: Chip
-    private lateinit var chipHybrid: Chip
     private lateinit var similarityRow: LinearLayout
     private lateinit var similaritySeekBar: SeekBar
     private lateinit var similarityValueText: TextView
-    private lateinit var groupByChip: Chip
-    private lateinit var sortDate: TextView
-    private lateinit var sortSize: TextView
-    private lateinit var sortQuality: TextView
-    private lateinit var sortDesc: TextView
-    private lateinit var sortAsc: TextView
+    private lateinit var totalCountText: TextView
+    private lateinit var sortSummaryChip: TextView
+    private lateinit var mapToggleChip: TextView
+    private lateinit var resetFiltersButton: TextView
+    private lateinit var mapWebView: WebView
 
     private lateinit var repository: RemoteMediaRepository
 
     private var allThumbnails = listOf<ThumbnailInfo>()
+    private var mapPoints = listOf<MapPoint>()
+    private var isMapView = false
+    private var mapLoadedOnce = false
+    private var totalMediaCount = 0
     private var currentPage = 1
     private var currentOffset = 0
     private var isLoading = false
@@ -84,11 +93,26 @@ class RemoteMediaFragmentNative : Fragment(), FilterBottomSheetFragment.OnFilter
 
     /** ActivityResult launcher for RemoteMediaDetailActivity. */
     private val detailLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        if (MediaSessionHolder.reloadRequested) {
+            MediaSessionHolder.reloadRequested = false
+            MediaSessionHolder.deletedHashes = mutableSetOf()
+            MediaSessionHolder.starredUpdates = mutableMapOf()
+            MediaSessionHolder.rotatedOrientations = mutableMapOf()
+            MediaSessionHolder.placeUpdates = mutableMapOf()
+            resetAndReload()
+            return@registerForActivityResult
+        }
+
         var changed = false
 
         val deleted = MediaSessionHolder.deletedHashes
         if (deleted.isNotEmpty()) {
+            val before = allThumbnails.size
             allThumbnails = allThumbnails.filter { it.hash !in deleted }
+            val removed = before - allThumbnails.size
+            if (removed > 0) {
+                totalMediaCount = maxOf(0, totalMediaCount - removed)
+            }
             MediaSessionHolder.deletedHashes = mutableSetOf()
             changed = true
         }
@@ -102,7 +126,37 @@ class RemoteMediaFragmentNative : Fragment(), FilterBottomSheetFragment.OnFilter
             changed = true
         }
 
-        if (changed) updateUI()
+        val rotations = MediaSessionHolder.rotatedOrientations
+        if (rotations.isNotEmpty()) {
+            allThumbnails = allThumbnails.map { thumb ->
+                rotations[thumb.hash]?.let { orient ->
+                    thumb.copy(
+                        orientation = orient,
+                        thumbnailUrl = "/api/thumbnail/${thumb.hash}?o=$orient"
+                    )
+                } ?: thumb
+            }
+            MediaSessionHolder.rotatedOrientations = mutableMapOf()
+            changed = true
+        }
+
+        val places = MediaSessionHolder.placeUpdates
+        if (places.isNotEmpty()) {
+            allThumbnails = allThumbnails.map { thumb ->
+                if (thumb.hash in places) thumb.copy(place = places[thumb.hash]) else thumb
+            }
+            MediaSessionHolder.placeUpdates = mutableMapOf()
+            changed = true
+        }
+
+        if (changed) {
+            if (isMapView) {
+                loadMapPoints()
+            } else {
+                updateUI()
+                updateStatusAndFilterUi()
+            }
+        }
     }
 
     private val isSearchMode get() = searchQuery.isNotEmpty()
@@ -120,37 +174,29 @@ class RemoteMediaFragmentNative : Fragment(), FilterBottomSheetFragment.OnFilter
         refreshFab = view.findViewById(R.id.remoteRefreshFab)
         searchEditText = view.findViewById(R.id.searchEditText)
         filterButton = view.findViewById(R.id.filterButton)
-        filterChipGroup = view.findViewById(R.id.filterChipGroup)
-        chipAll = view.findViewById(R.id.chipAll)
-        chipImages = view.findViewById(R.id.chipImages)
-        chipVideos = view.findViewById(R.id.chipVideos)
+        filterBadge = view.findViewById(R.id.filterBadge)
+        searchOptionsContainer = view.findViewById(R.id.searchOptionsContainer)
         searchModeChipGroup = view.findViewById(R.id.searchModeChipGroup)
-        chipSemantic = view.findViewById(R.id.chipSemantic)
-        chipText = view.findViewById(R.id.chipText)
-        chipHybrid = view.findViewById(R.id.chipHybrid)
         similarityRow = view.findViewById(R.id.similarityRow)
         similaritySeekBar = view.findViewById(R.id.similaritySeekBar)
         similarityValueText = view.findViewById(R.id.similarityValueText)
-        groupByChip = view.findViewById(R.id.groupByChip)
-        sortDate = view.findViewById(R.id.sortDate)
-        sortSize = view.findViewById(R.id.sortSize)
-        sortQuality = view.findViewById(R.id.sortQuality)
-        sortDesc = view.findViewById(R.id.sortDesc)
-        sortAsc = view.findViewById(R.id.sortAsc)
+        totalCountText = view.findViewById(R.id.totalCountText)
+        sortSummaryChip = view.findViewById(R.id.sortSummaryChip)
+        mapToggleChip = view.findViewById(R.id.mapToggleChip)
+        resetFiltersButton = view.findViewById(R.id.resetFiltersButton)
+        mapWebView = view.findViewById(R.id.remoteMediaMapWebView)
 
         repository = RemoteMediaRepository(requireContext())
 
         setupRecyclerView()
         setupSwipeRefresh()
         setupFab()
-        setupMediaTypeChips()
         setupSearchModeChips()
         setupSearch()
-        setupFilterButton()
+        setupFilterControls()
         setupSimilaritySlider()
-        setupGroupByChip()
-        setupSort()
-        autoSelectSingleDevice()
+        setupMapView()
+        updateStatusAndFilterUi()
 
         loadMedia()
     }
@@ -158,20 +204,11 @@ class RemoteMediaFragmentNative : Fragment(), FilterBottomSheetFragment.OnFilter
     // ── FilterBottomSheetFragment.OnFiltersApplied ────────────────────────
 
     override fun onFiltersApplied(filter: MediaFilter) {
-        // Media type may be chosen in the sheet OR the inline chips; keep both in
-        // sync and apply the chosen value. Search mode stays owned by the inline chips.
         currentFilter = filter.copy(searchMode = currentSearchMode())
-        syncMediaTypeChip(currentFilter.mediaType)
-        updateFilterBadge()
+        mediaAdapter?.setGroupBy(currentFilter.groupByPlace)
+        mediaAdapter?.setSortBy(currentFilter.sortBy)
+        updateStatusAndFilterUi()
         resetAndReload()
-    }
-
-    private fun syncMediaTypeChip(t: MediaTypeFilter) {
-        when (t) {
-            MediaTypeFilter.IMAGE -> filterChipGroup.check(R.id.chipImages)
-            MediaTypeFilter.VIDEO -> filterChipGroup.check(R.id.chipVideos)
-            else -> filterChipGroup.check(R.id.chipAll)
-        }
     }
 
     // ── Setup ─────────────────────────────────────────────────────────────
@@ -220,7 +257,6 @@ class RemoteMediaFragmentNative : Fragment(), FilterBottomSheetFragment.OnFilter
     }
 
     private fun toggleStarOptimistic(hash: String, mediaType: String) {
-        // Optimistic update in local list
         val prevList = allThumbnails
         val thumb = prevList.find { it.hash == hash } ?: return
         val optimisticStarred = !thumb.starred
@@ -235,11 +271,9 @@ class RemoteMediaFragmentNative : Fragment(), FilterBottomSheetFragment.OnFilter
                         if (it.hash == hash) it.copy(starred = starResponse.starred) else it
                     }
                     mediaAdapter?.updateData(allThumbnails)
-                    // Persist for detail activity sync
                     MediaSessionHolder.starredUpdates[hash] = starResponse.starred
                 },
                 onFailure = {
-                    // Revert
                     allThumbnails = allThumbnails.map {
                         if (it.hash == hash) it.copy(starred = thumb.starred) else it
                     }
@@ -258,21 +292,6 @@ class RemoteMediaFragmentNative : Fragment(), FilterBottomSheetFragment.OnFilter
         refreshFab.setOnClickListener { resetAndReload() }
     }
 
-    private fun setupMediaTypeChips() {
-        filterChipGroup.setOnCheckedStateChangeListener { _, checkedIds ->
-            if (checkedIds.isEmpty()) return@setOnCheckedStateChangeListener
-            val mediaType = when (checkedIds.first()) {
-                R.id.chipImages -> MediaTypeFilter.IMAGE
-                R.id.chipVideos -> MediaTypeFilter.VIDEO
-                else -> MediaTypeFilter.ALL
-            }
-            if (currentFilter.mediaType != mediaType) {
-                currentFilter = currentFilter.copy(mediaType = mediaType)
-                resetAndReload()
-            }
-        }
-    }
-
     private fun setupSearchModeChips() {
         searchModeChipGroup.setOnCheckedStateChangeListener { _, _ ->
             updateSimilarityRowVisibility()
@@ -281,24 +300,23 @@ class RemoteMediaFragmentNative : Fragment(), FilterBottomSheetFragment.OnFilter
     }
 
     private fun setupSearch() {
-        // Update chips visibility as user types, but do NOT trigger a search yet.
         searchEditText.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
                 val hasText = !s.isNullOrEmpty()
-                searchModeChipGroup.visibility = if (hasText) View.VISIBLE else View.GONE
+                searchOptionsContainer.visibility = if (hasText) View.VISIBLE else View.GONE
                 updateSimilarityRowVisibility()
 
-                // If the field was cleared, revert to browse mode immediately.
                 if (!hasText && searchQuery.isNotEmpty()) {
                     searchQuery = ""
+                    updateStatusAndFilterUi()
                     resetAndReload()
                 }
             }
+
             override fun afterTextChanged(s: Editable?) {}
         })
 
-        // Search fires only when the user presses the keyboard Search/Done action.
         searchEditText.setOnEditorActionListener { _, actionId, event ->
             val isSearch = actionId == EditorInfo.IME_ACTION_SEARCH
             val isEnter = event?.keyCode == KeyEvent.KEYCODE_ENTER && event.action == KeyEvent.ACTION_DOWN
@@ -306,34 +324,51 @@ class RemoteMediaFragmentNative : Fragment(), FilterBottomSheetFragment.OnFilter
                 val newQuery = searchEditText.text?.toString()?.trim() ?: ""
                 if (newQuery != searchQuery) {
                     searchQuery = newQuery
+                    updateStatusAndFilterUi()
                     resetAndReload()
                 }
-                // Hide keyboard
                 val imm = requireContext().getSystemService(InputMethodManager::class.java)
-                imm.hideSoftInputFromWindow(searchEditText.windowToken, 0)
+                imm?.hideSoftInputFromWindow(searchEditText.windowToken, 0)
                 true
-            } else false
+            } else {
+                false
+            }
         }
 
         searchEditText.setOnFocusChangeListener { _, hasFocus ->
-            if (!hasFocus && searchQuery.isEmpty()) {
-                searchModeChipGroup.visibility = View.GONE
+            if (!hasFocus && searchQuery.isEmpty() && searchEditText.text.isNullOrEmpty()) {
+                searchOptionsContainer.visibility = View.GONE
                 similarityRow.visibility = View.GONE
             }
         }
     }
 
-    private fun setupFilterButton() {
-        filterButton.setOnClickListener {
+    private fun setupFilterControls() {
+        val openSheet = View.OnClickListener {
             FilterBottomSheetFragment.newInstance(
                 currentFilter = currentFilter,
                 showSearchMode = isSearchMode
             ).show(childFragmentManager, "filters")
         }
+        filterButton.setOnClickListener(openSheet)
+        sortSummaryChip.setOnClickListener(openSheet)
+
+        resetFiltersButton.setOnClickListener {
+            currentFilter = MediaFilter()
+            mediaAdapter?.setGroupBy(false)
+            mediaAdapter?.setSortBy("date")
+            if (searchQuery.isNotEmpty() || !searchEditText.text.isNullOrEmpty()) {
+                searchQuery = ""
+                searchEditText.setText("")
+                searchOptionsContainer.visibility = View.GONE
+                similarityRow.visibility = View.GONE
+            }
+            updateStatusAndFilterUi()
+            resetAndReload()
+        }
     }
 
     private fun setupSimilaritySlider() {
-        // Init slider to current filter value (default 8%)
         val initProgress = (currentFilter.minSimilarity * 100).toInt()
         similaritySeekBar.progress = initProgress
         similarityValueText.text = "$initProgress%"
@@ -357,41 +392,27 @@ class RemoteMediaFragmentNative : Fragment(), FilterBottomSheetFragment.OnFilter
         })
     }
 
-    private fun setupGroupByChip() {
-        groupByChip.setOnCheckedChangeListener { _, isChecked ->
-            mediaAdapter?.setGroupBy(isChecked)
-        }
-    }
-
     private fun updateSimilarityRowVisibility() {
-        val show = isSearchMode && currentSearchMode() != SearchMode.TEXT
+        val show = (!searchEditText.text.isNullOrEmpty() || isSearchMode) && currentSearchMode() != SearchMode.TEXT
         similarityRow.visibility = if (show) View.VISIBLE else View.GONE
-    }
-
-    private fun autoSelectSingleDevice() {
-        lifecycleScope.launch {
-            repository.fetchDeviceIds().fold(
-                onSuccess = { ids ->
-                    if (ids.size == 1 && currentFilter.deviceId == null) {
-                        currentFilter = currentFilter.copy(deviceId = ids[0])
-                        resetAndReload()
-                    }
-                },
-                onFailure = { /* silent */ }
-            )
-        }
     }
 
     // ── Data loading ──────────────────────────────────────────────────────
 
     private fun resetAndReload() {
+        if (isMapView) {
+            loadMapPoints()
+            return
+        }
         allThumbnails = emptyList()
+        totalMediaCount = 0
         currentPage = 1
         currentOffset = 0
         hasMore = true
         retryCount = 0
         loadGeneration++
         isLoading = false
+        updateStatusAndFilterUi()
         loadMedia()
     }
 
@@ -400,7 +421,10 @@ class RemoteMediaFragmentNative : Fragment(), FilterBottomSheetFragment.OnFilter
         isLoading = true
         val capturedGeneration = loadGeneration
 
-        if (!isRetry) progressBar.visibility = View.VISIBLE
+        if (!isRetry && allThumbnails.isEmpty()) {
+            progressBar.visibility = View.VISIBLE
+            updateStatusAndFilterUi()
+        }
         emptyStateText.visibility = View.GONE
 
         val filterWithMode = currentFilter.copy(searchMode = currentSearchMode())
@@ -430,17 +454,20 @@ class RemoteMediaFragmentNative : Fragment(), FilterBottomSheetFragment.OnFilter
                 onSuccess = { response ->
                     retryCount = 0
                     allThumbnails = allThumbnails + response.thumbnails
+                    totalMediaCount = response.total
                     hasMore = allThumbnails.size < response.total
 
-                    updateUI()
                     isLoading = false
                     progressBar.visibility = View.GONE
                     swipeRefresh.isRefreshing = false
+                    updateUI()
+                    updateStatusAndFilterUi()
                 },
                 onFailure = { error ->
                     isLoading = false
                     progressBar.visibility = View.GONE
                     swipeRefresh.isRefreshing = false
+                    updateStatusAndFilterUi()
 
                     if (retryCount < MAX_RETRY && !isRetry) {
                         retryCount++
@@ -503,41 +530,259 @@ class RemoteMediaFragmentNative : Fragment(), FilterBottomSheetFragment.OnFilter
         }
     }
 
-    private fun updateFilterBadge() {
-        val hasActiveFilters = !currentFilter.copy(
-            searchMode = MediaFilter().searchMode,
-            minSimilarity = MediaFilter().minSimilarity
-        ).isDefault()
-        filterButton.alpha = if (hasActiveFilters) 1f else 0.6f
+    private fun updateStatusAndFilterUi() {
+        val activeCount = currentFilter.activeFilterCount()
+        if (activeCount > 0) {
+            filterBadge.text = activeCount.toString()
+            filterBadge.visibility = View.VISIBLE
+            filterButton.alpha = 1f
+        } else {
+            filterBadge.visibility = View.GONE
+            filterButton.alpha = 0.7f
+        }
+
+        val sortLabel = when (currentFilter.sortBy) {
+            "size" -> "Size"
+            "quality" -> "Quality ★"
+            else -> "Date"
+        }
+        val arrow = if (currentFilter.sortOrder == "asc") "↑" else "↓"
+        val groupSuffix = if (currentFilter.groupByPlace) " • Place" else ""
+        val typePrefix = when (currentFilter.mediaType) {
+            MediaTypeFilter.IMAGE -> "Images • "
+            MediaTypeFilter.VIDEO -> "Videos • "
+            MediaTypeFilter.ALL -> ""
+        }
+        sortSummaryChip.text = "$typePrefix$sortLabel $arrow$groupSuffix"
+
+        val numberFormat = NumberFormat.getIntegerInstance()
+        val shown = numberFormat.format(allThumbnails.size)
+        val total = numberFormat.format(totalMediaCount)
+        totalCountText.text = when {
+            isMapView && isLoading -> "Loading map..."
+            isMapView -> "${numberFormat.format(mapPoints.size)} geolocated items"
+            isLoading && allThumbnails.isEmpty() -> "Loading..."
+            isSearchMode -> "Showing $shown / $total for \"$searchQuery\""
+            else -> "Showing $shown / $total items"
+        }
+
+        val hasNonDefaultState = activeCount > 0 || isSearchMode
+        resetFiltersButton.visibility = if (hasNonDefaultState) View.VISIBLE else View.GONE
     }
 
-    private fun setupSort() {
-        sortDate.setOnClickListener { applySort("date") }
-        sortSize.setOnClickListener { applySort("size") }
-        sortQuality.setOnClickListener { applySort("quality") }
-        sortDesc.setOnClickListener { applySort(currentFilter.sortBy, "desc") }
-        sortAsc.setOnClickListener { applySort(currentFilter.sortBy, "asc") }
-        updateSortHighlight()
+    // ── Map view ──────────────────────────────────────────────────────────
+
+    @SuppressLint("SetJavaScriptEnabled")
+    private fun setupMapView() {
+        mapWebView.settings.apply {
+            javaScriptEnabled = true
+            domStorageEnabled = true
+        }
+        mapWebView.setBackgroundColor(0xFF0F172A.toInt())
+        mapWebView.addJavascriptInterface(MapJsBridge(), "AndroidMapBridge")
+
+        mapToggleChip.setOnClickListener { toggleMapView() }
     }
 
-    private fun applySort(by: String, order: String? = null) {
-        var next = currentFilter.copy(sortBy = by)
-        if (order != null) next = next.copy(sortOrder = order)
-        if (currentFilter != next) {
-            currentFilter = next
-            updateSortHighlight()
-            resetAndReload()
+    private fun toggleMapView() {
+        isMapView = !isMapView
+        mapToggleChip.text = if (isMapView) "⊞ Grid" else "🗺 Map"
+
+        if (isMapView) {
+            swipeRefresh.visibility = View.GONE
+            refreshFab.visibility = View.GONE
+            emptyStateText.visibility = View.GONE
+            mapWebView.visibility = View.VISIBLE
+            loadMapPoints()
+        } else {
+            mapWebView.visibility = View.GONE
+            swipeRefresh.visibility = View.VISIBLE
+            refreshFab.visibility = View.VISIBLE
+            updateUI()
+            updateStatusAndFilterUi()
         }
     }
 
-    private fun updateSortHighlight() {
-        val by = currentFilter.sortBy
-        val asc = currentFilter.sortOrder == "asc"
-        sortDate.setTextColor(if (by == "date") 0xFFFFFFFF.toInt() else 0xB3FFFFFF.toInt())
-        sortSize.setTextColor(if (by == "size") 0xFFFFFFFF.toInt() else 0xB3FFFFFF.toInt())
-        sortQuality.setTextColor(if (by == "quality") 0xFFFFFFFF.toInt() else 0xB3FFFFFF.toInt())
-        sortDesc.setTextColor(if (!asc) 0xFFFFFFFF.toInt() else 0xB3FFFFFF.toInt())
-        sortAsc.setTextColor(if (asc) 0xFFFFFFFF.toInt() else 0xB3FFFFFF.toInt())
+    private fun loadMapPoints() {
+        isLoading = true
+        progressBar.visibility = View.VISIBLE
+        emptyStateText.visibility = View.GONE
+        updateStatusAndFilterUi()
+
+        lifecycleScope.launch {
+            val result = repository.fetchMapPoints(currentFilter, page = 1, limit = 2000)
+            if (!isAdded || !isMapView) {
+                isLoading = false
+                progressBar.visibility = View.GONE
+                return@launch
+            }
+            isLoading = false
+            progressBar.visibility = View.GONE
+
+            result.fold(
+                onSuccess = { response ->
+                    mapPoints = response.points
+                    updateStatusAndFilterUi()
+                    if (mapPoints.isEmpty()) {
+                        mapWebView.visibility = View.GONE
+                        emptyStateText.text = "No geolocated photos found"
+                        emptyStateText.visibility = View.VISIBLE
+                    } else {
+                        mapWebView.visibility = View.VISIBLE
+                        emptyStateText.visibility = View.GONE
+                        renderMapPoints(mapPoints)
+                    }
+                },
+                onFailure = { error ->
+                    updateStatusAndFilterUi()
+                    if (mapPoints.isEmpty()) {
+                        mapWebView.visibility = View.GONE
+                        emptyStateText.text = "Failed to load map: ${error.message}"
+                        emptyStateText.visibility = View.VISIBLE
+                        emptyStateText.setOnClickListener { loadMapPoints() }
+                    } else {
+                        Toast.makeText(
+                            requireContext(),
+                            "Failed to update map: ${error.message}",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                }
+            )
+        }
+    }
+
+    private fun renderMapPoints(points: List<MapPoint>) {
+        val jsonArray = JSONArray()
+        for (p in points) {
+            jsonArray.put(JSONObject().apply {
+                put("hash", p.hash)
+                put("lat", p.lat)
+                put("lon", p.lon)
+                put("place", p.place ?: "")
+                put("created_at", p.created_at)
+                put("starred", p.starred)
+            })
+        }
+        val safeJson = jsonArray.toString().replace("<", "\\u003c")
+        if (!mapLoadedOnce) {
+            mapLoadedOnce = true
+            mapWebView.loadDataWithBaseURL("https://openstreetmap.org/", buildMapHtml(safeJson), "text/html", "UTF-8", null)
+        } else {
+            mapWebView.evaluateJavascript("if (window.renderReminiscePoints) window.renderReminiscePoints($safeJson);", null)
+        }
+    }
+
+    private fun buildMapHtml(initialJson: String): String = """
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+          <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+          <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
+          <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
+          <style>
+            html, body, #map { margin: 0; padding: 0; width: 100%; height: 100%; background: #0f172a; font-family: sans-serif; }
+            .popup-card { min-width: 150px; }
+            .popup-title { font-weight: 700; font-size: 13px; margin-bottom: 3px; color: #0f172a; }
+            .popup-date { font-size: 11px; color: #475569; margin-bottom: 8px; }
+            .popup-btn { background: #2563eb; color: #fff; border: none; border-radius: 6px; padding: 6px 10px; font-size: 12px; font-weight: 600; width: 100%; }
+          </style>
+        </head>
+        <body>
+          <div id="map"></div>
+          <script id="initial-points" type="application/json">$initialJson</script>
+          <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+          <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+          <script>
+            function esc(str) {
+              return String(str || '').replace(/[&<>"']/g, function(c) {
+                return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+              });
+            }
+            var map = L.map('map').setView([20, 0], 2);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+              attribution: '&copy; OpenStreetMap',
+              maxZoom: 19
+            }).addTo(map);
+            var clusterGroup = typeof L.markerClusterGroup === 'function' ? L.markerClusterGroup() : L.layerGroup();
+            map.addLayer(clusterGroup);
+
+            window.renderReminiscePoints = function(points) {
+              clusterGroup.clearLayers();
+              if (!Array.isArray(points) || points.length === 0) return;
+              var bounds = [];
+              points.forEach(function(pt) {
+                var lat = Number(pt.lat), lon = Number(pt.lon);
+                if (!isFinite(lat) || !isFinite(lon)) return;
+                bounds.push([lat, lon]);
+                var marker = L.marker([lat, lon]);
+                var label = esc(pt.place || (lat.toFixed(4) + ', ' + lon.toFixed(4)));
+                var date = esc((pt.created_at || '').slice(0, 10));
+                var star = pt.starred ? '★ ' : '';
+                var html = '<div class="popup-card">' +
+                  '<div class="popup-title">' + star + label + '</div>' +
+                  '<div class="popup-date">' + date + '</div>' +
+                  '<button class="popup-btn" data-hash="' + esc(pt.hash) + '" onclick="AndroidMapBridge.openMedia(this.getAttribute(\'data-hash\'))">Open Photo</button>' +
+                  '</div>';
+                marker.bindPopup(html);
+                clusterGroup.addLayer(marker);
+              });
+              if (bounds.length > 0) {
+                map.fitBounds(bounds, { padding: [30, 30], maxZoom: 14 });
+              }
+            };
+
+            try {
+              var initial = JSON.parse(document.getElementById('initial-points').textContent || '[]');
+              window.renderReminiscePoints(initial);
+            } catch (e) {}
+          </script>
+        </body>
+        </html>
+    """.trimIndent()
+
+    private inner class MapJsBridge {
+        @JavascriptInterface
+        fun openMedia(hash: String) {
+            if (!isAdded || hash.isEmpty()) return
+            requireActivity().runOnUiThread {
+                val points = mapPoints
+                val index = points.indexOfFirst { it.hash == hash }.takeIf { it >= 0 } ?: 0
+                val utcParser = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US).apply {
+                    timeZone = TimeZone.getTimeZone("UTC")
+                }
+                MediaSessionHolder.hashes = points.map { it.hash }
+                MediaSessionHolder.imageInfos = points.map { p ->
+                    val parsedDate = try {
+                        utcParser.parse(p.created_at.substring(0, minOf(19, p.created_at.length))) ?: Date()
+                    } catch (_: Exception) {
+                        Date()
+                    }
+                    ImageInfo(
+                        id = p.hash,
+                        date = parsedDate,
+                        place = p.place,
+                        mediaType = "image",
+                        hash = p.hash
+                    )
+                }
+                val intent = Intent(requireContext(), RemoteMediaDetailActivity::class.java).apply {
+                    putExtra(RemoteMediaDetailActivity.EXTRA_HASH, hash)
+                    putExtra(RemoteMediaDetailActivity.EXTRA_POSITION, index)
+                    putExtra("isVideo", false)
+                }
+                detailLauncher.launch(intent)
+            }
+        }
+    }
+
+    override fun onDestroyView() {
+        if (::mapWebView.isInitialized) {
+            mapWebView.destroy()
+        }
+        mapLoadedOnce = false
+        super.onDestroyView()
     }
 
     private fun currentSearchMode(): SearchMode = when (searchModeChipGroup.checkedChipId) {
@@ -545,7 +790,6 @@ class RemoteMediaFragmentNative : Fragment(), FilterBottomSheetFragment.OnFilter
         R.id.chipHybrid -> SearchMode.HYBRID
         else -> SearchMode.SEMANTIC
     }
-
 
     companion object {
         fun newInstance() = RemoteMediaFragmentNative()

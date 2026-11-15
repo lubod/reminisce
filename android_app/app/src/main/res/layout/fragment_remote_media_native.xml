@@ -10,16 +10,20 @@
         android:layout_height="match_parent"
         android:orientation="vertical">
 
-        <!-- Search bar + filter button row -->
+        <!-- Compact search + filter + status header -->
         <LinearLayout
             android:id="@+id/filterSearchContainer"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical"
-            android:padding="8dp"
+            android:paddingStart="8dp"
+            android:paddingEnd="8dp"
+            android:paddingTop="4dp"
+            android:paddingBottom="4dp"
             android:background="?android:attr/colorBackground"
             android:elevation="2dp">
 
+            <!-- Row 1: Compact Search input + Filter icon with active count badge -->
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
@@ -27,246 +31,233 @@
                 android:gravity="center_vertical">
 
                 <com.google.android.material.textfield.TextInputLayout
+                    android:id="@+id/searchInputLayout"
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
                     android:hint="Search media..."
                     app:startIconDrawable="@android:drawable/ic_menu_search"
                     app:endIconMode="clear_text"
-                    style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox">
+                    app:boxCornerRadiusTopStart="8dp"
+                    app:boxCornerRadiusTopEnd="8dp"
+                    app:boxCornerRadiusBottomStart="8dp"
+                    app:boxCornerRadiusBottomEnd="8dp"
+                    style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox.Dense">
 
                     <com.google.android.material.textfield.TextInputEditText
                         android:id="@+id/searchEditText"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
+                        android:paddingTop="8dp"
+                        android:paddingBottom="8dp"
+                        android:textSize="14sp"
                         android:inputType="text"
                         android:imeOptions="actionSearch"
                         android:maxLines="1" />
 
                 </com.google.android.material.textfield.TextInputLayout>
 
-                <ImageButton
-                    android:id="@+id/filterButton"
-                    android:layout_width="48dp"
-                    android:layout_height="48dp"
-                    android:layout_marginStart="4dp"
-                    android:background="?attr/selectableItemBackgroundBorderless"
-                    android:contentDescription="Filters"
-                    android:src="@drawable/ic_filter" />
+                <FrameLayout
+                    android:layout_width="44dp"
+                    android:layout_height="44dp"
+                    android:layout_marginStart="4dp">
+
+                    <ImageButton
+                        android:id="@+id/filterButton"
+                        android:layout_width="44dp"
+                        android:layout_height="44dp"
+                        android:background="?attr/selectableItemBackgroundBorderless"
+                        android:contentDescription="Filters and Sort"
+                        android:src="@drawable/ic_filter" />
+
+                    <TextView
+                        android:id="@+id/filterBadge"
+                        android:layout_width="wrap_content"
+                        android:layout_height="16dp"
+                        android:minWidth="16dp"
+                        android:layout_gravity="top|end"
+                        android:layout_marginTop="2dp"
+                        android:layout_marginEnd="2dp"
+                        android:paddingStart="4dp"
+                        android:paddingEnd="4dp"
+                        android:gravity="center"
+                        android:background="@drawable/bg_filter_badge"
+                        android:textColor="@color/white"
+                        android:textSize="10sp"
+                        android:textStyle="bold"
+                        android:visibility="gone" />
+
+                </FrameLayout>
 
             </LinearLayout>
 
-            <!-- Search mode chips (visible when search bar is focused) -->
-            <com.google.android.material.chip.ChipGroup
-                android:id="@+id/searchModeChipGroup"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:visibility="gone"
-                app:singleSelection="true"
-                app:selectionRequired="true">
-
-                <com.google.android.material.chip.Chip
-                    android:id="@+id/chipSemantic"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Semantic"
-                    android:checked="true"
-                    style="@style/Widget.MaterialComponents.Chip.Filter" />
-
-                <com.google.android.material.chip.Chip
-                    android:id="@+id/chipText"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Text"
-                    style="@style/Widget.MaterialComponents.Chip.Filter" />
-
-                <com.google.android.material.chip.Chip
-                    android:id="@+id/chipHybrid"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Hybrid"
-                    style="@style/Widget.MaterialComponents.Chip.Filter" />
-
-            </com.google.android.material.chip.ChipGroup>
-
-            <!-- Similarity slider (visible in search mode when search mode is not Text) -->
+            <!-- Row 2: Search options (visible only when typing / searching) -->
             <LinearLayout
-                android:id="@+id/similarityRow"
+                android:id="@+id/searchOptionsContainer"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:gravity="center_vertical"
-                android:layout_marginTop="4dp"
+                android:orientation="vertical"
+                android:layout_marginTop="2dp"
                 android:visibility="gone">
 
-                <TextView
-                    android:layout_width="wrap_content"
+                <com.google.android.material.chip.ChipGroup
+                    android:id="@+id/searchModeChipGroup"
+                    android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="Min match:"
-                    android:textSize="12sp"
-                    android:layout_marginEnd="8dp" />
+                    app:chipSpacingHorizontal="6dp"
+                    app:singleSelection="true"
+                    app:selectionRequired="true">
 
-                <SeekBar
-                    android:id="@+id/similaritySeekBar"
+                    <com.google.android.material.chip.Chip
+                        android:id="@+id/chipSemantic"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Semantic"
+                        android:textSize="12sp"
+                        app:chipMinHeight="28dp"
+                        android:checked="true"
+                        style="@style/Widget.MaterialComponents.Chip.Filter" />
+
+                    <com.google.android.material.chip.Chip
+                        android:id="@+id/chipText"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Text"
+                        android:textSize="12sp"
+                        app:chipMinHeight="28dp"
+                        style="@style/Widget.MaterialComponents.Chip.Filter" />
+
+                    <com.google.android.material.chip.Chip
+                        android:id="@+id/chipHybrid"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Hybrid"
+                        android:textSize="12sp"
+                        app:chipMinHeight="28dp"
+                        style="@style/Widget.MaterialComponents.Chip.Filter" />
+
+                </com.google.android.material.chip.ChipGroup>
+
+                <LinearLayout
+                    android:id="@+id/similarityRow"
+                    android:layout_width="match_parent"
+                    android:layout_height="28dp"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:visibility="gone">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Min match:"
+                        android:textSize="11sp"
+                        android:layout_marginEnd="6dp" />
+
+                    <SeekBar
+                        android:id="@+id/similaritySeekBar"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:max="100"
+                        android:progress="8" />
+
+                    <TextView
+                        android:id="@+id/similarityValueText"
+                        android:layout_width="34dp"
+                        android:layout_height="wrap_content"
+                        android:gravity="end"
+                        android:text="8%"
+                        android:textSize="11sp"
+                        android:layout_marginStart="6dp" />
+
+                </LinearLayout>
+
+            </LinearLayout>
+
+            <!-- Row 3: Slim status & sort summary bar -->
+            <LinearLayout
+                android:id="@+id/statusSummaryBar"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:minHeight="28dp"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:paddingStart="4dp"
+                android:paddingEnd="2dp"
+                android:paddingTop="2dp">
+
+                <TextView
+                    android:id="@+id/totalCountText"
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
-                    android:max="100"
-                    android:progress="8" />
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:textSize="12sp"
+                    android:textColor="?android:attr/textColorSecondary"
+                    android:text="Loading..." />
 
                 <TextView
-                    android:id="@+id/similarityValueText"
-                    android:layout_width="36dp"
+                    android:id="@+id/sortSummaryChip"
+                    android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:gravity="end"
-                    android:text="8%"
+                    android:layout_marginStart="6dp"
+                    android:background="@drawable/bg_sort_pill"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:paddingStart="8dp"
+                    android:paddingEnd="8dp"
+                    android:paddingTop="3dp"
+                    android:paddingBottom="3dp"
+                    android:text="Date ↓"
+                    android:textColor="?attr/colorPrimary"
+                    android:textSize="11sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/mapToggleChip"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="6dp"
+                    android:background="@drawable/bg_sort_pill"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:paddingStart="8dp"
+                    android:paddingEnd="8dp"
+                    android:paddingTop="3dp"
+                    android:paddingBottom="3dp"
+                    android:text="🗺 Map"
+                    android:textColor="?attr/colorPrimary"
+                    android:textSize="11sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/resetFiltersButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="6dp"
+                    android:background="?attr/selectableItemBackground"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:paddingStart="6dp"
+                    android:paddingEnd="6dp"
+                    android:paddingTop="3dp"
+                    android:paddingBottom="3dp"
+                    android:text="Reset"
+                    android:textColor="?attr/colorPrimary"
                     android:textSize="12sp"
-                    android:layout_marginStart="8dp" />
+                    android:textStyle="bold"
+                    android:visibility="gone" />
 
             </LinearLayout>
-
-            <!-- Media type filter chips + group-by chip -->
-            <com.google.android.material.chip.ChipGroup
-                android:id="@+id/filterChipGroup"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                app:singleSelection="true"
-                app:selectionRequired="true">
-
-                <com.google.android.material.chip.Chip
-                    android:id="@+id/chipAll"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="All"
-                    android:checked="true"
-                    style="@style/Widget.MaterialComponents.Chip.Filter" />
-
-                <com.google.android.material.chip.Chip
-                    android:id="@+id/chipImages"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Images"
-                    style="@style/Widget.MaterialComponents.Chip.Filter" />
-
-                <com.google.android.material.chip.Chip
-                    android:id="@+id/chipVideos"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Videos"
-                    style="@style/Widget.MaterialComponents.Chip.Filter" />
-
-            </com.google.android.material.chip.ChipGroup>
-
-            <!-- Group-by chip (standalone, separate from type filter chips) -->
-            <com.google.android.material.chip.Chip
-                android:id="@+id/groupByChip"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="2dp"
-                android:text="By Place"
-                android:checkable="true"
-                style="@style/Widget.MaterialComponents.Chip.Filter" />
-
-        </LinearLayout>
-
-        <!-- Sort row: Date / Size / Quality + direction -->
-        <LinearLayout
-            android:id="@+id/sortRow"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:gravity="center_vertical"
-            android:paddingStart="8dp"
-            android:paddingEnd="8dp"
-            android:paddingBottom="6dp"
-            android:background="#6200EE">
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="Sort:"
-                android:textSize="12sp"
-                android:textColor="?android:attr/textColorSecondary"
-                android:layout_marginEnd="6dp" />
-
-            <TextView
-                android:id="@+id/sortDate"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="Date"
-                android:textSize="12sp"
-                android:textColor="#FFFFFFFF"
-                android:background="?attr/selectableItemBackground"
-                android:paddingStart="8dp"
-                android:paddingEnd="8dp"
-                android:paddingTop="4dp"
-                android:paddingBottom="4dp" />
-
-            <TextView
-                android:id="@+id/sortSize"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="Size"
-                android:textSize="12sp"
-                android:textColor="#B3FFFFFF"
-                android:background="?attr/selectableItemBackground"
-                android:paddingStart="8dp"
-                android:paddingEnd="8dp"
-                android:paddingTop="4dp"
-                android:paddingBottom="4dp" />
-
-            <TextView
-                android:id="@+id/sortQuality"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="Quality"
-                android:textSize="12sp"
-                android:textColor="#B3FFFFFF"
-                android:background="?attr/selectableItemBackground"
-                android:paddingStart="8dp"
-                android:paddingEnd="8dp"
-                android:paddingTop="4dp"
-                android:paddingBottom="4dp" />
-
-            <View
-                android:layout_width="0dp"
-                android:layout_height="1dp"
-                android:layout_weight="1" />
-
-            <TextView
-                android:id="@+id/sortDesc"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="↓"
-                android:textSize="16sp"
-                android:textColor="#FFFFFFFF"
-                android:background="?attr/selectableItemBackground"
-                android:paddingStart="8dp"
-                android:paddingEnd="8dp"
-                android:paddingTop="2dp"
-                android:paddingBottom="2dp" />
-
-            <TextView
-                android:id="@+id/sortAsc"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="↑"
-                android:textSize="16sp"
-                android:textColor="#B3FFFFFF"
-                android:background="?attr/selectableItemBackground"
-                android:paddingStart="8dp"
-                android:paddingEnd="8dp"
-                android:paddingTop="2dp"
-                android:paddingBottom="2dp" />
 
         </LinearLayout>
 
         <androidx.swiperefreshlayout.widget.SwipeRefreshLayout
             android:id="@+id/remoteMediaSwipeRefresh"
             android:layout_width="match_parent"
-            android:layout_height="match_parent">
+            android:layout_height="0dp"
+            android:layout_weight="1">
 
             <androidx.recyclerview.widget.RecyclerView
                 android:id="@+id/remoteMediaRecyclerView"
@@ -277,6 +268,13 @@
                 android:clipToPadding="false" />
 
         </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
+
+        <WebView
+            android:id="@+id/remoteMediaMapWebView"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:visibility="gone" />
 
     </LinearLayout>
 

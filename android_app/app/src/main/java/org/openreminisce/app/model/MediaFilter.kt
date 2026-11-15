@@ -13,9 +13,23 @@ data class MediaFilter(
     val searchMode: SearchMode = SearchMode.SEMANTIC,
     val minSimilarity: Float = 0.08f,
     val sortBy: String = "date",   // "date" | "size" | "quality"
-    val sortOrder: String = "desc" // "desc" | "asc"
+    val sortOrder: String = "desc", // "desc" | "asc"
+    val groupByPlace: Boolean = false
 ) {
     fun isDefault(): Boolean = this == MediaFilter()
+
+    fun activeFilterCount(): Int {
+        var count = 0
+        if (mediaType != MediaTypeFilter.ALL) count++
+        if (starredOnly) count++
+        if (startDate != null || endDate != null) count++
+        if (labelId != null) count++
+        if (!deviceId.isNullOrBlank()) count++
+        if (locationLat != null && locationLon != null) count++
+        if (sortBy != "date" || sortOrder != "desc") count++
+        if (groupByPlace) count++
+        return count
+    }
 }
 
 enum class MediaTypeFilter { ALL, IMAGE, VIDEO }

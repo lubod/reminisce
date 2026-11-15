@@ -22,8 +22,8 @@
 
         <ImageButton
             android:id="@+id/backButton"
-            android:layout_width="48dp"
-            android:layout_height="48dp"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
             android:background="?attr/selectableItemBackgroundBorderless"
             android:contentDescription="Back"
             android:src="@drawable/ic_arrow_back"
@@ -35,9 +35,45 @@
             android:layout_weight="1" />
 
         <ImageButton
+            android:id="@+id/rotateLeftButton"
+            android:layout_width="38dp"
+            android:layout_height="44dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Rotate counter-clockwise"
+            android:src="@drawable/ic_rotate_left"
+            app:tint="@android:color/white" />
+
+        <ImageButton
+            android:id="@+id/rotateRightButton"
+            android:layout_width="38dp"
+            android:layout_height="44dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Rotate clockwise"
+            android:src="@drawable/ic_rotate_right"
+            app:tint="@android:color/white" />
+
+        <ImageButton
+            android:id="@+id/enhanceButton"
+            android:layout_width="38dp"
+            android:layout_height="44dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="AI Enhance"
+            android:src="@drawable/ic_auto_fix"
+            app:tint="@android:color/white" />
+
+        <ImageButton
+            android:id="@+id/downloadButton"
+            android:layout_width="38dp"
+            android:layout_height="44dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Download"
+            android:src="@drawable/ic_download"
+            app:tint="@android:color/white" />
+
+        <ImageButton
             android:id="@+id/compareButton"
-            android:layout_width="48dp"
-            android:layout_height="48dp"
+            android:layout_width="38dp"
+            android:layout_height="44dp"
             android:background="?attr/selectableItemBackgroundBorderless"
             android:contentDescription="Compare"
             android:src="@drawable/ic_compare"
@@ -45,8 +81,8 @@
 
         <ImageButton
             android:id="@+id/deleteButton"
-            android:layout_width="48dp"
-            android:layout_height="48dp"
+            android:layout_width="38dp"
+            android:layout_height="44dp"
             android:background="?attr/selectableItemBackgroundBorderless"
             android:contentDescription="Delete"
             android:src="@drawable/ic_delete"
@@ -54,8 +90,8 @@
 
         <ImageButton
             android:id="@+id/starButton"
-            android:layout_width="48dp"
-            android:layout_height="48dp"
+            android:layout_width="38dp"
+            android:layout_height="44dp"
             android:background="?attr/selectableItemBackgroundBorderless"
             android:contentDescription="Star"
             android:src="@drawable/ic_star_outline"
@@ -63,8 +99,8 @@
 
         <ImageButton
             android:id="@+id/infoButton"
-            android:layout_width="48dp"
-            android:layout_height="48dp"
+            android:layout_width="38dp"
+            android:layout_height="44dp"
             android:background="?attr/selectableItemBackgroundBorderless"
             android:contentDescription="Info"
             android:src="@drawable/ic_info"
@@ -191,6 +227,87 @@
                 android:visibility="gone" />
 
         </FrameLayout>
+
+    </LinearLayout>
+
+    <!-- AI Enhance action banner above bottom bar -->
+    <LinearLayout
+        android:id="@+id/enhanceActionBar"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:background="#DD1E1B4B"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="10dp"
+        android:paddingTop="8dp"
+        android:paddingEnd="8dp"
+        android:paddingBottom="8dp"
+        android:visibility="gone"
+        app:layout_constraintBottom_toTopOf="@id/bottomBar"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent">
+
+        <TextView
+            android:id="@+id/enhanceStatusText"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:ellipsize="end"
+            android:maxLines="2"
+            android:text="✨ Enhanced"
+            android:textColor="#E0E7FF"
+            android:textSize="12sp" />
+
+        <TextView
+            android:id="@+id/enhanceToggleOriginalButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="6dp"
+            android:background="#312E81"
+            android:clickable="true"
+            android:focusable="true"
+            android:paddingStart="8dp"
+            android:paddingTop="5dp"
+            android:paddingEnd="8dp"
+            android:paddingBottom="5dp"
+            android:text="Show Original"
+            android:textColor="@android:color/white"
+            android:textSize="11sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/enhanceSaveButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="6dp"
+            android:background="#4F46E5"
+            android:clickable="true"
+            android:focusable="true"
+            android:paddingStart="10dp"
+            android:paddingTop="5dp"
+            android:paddingEnd="10dp"
+            android:paddingBottom="5dp"
+            android:text="Save Copy"
+            android:textColor="@android:color/white"
+            android:textSize="11sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/enhanceDiscardButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="6dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:clickable="true"
+            android:focusable="true"
+            android:paddingStart="8dp"
+            android:paddingTop="5dp"
+            android:paddingEnd="8dp"
+            android:paddingBottom="5dp"
+            android:text="✕"
+            android:textColor="#C7D2FE"
+            android:textSize="14sp"
+            android:textStyle="bold" />
 
     </LinearLayout>
 

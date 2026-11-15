@@ -2,10 +2,16 @@ package org.openreminisce.app.fragments
 
 import android.graphics.Color
 import android.os.Bundle
+import android.text.Editable
+import android.text.TextWatcher
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.widget.ArrayAdapter
+import android.widget.AutoCompleteTextView
 import android.widget.Button
+import android.widget.Filter
+import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.activity.viewModels
 import androidx.appcompat.app.AlertDialog
@@ -22,10 +28,13 @@ import com.google.android.material.chip.ChipGroup
 import com.google.android.material.tabs.TabLayout
 import com.google.android.material.tabs.TabLayoutMediator
 import io.noties.markwon.Markwon
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 import org.openreminisce.app.R
 import org.openreminisce.app.model.Label
+import org.openreminisce.app.model.LocationResult
 import org.openreminisce.app.viewmodel.RemoteMediaDetailViewModel
 
 class MediaInfoBottomSheetFragment : BottomSheetDialogFragment() {
@@ -97,10 +106,20 @@ class MediaInfoBottomSheetFragment : BottomSheetDialogFragment() {
             val dimensionsText = view.findViewById<TextView>(R.id.detailDimensions)
             val fileSizeText = view.findViewById<TextView>(R.id.detailFileSize)
             val placeText = view.findViewById<TextView>(R.id.detailPlace)
+            val editPlaceButton = view.findViewById<TextView>(R.id.editPlaceButton)
             val deviceIdText = view.findViewById<TextView>(R.id.detailDeviceId)
             val hashText = view.findViewById<TextView>(R.id.detailHash)
 
+            val hashArg = arguments?.getString("hash") ?: ""
             val mediaTypeArg = arguments?.getString("media_type") ?: "image"
+            val isImage = mediaTypeArg != "video"
+            editPlaceButton.visibility = if (isImage) View.VISIBLE else View.GONE
+
+            editPlaceButton.setOnClickListener {
+                if (hashArg.isNotEmpty() && isImage) {
+                    showEditPlaceDialog(hashArg, viewModel().metadata.value?.place)
+                }
+            }
 
             lifecycleScope.launch {
                 viewModel().metadata.collect { meta ->
@@ -145,6 +164,9 @@ class MediaInfoBottomSheetFragment : BottomSheetDialogFragment() {
                         if (!meta.place.isNullOrEmpty()) {
                             placeText.text = "Place: ${meta.place}"
                             placeText.visibility = View.VISIBLE
+                        } else if (isImage) {
+                            placeText.text = "📍 No place set"
+                            placeText.visibility = View.VISIBLE
                         } else {
                             placeText.visibility = View.GONE
                         }
@@ -159,6 +181,109 @@ class MediaInfoBottomSheetFragment : BottomSheetDialogFragment() {
                     }
                 }
             }
+        }
+
+        private fun showEditPlaceDialog(hash: String, currentPlace: String?) {
+            val context = requireContext()
+            val density = resources.displayMetrics.density
+            val padH = (20 * density).toInt()
+            val padV = (12 * density).toInt()
+
+            val container = LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(padH, padV, padH, padV)
+            }
+
+            val autoComplete = AutoCompleteTextView(context).apply {
+                hint = "Search city, landmark, or place..."
+                threshold = 2
+                setText(currentPlace ?: "")
+                setSelectAllOnFocus(true)
+            }
+            container.addView(autoComplete)
+
+            var selectedPlace: LocationResult? = null
+            var currentSuggestions = emptyList<LocationResult>()
+            var searchJob: Job? = null
+
+            val suggestionAdapter = object : ArrayAdapter<String>(
+                context,
+                android.R.layout.simple_dropdown_item_1line,
+                mutableListOf()
+            ) {
+                private val noFilter = object : Filter() {
+                    override fun performFiltering(constraint: CharSequence?) = FilterResults()
+                    override fun publishResults(constraint: CharSequence?, results: FilterResults?) {}
+                }
+                override fun getFilter(): Filter = noFilter
+            }
+            autoComplete.setAdapter(suggestionAdapter)
+
+            autoComplete.setOnItemClickListener { _, _, position, _ ->
+                if (position in currentSuggestions.indices) {
+                    val chosen = currentSuggestions[position]
+                    selectedPlace = chosen
+                    val display = chosen.display_name.ifEmpty { chosen.name }
+                    autoComplete.setText(display, false)
+                    autoComplete.setSelection(display.length)
+                }
+            }
+
+            autoComplete.addTextChangedListener(object : TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                    val text = s?.toString()?.trim() ?: ""
+                    val selLabel = selectedPlace?.let { it.display_name.ifEmpty { it.name } }
+                    if (selectedPlace != null && text != selLabel) {
+                        selectedPlace = null
+                    }
+                    searchJob?.cancel()
+                    if (text.length < 2) return
+                    searchJob = lifecycleScope.launch {
+                        delay(300)
+                        viewModel().searchPlaces(text).onSuccess { places ->
+                            currentSuggestions = places
+                            suggestionAdapter.clear()
+                            suggestionAdapter.addAll(places.map { it.display_name.ifEmpty { it.name } })
+                            suggestionAdapter.notifyDataSetChanged()
+                            if (places.isNotEmpty() && autoComplete.hasFocus()) {
+                                autoComplete.showDropDown()
+                            }
+                        }
+                    }
+                }
+                override fun afterTextChanged(s: Editable?) {}
+            })
+
+            val builder = AlertDialog.Builder(context)
+                .setTitle("Set Place")
+                .setView(container)
+                .setPositiveButton("Save") { _, _ ->
+                    val input = autoComplete.text?.toString()?.trim()
+                    if (input.isNullOrEmpty()) {
+                        viewModel().updatePlace(hash, null, null, null)
+                    } else {
+                        val matched = selectedPlace?.takeIf {
+                            input == it.display_name.ifEmpty { it.name } || input == it.name
+                        }
+                        viewModel().updatePlace(
+                            hash = hash,
+                            place = input,
+                            latitude = matched?.latitude,
+                            longitude = matched?.longitude
+                        )
+                    }
+                }
+                .setNegativeButton("Cancel", null)
+
+            if (!currentPlace.isNullOrEmpty()) {
+                builder.setNeutralButton("Clear Place") { _, _ ->
+                    viewModel().updatePlace(hash, null, null, null)
+                }
+            }
+
+            builder.setOnDismissListener { searchJob?.cancel() }
+            builder.show()
         }
 
         private fun formatFileSize(bytes: Long): String {

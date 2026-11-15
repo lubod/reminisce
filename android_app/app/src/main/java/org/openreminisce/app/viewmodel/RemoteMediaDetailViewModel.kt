@@ -13,8 +13,10 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import org.openreminisce.app.model.ImageMetadata
 import org.openreminisce.app.model.Label
+import org.openreminisce.app.model.LocationResult
 import org.openreminisce.app.repository.LabelRepository
 import org.openreminisce.app.repository.RemoteMediaRepository
+import org.openreminisce.app.util.MediaSessionHolder
 
 class RemoteMediaDetailViewModel(context: Context) : ViewModel() {
 
@@ -46,6 +48,10 @@ class RemoteMediaDetailViewModel(context: Context) : ViewModel() {
     /** Emits Result<Unit> after a delete attempt. */
     private val _deleteResult = MutableSharedFlow<Result<Unit>>()
     val deleteResult: SharedFlow<Result<Unit>> = _deleteResult.asSharedFlow()
+
+    /** Emits (hash, updatedPlace) after a successful place update/clear. */
+    private val _placeUpdateResult = MutableSharedFlow<Pair<String, String?>>()
+    val placeUpdateResult: SharedFlow<Pair<String, String?>> = _placeUpdateResult.asSharedFlow()
 
     fun loadMetadata(hash: String) {
         viewModelScope.launch {
@@ -133,6 +139,22 @@ class RemoteMediaDetailViewModel(context: Context) : ViewModel() {
             )
         }
     }
+
+    fun updatePlace(hash: String, place: String?, latitude: Double? = null, longitude: Double? = null) {
+        viewModelScope.launch {
+            repository.updateImagePlace(hash, place, latitude, longitude).fold(
+                onSuccess = { updatedPlace ->
+                    _metadata.value = _metadata.value?.copy(place = updatedPlace)
+                    MediaSessionHolder.placeUpdates[hash] = updatedPlace
+                    _placeUpdateResult.emit(hash to updatedPlace)
+                },
+                onFailure = { _error.emit(it.message ?: "Failed to update place") }
+            )
+        }
+    }
+
+    suspend fun searchPlaces(query: String): Result<List<LocationResult>> =
+        repository.searchPlaces(query)
 
     companion object {
         fun factory(context: Context) = object : ViewModelProvider.Factory {
