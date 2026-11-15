@@ -39,9 +39,10 @@ test.describe("trash", () => {
 
     const targetImg = page.locator(`img[src*="${hash}"]`);
     await expect(targetImg).toBeVisible();
-    await targetImg.hover();
+    const targetCard = targetImg.locator("..");
+    await targetCard.hover();
 
-    const restoreBtn = page.getByRole("button", { name: /restore/i }).first();
+    const restoreBtn = targetCard.getByRole("button", { name: /restore/i });
     await expect(restoreBtn).toBeVisible();
     await Promise.all([
       page.waitForResponse((r) => r.url().includes(`/api/image/${hash}/restore`) && r.ok()),
