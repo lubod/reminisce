@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { runInAction } from "mobx";
 import { MediaStore, type MediaItem } from "./MediaStore";
 import type { RootStore } from "./RootStore";
 
@@ -119,15 +120,19 @@ function item(over: Partial<MediaItem>): MediaItem {
 describe("filteredAllMedia (device filter)", () => {
     it("returns all items when device filter is 'all'", () => {
         const s = makeStore();
-        s.allMedia = [item({ device_id: "a" }), item({ device_id: "b" }), item({ device_id: "a" })];
-        s.filters.selectedDeviceId = "all";
+        runInAction(() => {
+            s.allMedia = [item({ device_id: "a" }), item({ device_id: "b" }), item({ device_id: "a" })];
+            s.filters.selectedDeviceId = "all";
+        });
         expect(s.filteredAllMedia).toHaveLength(3);
     });
 
     it("filters items by selected device id", () => {
         const s = makeStore();
-        s.allMedia = [item({ device_id: "a" }), item({ device_id: "b" }), item({ device_id: "a" })];
-        s.filters.selectedDeviceId = "a";
+        runInAction(() => {
+            s.allMedia = [item({ device_id: "a" }), item({ device_id: "b" }), item({ device_id: "a" })];
+            s.filters.selectedDeviceId = "a";
+        });
 
         expect(s.filteredAllMedia.map(i => i.device_id)).toEqual(["a", "a"]);
     });
@@ -136,14 +141,16 @@ describe("filteredAllMedia (device filter)", () => {
 describe("groupedAllMedia (grouping + sorting)", () => {
     it("groups by day, newest day first by default", () => {
         const s = makeStore();
-        s.allMedia = [
-            item({ created_at: "2024-01-15T10:00:00Z" }),
-            item({ created_at: "2024-01-14T09:00:00Z" }),
-            item({ created_at: "2024-01-15T08:00:00Z" }),
-        ];
-        s.allMediaGroupBy = "day";
-        s.sortBy = "date";
-        s.sortOrder = "desc";
+        runInAction(() => {
+            s.allMedia = [
+                item({ created_at: "2024-01-15T10:00:00Z" }),
+                item({ created_at: "2024-01-14T09:00:00Z" }),
+                item({ created_at: "2024-01-15T08:00:00Z" }),
+            ];
+            s.allMediaGroupBy = "day";
+            s.sortBy = "date";
+            s.sortOrder = "desc";
+        });
 
         const groups = s.groupedAllMedia;
         expect(groups.map(g => g.date)).toEqual(["2024-01-15", "2024-01-14"]);
@@ -157,13 +164,15 @@ describe("groupedAllMedia (grouping + sorting)", () => {
 
     it("groups by place, using 'Unknown Location' for missing place", () => {
         const s = makeStore();
-        s.allMedia = [
-            item({ place: "Paris" }),
-            item({ place: "London" }),
-            item({ place: undefined }),
-            item({ place: "Paris" }),
-        ];
-        s.allMediaGroupBy = "place";
+        runInAction(() => {
+            s.allMedia = [
+                item({ place: "Paris" }),
+                item({ place: "London" }),
+                item({ place: undefined }),
+                item({ place: "Paris" }),
+            ];
+            s.allMediaGroupBy = "place";
+        });
 
         const groups = s.groupedAllMedia;
         const byKey = new Map(groups.map(g => [g.date, g.items.length]));
@@ -174,14 +183,16 @@ describe("groupedAllMedia (grouping + sorting)", () => {
 
     it("sorts groups and items by size when sortBy='size'", () => {
         const s = makeStore();
-        s.allMedia = [
-            item({ created_at: "2024-01-15T00:00:00Z", file_size_bytes: 100 }),
-            item({ created_at: "2024-01-15T01:00:00Z", file_size_bytes: 500 }),
-            item({ created_at: "2024-01-14T00:00:00Z", file_size_bytes: 900 }),
-        ];
-        s.allMediaGroupBy = "day";
-        s.sortBy = "size";
-        s.sortOrder = "desc";
+        runInAction(() => {
+            s.allMedia = [
+                item({ created_at: "2024-01-15T00:00:00Z", file_size_bytes: 100 }),
+                item({ created_at: "2024-01-15T01:00:00Z", file_size_bytes: 500 }),
+                item({ created_at: "2024-01-14T00:00:00Z", file_size_bytes: 900 }),
+            ];
+            s.allMediaGroupBy = "day";
+            s.sortBy = "size";
+            s.sortOrder = "desc";
+        });
 
         const groups = s.groupedAllMedia;
         // Group with the largest max file size (900 on 01-14) comes first.
@@ -194,29 +205,39 @@ describe("groupedAllMedia (grouping + sorting)", () => {
 describe("lightbox getters", () => {
     it("activeLightboxItems follows lightboxSource", () => {
         const s = makeStore();
-        s.allMedia = [item({}), item({})];
-        s.customLightboxItems = [item({}), item({}), item({})];
+        runInAction(() => {
+            s.allMedia = [item({}), item({})];
+            s.customLightboxItems = [item({}), item({}), item({})];
 
-        s.lightboxSource = "all";
+            s.lightboxSource = "all";
+        });
         expect(s.activeLightboxItems).toBe(s.allMedia);
-        s.lightboxSource = "custom";
+        runInAction(() => {
+            s.lightboxSource = "custom";
+        });
         expect(s.activeLightboxItems).toBe(s.customLightboxItems);
     });
 
     it("isFirstMedia / isLastMedia track the selected index", () => {
         const s = makeStore();
-        s.allMedia = [item({}), item({}), item({})];
-        s.lightboxSource = "all";
+        runInAction(() => {
+            s.allMedia = [item({}), item({}), item({})];
+            s.lightboxSource = "all";
+            s.selectedMediaIndex = 0;
+        });
 
-        s.selectedMediaIndex = 0;
         expect(s.isFirstMedia).toBe(true);
         expect(s.isLastMedia).toBe(false);
 
-        s.selectedMediaIndex = 2;
+        runInAction(() => {
+            s.selectedMediaIndex = 2;
+        });
         expect(s.isFirstMedia).toBe(false);
         expect(s.isLastMedia).toBe(true);
 
-        s.selectedMediaIndex = 1;
+        runInAction(() => {
+            s.selectedMediaIndex = 1;
+        });
         expect(s.isFirstMedia).toBe(false);
         expect(s.isLastMedia).toBe(false);
     });
@@ -230,8 +251,10 @@ describe("search pagination (performSearch)", () => {
 
     it("loads all pages and flips allMediaHasMore exactly at the end", async () => {
         const s = makeStore();
-        s.searchType = "semantic";
-        s.filters.allMediaTypeFilter = "all";
+        runInAction(() => {
+            s.searchType = "semantic";
+            s.filters.allMediaTypeFilter = "all";
+        });
 
         await s.performSearch("sunset");
         expect(s.allMedia).toHaveLength(50);
@@ -263,12 +286,14 @@ describe("map points (fetchMapPoints)", () => {
     it("maps browse filters to query params and stores points", async () => {
         api.state.mapParams = "";
         const s = makeStore();
-        s.filters.starredOnly = true;
-        s.filters.startDate = "2024-01-01";
-        s.filters.endDate = "2024-02-01";
-        s.filters.selectedLabelId = 7;
-        s.filters.selectedDeviceId = "devX";
-        s.mapActive = true;
+        runInAction(() => {
+            s.filters.starredOnly = true;
+            s.filters.startDate = "2024-01-01";
+            s.filters.endDate = "2024-02-01";
+            s.filters.selectedLabelId = 7;
+            s.filters.selectedDeviceId = "devX";
+            s.mapActive = true;
+        });
 
         await s.fetchMapPoints();
 
@@ -285,7 +310,9 @@ describe("map points (fetchMapPoints)", () => {
     it("pages through the whole geotagged library (server caps per-page)", async () => {
         api.state.mapPool = Array.from({ length: 12000 }, (_, i) => api.state.mapPoint(`pm${i}`, i));
         const s = makeStore();
-        s.mapActive = true;
+        runInAction(() => {
+            s.mapActive = true;
+        });
 
         await s.fetchMapPoints();
 
@@ -316,7 +343,9 @@ describe("map auto-fetch + star/delete", () => {
 
     it("setMapActive does not fetch in search mode", async () => {
         const s = makeStore();
-        s.searchMode = true;
+        runInAction(() => {
+            s.searchMode = true;
+        });
         s.setMapActive(true);
         expect(s.mapPoints).toHaveLength(0);
     });
@@ -324,7 +353,9 @@ describe("map auto-fetch + star/delete", () => {
     it("toggleStarMedia flips starred across arrays and applies the server value", async () => {
         const s = makeStore();
         const target = item({ device_id: "a", starred: false, media_type: "image" });
-        s.allMedia = [target];
+        runInAction(() => {
+            s.allMedia = [target];
+        });
 
         await s.toggleStarMedia(target.hash, target.device_id);
 
@@ -335,7 +366,9 @@ describe("map auto-fetch + star/delete", () => {
         const s = makeStore();
         const mine = item({ hash: "dup", device_id: "devA", starred: false, media_type: "image" });
         const other = item({ hash: "dup", device_id: "devB", starred: false, media_type: "image" });
-        s.allMedia = [mine, other];
+        runInAction(() => {
+            s.allMedia = [mine, other];
+        });
 
         await s.toggleStarMedia(mine.hash, mine.device_id);
 
@@ -348,7 +381,9 @@ describe("map auto-fetch + star/delete", () => {
         const setError = vi.fn();
         const s = new MediaStore({ uiStore: { setError, setLoading: () => {} } } as unknown as RootStore);
         const target = item({ device_id: "a", starred: false, media_type: "image" });
-        s.allMedia = [target];
+        runInAction(() => {
+            s.allMedia = [target];
+        });
 
         api.state.rejectPost = true;
         try {
@@ -366,7 +401,9 @@ describe("map auto-fetch + star/delete", () => {
         const a = item({ media_type: "image" });
         const b = item({ media_type: "image" });
         const c = item({ media_type: "video" });
-        s.allMedia = [a, b, c];
+        runInAction(() => {
+            s.allMedia = [a, b, c];
+        });
 
         await s.deleteMedia(b.hash);
 
@@ -377,9 +414,11 @@ describe("map auto-fetch + star/delete", () => {
         const s = makeStore();
         const a = item({ media_type: "image" });
         const b = item({ media_type: "image" });
-        s.allMedia = [a, b];
-        s.lightboxSource = "all";
-        s.selectedMediaIndex = 1;
+        runInAction(() => {
+            s.allMedia = [a, b];
+            s.lightboxSource = "all";
+            s.selectedMediaIndex = 1;
+        });
         await s.deleteMedia(b.hash);
         expect(s.allMedia.map(i => i.hash)).toEqual([a.hash]);
         expect(s.selectedMediaIndex).toBe(0);

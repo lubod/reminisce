@@ -82,9 +82,6 @@ impl TestDatabase {
         // Run schema migrations and seed the test user on the fresh database
         instance.run_migrations_with_seed().await?;
 
-        // Ensure the database is fully ready by attempting a simple query
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-
         Ok(instance)
     }
 
@@ -131,7 +128,7 @@ impl Drop for TestDatabase {
         let db_name = self.database_name.clone();
         let admin_url = self.admin_config.clone();
 
-        std::thread::spawn(move || {
+        let _ = std::thread::spawn(move || {
             let rt = tokio::runtime::Runtime::new().unwrap();
             rt.block_on(async move {
                 // Parse admin config
@@ -166,7 +163,8 @@ impl Drop for TestDatabase {
                     }
                 }
             });
-        });
+        })
+        .join();
     }
 }
 

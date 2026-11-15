@@ -14,7 +14,7 @@
 # backend gate excludes its bin targets.
 set -euo pipefail
 
-THRESHOLD="${1:-${COVERAGE_NP2P:-66}}"
+THRESHOLD="${1:-${COVERAGE_NP2P:-78}}"
 export PATH="${HOME}/.cargo/bin:${PATH}"
 cd "$(dirname "$0")/.."
 

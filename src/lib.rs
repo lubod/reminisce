@@ -733,5 +733,6 @@ pub fn configure_api_routes(cfg: &mut web::ServiceConfig) {
         .service(services::observability::get_admin_gpu)
         .service(services::observability::get_admin_ai_models)
         .service(services::observability::get_admin_pipeline)
-        .service(services::observability::get_admin_series);
+        .service(services::observability::get_admin_series)
+        .service(services::maintenance::trigger_dimension_backfill);
 }

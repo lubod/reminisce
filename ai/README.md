@@ -59,6 +59,7 @@ HTTP is kept **only** for container healthchecks. All inference moved to gRPC.
 - [proto/ai_service.proto](file:///Users/ldr/work/reminisce/proto/ai_service.proto): gRPC service & message definitions (source of truth for the wire contract).
 - [requirements.txt](file:///Users/ldr/work/reminisce/ai/requirements.txt): Python package dependencies.
 - [Dockerfile](file:///Users/ldr/work/reminisce/ai/Dockerfile): Container setup with CUDA/ROCm dependencies; regenerates gRPC stubs from the proto at build time.
+- [test_ai_service.py](file:///Users/ldr/work/reminisce/ai/test_ai_service.py): CPU-only unit tests for gRPC auth, input validation, and `DetectOrientation` EXIF mapping with mocked models.
 
 ## Invariants & Performance Gotchas
 - **Model Warmup**: Models are loaded into memory on service startup. Ensure sufficient VRAM/RAM (minimum 4 GB free) before starting container. The orientation classifier adds ~350 MB (BEiT-Base, fp32) on top of SigLIP2 + VLM + InsightFace.

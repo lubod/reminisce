@@ -30,11 +30,10 @@ export default defineConfig({
         'src/main.tsx',
       ],
       thresholds: {
-        // Measured 2026-08: lines 43.9, stmts 42.1, funcs 35.7, branches 20.6.
-        lines: 41,
-        statements: 40,
-        functions: 33,
-        branches: 18,
+        lines: 45,
+        statements: 43,
+        functions: 38,
+        branches: 23,
       },
     },
   },

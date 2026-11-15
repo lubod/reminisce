@@ -1327,4 +1327,97 @@ mod tests {
         buf.into_inner()
     }
 
+    fn test_db_env_available() -> bool {
+        std::env::var("TEST_DATABASE_URL").is_ok()
+            || std::env::var("PGHOST").is_ok()
+            || std::env::var("PGPORT").is_ok()
+    }
+
+    fn ai_test_config(images_dir: String) -> Config {
+        let mut c: Config = serde_yaml::from_str(
+            "api_secret_key: \"test-secret-for-unit-tests-0123456789abcdef01234567\"\n",
+        )
+        .expect("minimal config");
+        c.images_dir = Some(images_dir);
+        c
+    }
+
+    #[actix_web::test]
+    async fn regenerate_rotated_thumbnail_writes_rotated_thumb_and_sets_flag() {
+        if !test_db_env_available() {
+            eprintln!("regenerate_rotated_thumbnail_writes_rotated_thumb_and_sets_flag: skipping (no dev PG env)");
+            return;
+        }
+        let (pool, _db) = crate::test_utils::setup_test_database_with_instance().await;
+        let base = std::env::temp_dir().join(format!("rem_ai_thumb_ok_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&base).unwrap();
+        let cfg = ai_test_config(base.to_string_lossy().to_string());
+
+        let user_id = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        let hash = "b".repeat(64);
+        let sub_dir = crate::utils::get_subdirectory_path(cfg.get_images_dir(), &hash);
+        std::fs::create_dir_all(&sub_dir).unwrap();
+        let file_path = sub_dir.join(format!("{}.jpg", hash));
+        std::fs::write(&file_path, make_test_jpeg(120, 60)).unwrap();
+
+        let client = pool.get().await.unwrap();
+        client
+            .execute(
+                "INSERT INTO images (user_id, deviceid, hash, name, ext, orientation, has_thumbnail) \
+                 VALUES ($1, 'dev1', $2, 'photo.jpg', 'jpg', 6, false)",
+                &[&user_id, &hash],
+            )
+            .await
+            .unwrap();
+
+        regenerate_rotated_thumbnail(&file_path, &hash, &user_id, 6, &cfg, &client).await;
+
+        let thumb_path = sub_dir.join(format!("{}.thumb.jpg", hash));
+        assert!(thumb_path.exists(), "thumbnail file should be created on disk");
+        let thumb_img = image::open(&thumb_path).expect("thumbnail should decode");
+        assert!(
+            thumb_img.height() > thumb_img.width(),
+            "orientation=6 on 120x60 should yield portrait thumb, got {}x{}",
+            thumb_img.width(),
+            thumb_img.height()
+        );
+
+        let has_thumb: bool = client
+            .query_one("SELECT has_thumbnail FROM images WHERE hash = $1", &[&hash])
+            .await
+            .unwrap()
+            .get(0);
+        assert!(has_thumb, "has_thumbnail should be updated to true");
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[actix_web::test]
+    async fn regenerate_rotated_thumbnail_removes_stale_thumb_on_missing_source() {
+        if !test_db_env_available() {
+            eprintln!("regenerate_rotated_thumbnail_removes_stale_thumb_on_missing_source: skipping (no dev PG env)");
+            return;
+        }
+        let (pool, _db) = crate::test_utils::setup_test_database_with_instance().await;
+        let base = std::env::temp_dir().join(format!("rem_ai_thumb_err_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&base).unwrap();
+        let cfg = ai_test_config(base.to_string_lossy().to_string());
+
+        let user_id = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        let hash = "c".repeat(64);
+        let sub_dir = crate::utils::get_subdirectory_path(cfg.get_images_dir(), &hash);
+        std::fs::create_dir_all(&sub_dir).unwrap();
+        let stale_thumb = sub_dir.join(format!("{}.thumb.jpg", hash));
+        std::fs::write(&stale_thumb, b"stale").unwrap();
+        assert!(stale_thumb.exists());
+
+        let missing_source = sub_dir.join(format!("{}.jpg", hash));
+        let client = pool.get().await.unwrap();
+
+        regenerate_rotated_thumbnail(&missing_source, &hash, &user_id, 6, &cfg, &client).await;
+
+        assert!(!stale_thumb.exists(), "stale thumbnail should be removed on error");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
 }
