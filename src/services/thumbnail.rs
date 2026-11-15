@@ -654,11 +654,13 @@ pub async fn get_thumbnail(
     let user_uuid = utils::parse_user_uuid(&claims.user_id)?;
     let client = utils::get_db_client(&pool.0).await?;
 
+    // Allow thumbnails for both active and soft-deleted media owned by the user
+    // so the Trash view (/trash) can render item previews before restore.
     let exists = client.query_one(
         "SELECT EXISTS (
-            SELECT 1 FROM images WHERE user_id = $1 AND hash = $2 AND deleted_at IS NULL
+            SELECT 1 FROM images WHERE user_id = $1 AND hash = $2
             UNION ALL
-            SELECT 1 FROM videos WHERE user_id = $1 AND hash = $2 AND deleted_at IS NULL
+            SELECT 1 FROM videos WHERE user_id = $1 AND hash = $2
         )",
         &[&user_uuid, &media_hash]
     ).await.map_err(|e| {

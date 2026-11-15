@@ -43,14 +43,21 @@ async fn seed_video(pool: &deadpool_postgres::Pool, hash: &str) {
         .expect("seed video failed");
 }
 
+const IMG_TRASH_HASH: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
 #[actix_web::test]
 #[serial]
 async fn test_trash_delete_list_restore_cycle() {
     let (pool, _test_db) = setup_test_database_with_instance().await;
-    seed_image(&pool, "img_trash").await;
+    seed_image(&pool, IMG_TRASH_HASH).await;
     seed_video(&pool, "vid_trash").await;
 
     let config = common::utils::create_test_config();
+    let thumb_dir = std::path::Path::new(config.get_images_dir()).join("aa");
+    std::fs::create_dir_all(&thumb_dir).unwrap();
+    let thumb_path = thumb_dir.join(format!("{}.thumb.jpg", IMG_TRASH_HASH));
+    std::fs::write(&thumb_path, b"fake-jpeg-thumb").unwrap();
+
     let main_pool = common::utils::wrap_main_pool(pool.clone());
     let app = test::init_service(
         App::new()
@@ -61,6 +68,7 @@ async fn test_trash_delete_list_restore_cycle() {
             .service(services::media::delete_video)
             .service(services::media::restore_image)
             .service(services::media::restore_video)
+            .service(services::thumbnail::get_thumbnail)
     ).await;
     let token = common::utils::create_test_jwt_token().await;
 
@@ -71,19 +79,22 @@ async fn test_trash_delete_list_restore_cycle() {
     assert_eq!(items.as_array().unwrap().len(), 0, "trash starts empty: {:?}", items);
 
     // Soft-delete both.
-    let r = authed!(post, &app, "/image/img_trash/delete", &token).await;
+    let r = authed!(post, &app, &format!("/image/{}/delete", IMG_TRASH_HASH), &token).await;
     assert_eq!(r.status(), http::StatusCode::OK);
     let r = authed!(post, &app, "/video/vid_trash/delete", &token).await;
     assert_eq!(r.status(), http::StatusCode::OK);
 
-    // Both now appear in trash.
+    // Both now appear in trash, and the owner can still fetch thumbnails for trashed items.
     let resp = authed!(get, &app, "/trash", &token).await;
     let items: serde_json::Value = test::read_body_json(resp).await;
     let hashes: Vec<&str> = items.as_array().unwrap().iter().map(|i| i["hash"].as_str().unwrap()).collect();
-    assert!(hashes.contains(&"img_trash") && hashes.contains(&"vid_trash"), "trash has both: {:?}", hashes);
+    assert!(hashes.contains(&IMG_TRASH_HASH) && hashes.contains(&"vid_trash"), "trash has both: {:?}", hashes);
+
+    let thumb_resp = authed!(get, &app, &format!("/thumbnail/{}", IMG_TRASH_HASH), &token).await;
+    assert_eq!(thumb_resp.status(), http::StatusCode::OK);
 
     // Restore both.
-    let r = authed!(post, &app, "/image/img_trash/restore", &token).await;
+    let r = authed!(post, &app, &format!("/image/{}/restore", IMG_TRASH_HASH), &token).await;
     assert_eq!(r.status(), http::StatusCode::OK);
     let r = authed!(post, &app, "/video/vid_trash/restore", &token).await;
     assert_eq!(r.status(), http::StatusCode::OK);
@@ -93,10 +104,12 @@ async fn test_trash_delete_list_restore_cycle() {
     assert_eq!(items.as_array().unwrap().len(), 0, "trash empty after restore: {:?}", items);
 
     // Restoring something not deleted -> 404.
-    let r = authed!(post, &app, "/image/img_trash/restore", &token).await;
+    let r = authed!(post, &app, &format!("/image/{}/restore", IMG_TRASH_HASH), &token).await;
     assert_eq!(r.status(), http::StatusCode::NOT_FOUND);
     let r = authed!(post, &app, "/image/never-existed/restore", &token).await;
     assert_eq!(r.status(), http::StatusCode::NOT_FOUND);
+
+    let _ = std::fs::remove_file(&thumb_path);
 }
 
 #[actix_web::test]
