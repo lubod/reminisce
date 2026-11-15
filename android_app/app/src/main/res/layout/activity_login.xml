@@ -71,7 +71,7 @@
                 app:icon="@android:drawable/ic_menu_camera"
                 app:iconGravity="textStart"
                 app:iconPadding="4dp"
-                style="@style/Widget.MaterialComponents.Button.OutlinedButton" />
+                style="@style/Style.Reminisce.Button.Outlined" />
 
             <!-- Continue to login -->
             <com.google.android.material.button.MaterialButton
@@ -101,7 +101,7 @@
                 android:text="&lt; Change Server"
                 android:layout_marginBottom="8dp"
                 android:layout_gravity="start"
-                style="@style/Widget.MaterialComponents.Button.TextButton" />
+                style="@style/Style.Reminisce.Button.Text" />
 
             <TextView
                 android:layout_width="wrap_content"
@@ -197,7 +197,7 @@
                 android:text="&lt; Change Server"
                 android:layout_marginBottom="16dp"
                 android:layout_gravity="start"
-                style="@style/Widget.MaterialComponents.Button.TextButton" />
+                style="@style/Style.Reminisce.Button.Text" />
 
             <TextView
                 android:layout_width="wrap_content"
@@ -280,7 +280,7 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="24dp"
             android:text="Show Logs"
-            style="@style/Widget.MaterialComponents.Button.TextButton" />
+            style="@style/Style.Reminisce.Button.Text" />
 
         <LinearLayout
             android:id="@+id/logsContainer"
@@ -312,7 +312,7 @@
                     android:minWidth="0dp"
                     android:paddingStart="8dp"
                     android:paddingEnd="8dp"
-                    style="@style/Widget.MaterialComponents.Button.TextButton" />
+                    style="@style/Style.Reminisce.Button.Text" />
 
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/clearLogsButton"
@@ -322,7 +322,7 @@
                     android:minWidth="0dp"
                     android:paddingStart="8dp"
                     android:paddingEnd="8dp"
-                    style="@style/Widget.MaterialComponents.Button.TextButton" />
+                    style="@style/Style.Reminisce.Button.Text" />
 
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/refreshLogsButton"
@@ -332,7 +332,7 @@
                     android:minWidth="0dp"
                     android:paddingStart="8dp"
                     android:paddingEnd="8dp"
-                    style="@style/Widget.MaterialComponents.Button.TextButton" />
+                    style="@style/Style.Reminisce.Button.Text" />
 
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/testConnectionButton"
@@ -342,7 +342,7 @@
                     android:minWidth="0dp"
                     android:paddingStart="8dp"
                     android:paddingEnd="8dp"
-                    style="@style/Widget.MaterialComponents.Button.TextButton" />
+                    style="@style/Style.Reminisce.Button.Text" />
             </LinearLayout>
 
             <TextView

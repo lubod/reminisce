@@ -12,7 +12,27 @@
         <item name="colorOnSecondary">@color/black</item>
         <!-- Status bar color. -->
         <item name="android:statusBarColor">?attr/colorPrimaryVariant</item>
-        <!-- Customize your theme here. -->
+        <!-- High-contrast button styles (avoid low-contrast #6200EE text). -->
+        <item name="materialButtonOutlinedStyle">@style/Style.Reminisce.Button.Outlined</item>
+        <item name="borderlessButtonStyle">@style/Style.Reminisce.Button.Text</item>
+        <item name="buttonBarPositiveButtonStyle">@style/Style.Reminisce.Button.Dialog</item>
+        <item name="buttonBarNegativeButtonStyle">@style/Style.Reminisce.Button.Dialog</item>
+        <item name="buttonBarNeutralButtonStyle">@style/Style.Reminisce.Button.Dialog</item>
+    </style>
+
+    <style name="Style.Reminisce.Button.Outlined" parent="Widget.MaterialComponents.Button.OutlinedButton">
+        <item name="android:textColor">@color/pill_text</item>
+        <item name="iconTint">@color/pill_text</item>
+        <item name="strokeColor">@color/outlined_button_stroke</item>
+    </style>
+
+    <style name="Style.Reminisce.Button.Text" parent="Widget.MaterialComponents.Button.TextButton">
+        <item name="android:textColor">@color/action_button_text</item>
+        <item name="iconTint">@color/action_button_text</item>
+    </style>
+
+    <style name="Style.Reminisce.Button.Dialog" parent="Widget.MaterialComponents.Button.TextButton.Dialog">
+        <item name="android:textColor">@color/action_button_text</item>
     </style>
 
     <!-- NoActionBar variant: host the app menu in an in-layout toolbar so the

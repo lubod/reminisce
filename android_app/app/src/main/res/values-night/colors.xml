@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="action_button_text">#FF93C5FD</color>
+    <color name="pill_bg">#FF1E293B</color>
+    <color name="pill_stroke">#FF64748B</color>
+    <color name="pill_text">#FFF8FAFC</color>
+    <color name="outlined_button_stroke">#FF94A3B8</color>
+</resources>

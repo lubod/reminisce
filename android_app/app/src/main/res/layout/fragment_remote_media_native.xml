@@ -68,7 +68,8 @@
                         android:layout_height="44dp"
                         android:background="?attr/selectableItemBackgroundBorderless"
                         android:contentDescription="Filters and Sort"
-                        android:src="@drawable/ic_filter" />
+                        android:src="@drawable/ic_filter"
+                        app:tint="?android:attr/textColorPrimary" />
 
                     <TextView
                         android:id="@+id/filterBadge"
@@ -210,7 +211,7 @@
                     android:paddingTop="3dp"
                     android:paddingBottom="3dp"
                     android:text="Date ↓"
-                    android:textColor="?attr/colorPrimary"
+                    android:textColor="@color/pill_text"
                     android:textSize="11sp"
                     android:textStyle="bold" />
 
@@ -227,7 +228,7 @@
                     android:paddingTop="3dp"
                     android:paddingBottom="3dp"
                     android:text="🗺 Map"
-                    android:textColor="?attr/colorPrimary"
+                    android:textColor="@color/pill_text"
                     android:textSize="11sp"
                     android:textStyle="bold" />
 
@@ -236,16 +237,16 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginStart="6dp"
-                    android:background="?attr/selectableItemBackground"
+                    android:background="@drawable/bg_sort_pill"
                     android:clickable="true"
                     android:focusable="true"
-                    android:paddingStart="6dp"
-                    android:paddingEnd="6dp"
+                    android:paddingStart="8dp"
+                    android:paddingEnd="8dp"
                     android:paddingTop="3dp"
                     android:paddingBottom="3dp"
                     android:text="Reset"
-                    android:textColor="?attr/colorPrimary"
-                    android:textSize="12sp"
+                    android:textColor="@color/pill_text"
+                    android:textSize="11sp"
                     android:textStyle="bold"
                     android:visibility="gone" />
 

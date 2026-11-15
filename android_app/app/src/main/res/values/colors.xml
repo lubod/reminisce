@@ -8,4 +8,9 @@
     <color name="teal_700">#FF018786</color>
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
+    <color name="action_button_text">#FF0D47A1</color>
+    <color name="pill_bg">#FFE2E8F0</color>
+    <color name="pill_stroke">#FF94A3B8</color>
+    <color name="pill_text">#FF0F172A</color>
+    <color name="outlined_button_stroke">#FF64748B</color>
 </resources>
